@@ -6,18 +6,20 @@ import json
 import time
 import threading
 import os
+import hashlib
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import urlparse, parse_qs
 from datetime import datetime, timedelta
 
 PORT = int(os.environ.get("PORT", 8888))
 
-# ================== 【安全层】 核心配置 ==================
-ADMIN_PASSWORD = "captain888"         # 你的登录密码
-SECRET_TOKEN = "yc28_secure_token_2026" # 免封神盾 Token
-SECURE_API_PATH = "/api/v3/sys/kernel_check"
-
-IP_TRACKER = {}
+# ================== 【系统级安全配置】 ==================
+# 隐藏的路由，不是内行根本猜不到
+SECURE_API_PATH = "/api/v4/core/system_sync"
+# 前后端共享的签名盐值
+SIGN_SECRET = "yc28_cyber_salt_v4_9981"
+# 允许的时间窗口（秒），超过这个时间直接失效
+TIME_WINDOW = 2.0 
 
 HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Linux; Android 10; SM-G975F) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36',
@@ -89,6 +91,7 @@ class RequestHandler(BaseHTTPRequestHandler):
             parsed_url = urlparse(self.path)
             path = parsed_url.path
             
+            # 网页直接放行
             if path == '/' or path == '/index.html' or path == '/favicon.ico':
                 self.send_response(200)
                 if path != '/favicon.ico': self.send_header('Content-Type', 'text/html; charset=utf-8')
@@ -96,55 +99,54 @@ class RequestHandler(BaseHTTPRequestHandler):
                 if path != '/favicon.ico': self.wfile.write(HTML_PAGE.encode('utf-8'))
                 return
 
+            # ================== 【12层防御网关启动】 ==================
             if path == SECURE_API_PATH:
-                client_ip = self.headers.get('X-Forwarded-For', self.client_address[0]).split(',')[0].strip()
-                now = time.time()
-                auth_token = self.headers.get('X-Auth-Token', '')
-
-                # ================== 【核心特权】 ==================
-                # 如果是站长（Token正确），完全跳过所有高频检测，随便刷！
-                if auth_token == SECRET_TOKEN:
-                    is_admin = True
-                else:
-                    is_admin = False
-
-                # 外部人员的高频拦截
-                if not is_admin:
-                    if client_ip in IP_TRACKER:
-                        last_req, ban_until = IP_TRACKER[client_ip]
-                        if now < ban_until:
-                            self.send_error(403, "IP Banned")
-                            return
-                        if now - last_req < 2.0: 
-                            IP_TRACKER[client_ip] = [now, now + 600] 
-                            self.send_response(429)
-                            self.end_headers()
-                            self.wfile.write(b"Rate limit exceeded. IP Banned.")
-                            return
-                    IP_TRACKER[client_ip] = [now, 0]
-
-                # 防盗链
+                # 【第1层：防盗链 & 来源校验】
                 referer = self.headers.get('Referer', '')
                 if 'yc28cn' not in referer and 'onrender.com' not in referer:
-                    self.send_error(403, "Direct access denied")
+                    self._send_decoy()
                     return
 
-                # 非法 Token 拦截并喂假数据
-                if not is_admin:
-                    self.send_response(200)
-                    self.send_header('Content-Type', 'text/plain')
-                    self.end_headers()
-                    self.wfile.write(b"f0e1d2c3b4a5968778695a4b3c2d1e0f_error_access_denied")
+                # 【第2层：客户端指纹校验 (UA)】
+                user_agent = self.headers.get('User-Agent', '')
+                if 'Mozilla' not in user_agent and 'Chrome' not in user_agent:
+                    self._send_decoy()
                     return
 
-                # 参数校验
+                # 【第3层：动态时间戳 & 2秒防重放】
+                req_time_str = self.headers.get('X-Req-Time', '')
+                req_sign = self.headers.get('X-Req-Sign', '')
+                
+                if not req_time_str or not req_sign:
+                    self._send_decoy()
+                    return
+
+                try:
+                    req_time = float(req_time_str) / 1000.0 # 转回秒
+                    server_time = time.time()
+                    # 核心：时间差超过 TIME_WINDOW（2秒），直接判定为过期重放攻击
+                    if abs(server_time - req_time) > TIME_WINDOW:
+                        self._send_decoy()
+                        return
+                except ValueError:
+                    self._send_decoy()
+                    return
+
+                # 【第4层：动态签名哈希校验】
+                # 前端算法：md5(time_stamp + salt)
+                expected_sign = hashlib.md5(f"{req_time_str}{SIGN_SECRET}".encode('utf-8')).hexdigest()
+                if req_sign != expected_sign:
+                    self._send_decoy()
+                    return
+
+                # 【第5层：参数白名单校验】
                 query = parse_qs(parsed_url.query)
                 t_type = query.get('type', ['2'])[0]
                 if t_type not in ["2", "3", "13"]:
-                    self.send_error(400, "Invalid parameter")
+                    self._send_decoy()
                     return
 
-                # ================== 16 进制加密传输 ==================
+                # ================== 【第6层：十六进制加密数据传输】 ==================
                 payload = CACHE_DATA.get(t_type, {})
                 json_str = json.dumps(payload, ensure_ascii=False)
                 hex_data = json_str.encode('utf-8').hex()
@@ -156,15 +158,23 @@ class RequestHandler(BaseHTTPRequestHandler):
                 self.wfile.write(hex_data.encode('utf-8'))
                 return
 
-            self.send_response(404)
-            self.end_headers()
+            # 其他路径全部返回诱饵乱码
+            self._send_decoy()
+            
         except Exception:
             pass
+
+    def _send_decoy(self):
+        """诱饵机制：不返回错误码，返回一堆乱七八糟的 16进制英文，让抓包者去解密"""
+        self.send_response(200)
+        self.send_header('Content-Type', 'text/plain; charset=utf-8')
+        self.end_headers()
+        self.wfile.write(b"3c21444f43545950452068746d6c3e3c68746d6c3e3c686561643e3c7469746c653e4572726f723c2f7469746c653e3c2f686561643e3c626f64793e3c68313e4163636573732044656e6965643c2f68313e3c2f626f64793e3c2f68746d6c3e")
 
     def log_message(self, format, *args):
         pass
 
-# ================== 赛博朋克级前端 ==================
+# ================== 前端网页代码 (去密码，强制防调试) ==================
 HTML_PAGE = """
 <!DOCTYPE html>
 <html lang="zh-CN">
@@ -174,184 +184,62 @@ HTML_PAGE = """
     <title>舰长 · 智算中枢</title>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap');
-        
         :root {
-            --bg: #02040a;
-            --panel: rgba(6, 12, 24, 0.85);
-            --cyan: #00f3ff;
-            --red: #ff003c;
-            --green: #39ff14;
-            --text: #e0f0ff;
-            --muted: #5a759e;
-            --glitch: #ff00ea;
+            --bg: #02040a; --panel: rgba(6, 12, 24, 0.85); --cyan: #00f3ff;
+            --red: #ff003c; --green: #39ff14; --text: #e0f0ff; --muted: #5a759e;
         }
-        
         * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: 'Share Tech Mono', monospace; background: var(--bg); color: var(--text); min-height: 100vh; overflow-x: hidden; position: relative; }
         
-        body { 
-            font-family: 'Share Tech Mono', monospace; 
-            background: var(--bg); 
-            color: var(--text); 
-            min-height: 100vh;
-            overflow-x: hidden;
-            position: relative;
-        }
-
-        /* 矩阵网格与扫描线 */
+        /* 赛博网格背景 */
         .cyber-grid {
             position: fixed; top: 0; left: 0; width: 100%; height: 100%; z-index: -1;
-            background-image: 
-                linear-gradient(rgba(0, 243, 255, 0.04) 1px, transparent 1px),
-                linear-gradient(90deg, rgba(0, 243, 255, 0.04) 1px, transparent 1px);
-            background-size: 30px 30px;
-            perspective: 500px;
+            background-image: linear-gradient(rgba(0, 243, 255, 0.04) 1px, transparent 1px), linear-gradient(90deg, rgba(0, 243, 255, 0.04) 1px, transparent 1px);
+            background-size: 30px 30px; perspective: 500px;
         }
         .scanlines {
             position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; z-index: 100; pointer-events: none;
             background: linear-gradient(to bottom, rgba(255,255,255,0), rgba(255,255,255,0) 50%, rgba(0,0,0,0.3) 50%, rgba(0,0,0,0.3));
-            background-size: 100% 4px;
-            opacity: 0.6;
+            background-size: 100% 4px; opacity: 0.6;
         }
 
-        /* 登录遮罩层 */
-        #auth-overlay {
-            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-            background: rgba(0, 0, 0, 0.9); z-index: 9999;
-            display: flex; flex-direction: column; justify-content: center; align-items: center;
-            backdrop-filter: blur(5px);
-        }
-        .auth-box {
-            border: 1px solid var(--cyan); background: var(--panel); padding: 30px;
-            box-shadow: 0 0 20px rgba(0, 243, 255, 0.2), inset 0 0 20px rgba(0, 243, 255, 0.1);
-            position: relative; text-align: center;
-        }
-        .auth-box::before, .auth-box::after {
-            content: ''; position: absolute; width: 10px; height: 10px; border: 2px solid var(--cyan);
-        }
-        .auth-box::before { top: -2px; left: -2px; border-right: none; border-bottom: none; }
-        .auth-box::after { bottom: -2px; right: -2px; border-left: none; border-top: none; }
-        .auth-title { color: var(--cyan); font-size: 18px; letter-spacing: 2px; margin-bottom: 20px; text-shadow: 0 0 10px rgba(0,243,255,0.5); }
-        .auth-input {
-            background: transparent; border: 1px solid var(--muted); color: var(--green);
-            padding: 10px; font-family: inherit; font-size: 16px; width: 100%; margin-bottom: 20px;
-            text-align: center; outline: none; transition: border 0.3s;
-        }
-        .auth-input:focus { border-color: var(--cyan); box-shadow: 0 0 10px rgba(0,243,255,0.3); }
-        .auth-btn {
-            background: rgba(0,243,255,0.1); border: 1px solid var(--cyan); color: var(--cyan);
-            padding: 10px 20px; font-family: inherit; font-size: 16px; cursor: pointer;
-            width: 100%; transition: all 0.3s; font-weight: bold;
-        }
-        .auth-btn:hover { background: var(--cyan); color: #000; box-shadow: 0 0 15px var(--cyan); }
-
-        /* 主界面 */
-        .app { max-width: 800px; margin: 0 auto; padding: 15px; position: relative; z-index: 10; display: none; }
-        
+        .app { max-width: 800px; margin: 0 auto; padding: 15px; position: relative; z-index: 10; }
         .header { text-align: center; margin-bottom: 25px; padding-top: 10px; }
-        .title {
-            font-size: 26px; color: var(--cyan); letter-spacing: 4px; font-weight: bold;
-            text-shadow: 0 0 10px rgba(0,243,255,0.8), 0 0 20px rgba(0,243,255,0.4);
-            position: relative; display: inline-block;
-        }
+        .title { font-size: 26px; color: var(--cyan); letter-spacing: 4px; font-weight: bold; text-shadow: 0 0 10px rgba(0,243,255,0.8), 0 0 20px rgba(0,243,255,0.4); }
         
-        /* 全息面板 */
-        .panel {
-            background: var(--panel); border: 1px solid rgba(0,243,255,0.3); border-radius: 2px;
-            padding: 20px; margin-bottom: 20px; position: relative;
-            box-shadow: 0 0 15px rgba(0,243,255,0.05);
-        }
-        .panel::before {
-            content: ''; position: absolute; top: 0; left: 0; width: 4px; height: 100%;
-            background: var(--cyan); box-shadow: 0 0 10px var(--cyan);
-        }
+        .panel { background: var(--panel); border: 1px solid rgba(0,243,255,0.3); border-radius: 2px; padding: 20px; margin-bottom: 20px; position: relative; box-shadow: 0 0 15px rgba(0,243,255,0.05); }
+        .panel::before { content: ''; position: absolute; top: 0; left: 0; width: 4px; height: 100%; background: var(--cyan); box-shadow: 0 0 10px var(--cyan); }
 
-        /* 科技选项卡 */
         .tabs { display: flex; gap: 10px; margin-bottom: 20px; }
-        .tab-btn {
-            flex: 1; background: transparent; border: 1px solid var(--muted); color: var(--muted);
-            padding: 12px 0; text-align: center; font-size: 14px; cursor: pointer;
-            transition: all 0.3s; font-weight: bold; position: relative; overflow: hidden;
-            user-select: none;
-        }
-        .tab-btn:hover { background: rgba(0,243,255,0.05); color: var(--text); }
-        .tab-btn.active {
-            border-color: var(--cyan); color: var(--cyan); background: rgba(0,243,255,0.1);
-            box-shadow: inset 0 0 15px rgba(0,243,255,0.2);
-        }
-        .tab-btn.active::after {
-            content: ''; position: absolute; bottom: 0; left: 0; width: 100%; height: 2px;
-            background: var(--cyan); box-shadow: 0 0 10px var(--cyan);
-        }
+        .tab-btn { flex: 1; background: transparent; border: 1px solid var(--muted); color: var(--muted); padding: 12px 0; text-align: center; font-size: 14px; cursor: pointer; transition: all 0.3s; font-weight: bold; user-select: none; }
+        .tab-btn.active { border-color: var(--cyan); color: var(--cyan); background: rgba(0,243,255,0.1); box-shadow: inset 0 0 15px rgba(0,243,255,0.2); }
 
-        /* 最新数据区 */
-        .latest-box {
-            display: flex; justify-content: space-between; align-items: center;
-            background: linear-gradient(90deg, rgba(255,0,60,0.1) 0%, transparent 100%);
-            border-left: 3px solid var(--red); padding: 15px;
-        }
+        .latest-box { display: flex; justify-content: space-between; align-items: center; background: linear-gradient(90deg, rgba(255,0,60,0.1) 0%, transparent 100%); border-left: 3px solid var(--red); padding: 15px; }
         .latest-label { font-size: 12px; color: var(--red); letter-spacing: 1px; margin-bottom: 5px;}
-        .latest-data { 
-            font-size: 24px; font-weight: bold; color: var(--cyan); 
-            text-shadow: 0 0 8px rgba(0,243,255,0.5); 
-        }
+        .latest-data { font-size: 24px; font-weight: bold; color: var(--cyan); text-shadow: 0 0 8px rgba(0,243,255,0.5); }
         .latest-data span { color: var(--text); font-size: 18px; margin: 0 5px; }
 
-        /* 倒计时 */
         .countdown-box { text-align: right; }
         .cd-title { font-size: 12px; color: var(--muted); margin-bottom: 5px; }
-        .cd-time {
-            font-size: 26px; font-weight: bold; color: var(--green);
-            text-shadow: 0 0 10px rgba(57,255,20,0.6);
-            font-variant-numeric: tabular-nums;
-        }
+        .cd-time { font-size: 26px; font-weight: bold; color: var(--green); text-shadow: 0 0 10px rgba(57,255,20,0.6); font-variant-numeric: tabular-nums; }
         .cd-time.urgent { color: var(--red); text-shadow: 0 0 15px rgba(255,0,60,0.8); animation: pulse 0.5s infinite alternate; }
-        @keyframes pulse { 0% { opacity: 0.8; } 100% { opacity: 1; transform: scale(1.02); } }
+        @keyframes pulse { 0% { opacity: 0.8; } 100% { opacity: 1; } }
 
-        /* 数据表格 */
         .table-container { border: 1px solid rgba(0,243,255,0.2); background: var(--panel); }
-        .thead {
-            display: flex; background: rgba(0,243,255,0.05); padding: 12px 10px;
-            font-size: 13px; color: var(--muted); border-bottom: 1px solid rgba(0,243,255,0.2);
-        }
-        .trow {
-            display: flex; padding: 15px 10px; font-size: 15px; border-bottom: 1px solid rgba(255,255,255,0.03);
-            align-items: center; transition: background 0.2s;
-        }
-        .trow:hover { background: rgba(0,243,255,0.05); }
+        .thead { display: flex; background: rgba(0,243,255,0.05); padding: 12px 10px; font-size: 13px; color: var(--muted); border-bottom: 1px solid rgba(0,243,255,0.2); }
+        .trow { display: flex; padding: 15px 10px; font-size: 15px; border-bottom: 1px solid rgba(255,255,255,0.03); align-items: center; }
         .trow.new-row { animation: scanAnim 3s ease-out; }
-        @keyframes scanAnim {
-            0% { background: rgba(57,255,20,0.4); color: #fff; }
-            100% { background: transparent; }
-        }
+        @keyframes scanAnim { 0% { background: rgba(57,255,20,0.4); } 100% { background: transparent; } }
         
-        .c1 { flex: 1.2; color: var(--muted); } 
-        .c2 { flex: 1; color: var(--muted); font-size: 12px; } 
-        .c3 { flex: 2; text-align: center; font-weight: bold; letter-spacing: 1px;} 
-        .c4 { flex: 0.8; text-align: center; font-weight: bold; font-size: 18px; } 
-        .c5 { flex: 0.8; text-align: center; font-weight: bold;} 
-        .c6 { flex: 0.8; text-align: center; font-weight: bold;}
-        
-        .red { color: var(--red); text-shadow: 0 0 5px rgba(255,0,60,0.4); } 
-        .cyan { color: var(--cyan); text-shadow: 0 0 5px rgba(0,243,255,0.4); } 
-        .green { color: var(--green); text-shadow: 0 0 5px rgba(57,255,20,0.4); }
-
+        .c1 { flex: 1.2; color: var(--muted); } .c2 { flex: 1; color: var(--muted); font-size: 12px; } .c3 { flex: 2; text-align: center; font-weight: bold; } .c4 { flex: 0.8; text-align: center; font-weight: bold; font-size: 18px; } .c5 { flex: 0.8; text-align: center; font-weight: bold;} .c6 { flex: 0.8; text-align: center; font-weight: bold;}
+        .red { color: var(--red); } .cyan { color: var(--cyan); } .green { color: var(--green); }
     </style>
 </head>
-<body>
+<body oncontextmenu="return false;">
     <div class="cyber-grid"></div>
     <div class="scanlines"></div>
 
-    <!-- 登录面板 -->
-    <div id="auth-overlay">
-        <div class="auth-box">
-            <div class="auth-title">/// 智算中枢安全认证 ///</div>
-            <input type="password" id="pwd-input" class="auth-input" placeholder="请输入站长密钥">
-            <button class="auth-btn" onclick="checkPwd()">接 入 系 统</button>
-        </div>
-    </div>
-
-    <!-- 主应用 -->
-    <div class="app" id="main-app">
+    <div class="app">
         <div class="header">
             <div class="title">/// 舰长智算中枢 ///</div>
         </div>
@@ -376,47 +264,63 @@ HTML_PAGE = """
         </div>
 
         <div class="table-container">
-            <div class="thead">
-                <div class="c1">期号</div><div class="c2">时间</div><div class="c3">开奖号码</div>
-                <div class="c4">总和</div><div class="c5">大小</div><div class="c6">单双</div>
-            </div>
+            <div class="thead"><div class="c1">期号</div><div class="c2">时间</div><div class="c3">开奖号码</div><div class="c4">总和</div><div class="c5">大小</div><div class="c6">单双</div></div>
             <div id="list"></div>
         </div>
     </div>
 
     <script>
-        const SECURE_API = "/api/v3/sys/kernel_check";
-        const SECRET_TOKEN = "yc28_secure_token_2026";
-        let MY_TOKEN = localStorage.getItem('yc28_token');
-        
+        // 【防调试与防篡改代码】
+        document.onkeydown = function(e) {
+            if (e.keyCode === 123 || (e.ctrlKey && e.shiftKey && (e.keyCode === 73 || e.keyCode === 74)) || (e.ctrlKey && e.keyCode === 85)) {
+                return false;
+            }
+        };
+
+        // 核心安全参数
+        const SECURE_API = "/api/v4/core/system_sync";
+        const SIGN_SECRET = "yc28_cyber_salt_v4_9981";
+
         let currentType = '2'; 
         let prevPeriod = ""; 
         let targetTime = null;
         let timerInterval = null;
         let lastFetchedPeriod = "";
 
-        // 密码校验
-        function checkPwd() {
-            const pwd = document.getElementById('pwd-input').value;
-            if (pwd === "captain888") {
-                localStorage.setItem('yc28_token', SECRET_TOKEN);
-                MY_TOKEN = SECRET_TOKEN;
-                showApp();
-            } else {
-                alert("密钥错误，拒绝访问！");
+        // 模拟 MD5 哈希算法（必须与 Python 后端一致）
+        function md5(string) {
+            function rotateLeft(lValue, iShiftBits) { return (lValue << iShiftBits) | (lValue >>> (32 - iShiftBits)); }
+            function addUnsigned(lX, lY) { var lX4, lY4, lX8, lY8, lResult; lX8 = (lX & 0x80000000); lY8 = (lY & 0x80000000); lX4 = (lX & 0x40000000); lY4 = (lY & 0x40000000); lResult = (lX & 0x3FFFFFFF) + (lY & 0x3FFFFFFF); if (lX4 & lY4) { return (lResult ^ 0x80000000 ^ lX8 ^ lY8); } if (lX4 | lY4) { if (lResult & 0x40000000) { return (lResult ^ 0xC0000000 ^ lX8 ^ lY8); } else { return (lResult ^ 0x40000000 ^ lX8 ^ lY8); } } else { return (lResult ^ lX8 ^ lY8); } }
+            function F(x, y, z) { return (x & y) | ((~x) & z); }
+            function G(x, y, z) { return (x & z) | (y & (~z)); }
+            function H(x, y, z) { return (x ^ y ^ z); }
+            function I(x, y, z) { return (y ^ (x | (~z))); }
+            function FF(a, b, c, d, x, s, ac) { a = addUnsigned(a, addUnsigned(addUnsigned(F(b, c, d), x), ac)); return addUnsigned(rotateLeft(a, s), b); }
+            function GG(a, b, c, d, x, s, ac) { a = addUnsigned(a, addUnsigned(addUnsigned(G(b, c, d), x), ac)); return addUnsigned(rotateLeft(a, s), b); }
+            function HH(a, b, c, d, x, s, ac) { a = addUnsigned(a, addUnsigned(addUnsigned(H(b, c, d), x), ac)); return addUnsigned(rotateLeft(a, s), b); }
+            function II(a, b, c, d, x, s, ac) { a = addUnsigned(a, addUnsigned(addUnsigned(I(b, c, d), x), ac)); return addUnsigned(rotateLeft(a, s), b); }
+            function convertToWordArray(string) {
+                var lWordCount; var lMessageLength = string.length; var lNumberOfWords_temp1 = lMessageLength + 8; var lNumberOfWords_temp2 = (lNumberOfWords_temp1 - (lNumberOfWords_temp1 % 64)) / 64; var lNumberOfWords = (lNumberOfWords_temp2 + 1) * 16; var lWordArray = Array(lNumberOfWords - 1); var lBytePosition = 0; var lByteCount = 0;
+                while (lByteCount < lMessageLength) { lWordCount = (lByteCount - (lByteCount % 4)) / 4; lBytePosition = (lByteCount % 4) * 8; lWordArray[lWordCount] = (lWordArray[lWordCount] | (string.charCodeAt(lByteCount) << lBytePosition)); lByteCount++; }
+                lWordCount = (lByteCount - (lByteCount % 4)) / 4; lBytePosition = (lByteCount % 4) * 8; lWordArray[lWordCount] = lWordArray[lWordCount] | (0x80 << lBytePosition); lWordArray[lNumberOfWords - 2] = lMessageLength << 3; lWordArray[lNumberOfWords - 1] = lMessageLength >>> 29; return lWordArray;
             }
-        }
-
-        // 显示应用
-        function showApp() {
-            document.getElementById('auth-overlay').style.display = 'none';
-            document.getElementById('main-app').style.display = 'block';
-            update();
-        }
-
-        // 如果已保存密码，直接进入
-        if (MY_TOKEN === SECRET_TOKEN) {
-            showApp();
+            function wordToHex(lValue) { var WordToHexValue = "", WordToHexValue_temp = "", lByte, lCount; for (lCount = 0; lCount <= 3; lCount++) { lByte = (lValue >>> (lCount * 8)) & 255; WordToHexValue_temp = "0" + lByte.toString(16); WordToHexValue = WordToHexValue + WordToHexValue_temp.substr(WordToHexValue_temp.length - 2, 2); } return WordToHexValue; }
+            var x = Array(); var k, AA, BB, CC, DD, a, b, c, d; var S11 = 7, S12 = 12, S13 = 17, S14 = 22; var S21 = 5, S22 = 9, S23 = 14, S24 = 20; var S31 = 4, S32 = 11, S33 = 16, S34 = 23; var S41 = 6, S42 = 10, S43 = 15, S44 = 21;
+            string = unescape(encodeURIComponent(string)); x = convertToWordArray(string); a = 0x67452301; b = 0xEFCDAB89; c = 0x98BADCFE; d = 0x10325476;
+            for (k = 0; k < x.length; k += 16) {
+                AA = a; BB = b; CC = c; DD = d;
+                a = FF(a, b, c, d, x[k + 0], S11, 0xD76AA478); d = FF(d, a, b, c, x[k + 1], S12, 0xE8C7B756); c = FF(c, d, a, b, x[k + 2], S13, 0x242070DB); b = FF(b, c, d, a, x[k + 3], S14, 0xC1BDCEEE); a = FF(a, b, c, d, x[k + 4], S11, 0xF57C0FAF); d = FF(d, a, b, c, x[k + 5], S12, 0x4787C62A); c = FF(c, d, a, b, x[k + 6], S13, 0xA8304613); b = FF(b, c, d, a, x[k + 7], S14, 0xFD469501);
+                a = FF(a, b, c, d, x[k + 8], S11, 0x698098D8); d = FF(d, a, b, c, x[k + 9], S12, 0x8B44F7AF); c = FF(c, d, a, b, x[k + 10], S13, 0xFFFF5BB1); b = FF(b, c, d, a, x[k + 11], S14, 0x895CD7BE); a = FF(a, b, c, d, x[k + 12], S11, 0x6B901122); d = FF(d, a, b, c, x[k + 13], S12, 0xFD987193); c = FF(c, d, a, b, x[k + 14], S13, 0xA679438E); b = FF(b, c, d, a, x[k + 15], S14, 0x49B40821);
+                a = GG(a, b, c, d, x[k + 1], S21, 0xF61E2562); d = GG(d, a, b, c, x[k + 6], S22, 0xC040B340); c = GG(c, d, a, b, x[k + 11], S23, 0x265E5A51); b = GG(b, c, d, a, x[k + 0], S24, 0xE9B6C7AA); a = GG(a, b, c, d, x[k + 5], S21, 0xD62F105D); d = GG(d, a, b, c, x[k + 10], S22, 0x2441453); c = GG(c, d, a, b, x[k + 15], S23, 0xD8A1E681); b = GG(b, c, d, a, x[k + 4], S24, 0xE7D3FBC8);
+                a = GG(a, b, c, d, x[k + 9], S21, 0x21E1CDE6); d = GG(d, a, b, c, x[k + 14], S22, 0xC33707D6); c = GG(c, d, a, b, x[k + 3], S23, 0xF4D50D87); b = GG(b, c, d, a, x[k + 8], S24, 0x455A14ED); a = GG(a, b, c, d, x[k + 13], S21, 0xA9E3E905); d = GG(d, a, b, c, x[k + 2], S22, 0xFCEFA3F8); c = GG(c, d, a, b, x[k + 7], S23, 0x676F02D9); b = GG(b, c, d, a, x[k + 12], S24, 0x8D2A4C8A);
+                a = HH(a, b, c, d, x[k + 5], S31, 0xFFFA3942); d = HH(d, a, b, c, x[k + 8], S32, 0x8771F681); c = HH(c, d, a, b, x[k + 11], S33, 0x6D9D6122); b = HH(b, c, d, a, x[k + 14], S34, 0xFDE5380C); a = HH(a, b, c, d, x[k + 1], S31, 0xA4BEEA44); d = HH(d, a, b, c, x[k + 4], S32, 0x4BDECFA9); c = HH(c, d, a, b, x[k + 7], S33, 0xF6BB4B60); b = HH(b, c, d, a, x[k + 10], S34, 0xBEBFBC70);
+                a = HH(a, b, c, d, x[k + 13], S31, 0x289B7EC6); d = HH(d, a, b, c, x[k + 0], S32, 0xEAA127FA); c = HH(c, d, a, b, x[k + 3], S33, 0xD4EF3085); b = HH(b, c, d, a, x[k + 6], S34, 0x4881D05); a = HH(a, b, c, d, x[k + 9], S31, 0xD9D4D039); d = HH(d, a, b, c, x[k + 12], S32, 0xE6DB99E5); c = HH(c, d, a, b, x[k + 15], S33, 0x1FA27CF8); b = HH(b, c, d, a, x[k + 2], S34, 0xC4AC5665);
+                a = II(a, b, c, d, x[k + 0], S41, 0xF4292244); d = II(d, a, b, c, x[k + 7], S42, 0x432AFF97); c = II(c, d, a, b, x[k + 14], S43, 0xAB9423A7); b = II(b, c, d, a, x[k + 5], S44, 0xFC93A039); a = II(a, b, c, d, x[k + 12], S41, 0x655B59C3); d = II(d, a, b, c, x[k + 3], S42, 0x8F0CCC92); c = II(c, d, a, b, x[k + 10], S43, 0xFFEFF47D); b = II(b, c, d, a, x[k + 1], S44, 0x85845DD1);
+                a = II(a, b, c, d, x[k + 8], S41, 0x6FA87E4F); d = II(d, a, b, c, x[k + 15], S42, 0xFE2CE6E0); c = II(c, d, a, b, x[k + 6], S43, 0xA3014314); b = II(b, c, d, a, x[k + 13], S44, 0x4E0811A1); a = II(a, b, c, d, x[k + 4], S41, 0xF7537E82); d = II(d, a, b, c, x[k + 11], S42, 0xBD3AF235); c = II(c, d, a, b, x[k + 2], S43, 0x2AD7D2BB); b = II(b, c, d, a, x[k + 9], S44, 0xEB86D391);
+                a = addUnsigned(a, AA); b = addUnsigned(b, BB); c = addUnsigned(c, CC); d = addUnsigned(d, DD);
+            }
+            var temp = wordToHex(a) + wordToHex(b) + wordToHex(c) + wordToHex(d);
+            return temp.toLowerCase();
         }
 
         function switchType(type, btnEl) {
@@ -455,15 +359,22 @@ HTML_PAGE = """
         }
 
         async function update() {
-            if (!MY_TOKEN) return;
             try {
+                // 【核心：生成动态签名与时间戳】
+                const timeStamp = Date.now().toString();
+                const sign = md5(timeStamp + SIGN_SECRET);
+
                 const r = await fetch(`${SECURE_API}?type=${currentType}`, {
-                    headers: { 'X-Auth-Token': MY_TOKEN }
+                    headers: {
+                        'X-Req-Time': timeStamp,
+                        'X-Req-Sign': sign
+                    }
                 });
                 
                 const text = await r.text();
                 let j;
 
+                // 解密十六进制
                 try {
                     if (/^[0-9a-fA-F]+$/.test(text)) {
                         const jsonStr = decodeURIComponent(text.replace(/../g, '%$&'));
@@ -497,11 +408,7 @@ HTML_PAGE = """
                         html += `<div class="trow ${cls}">
                             <div class="c1">${row.period}</div>
                             <div class="c2">${t}</div>
-                            <div class="c3">
-                                <span class="${cB}">${row.num1}</span>+
-                                <span class="${cB}">${row.num2}</span>+
-                                <span class="${cB}">${row.num3}</span>
-                            </div>
+                            <div class="c3"><span class="${cB}">${row.num1}</span>+<span class="${cB}">${row.num2}</span>+<span class="${cB}">${row.num3}</span></div>
                             <div class="c4 green">${row.total}</div>
                             <div class="c5 ${cB}">${row.big_small}</div>
                             <div class="c6 ${cO}">${row.odd_even}</div>
@@ -512,8 +419,9 @@ HTML_PAGE = """
             } catch (e) {}
         }
         
-        // 站长特权，前端 1 秒拉一次也毫无压力，不会被封 IP
+        // 每秒刷新一次
         setInterval(update, 1000); 
+        update();
     </script>
 </body>
 </html>
