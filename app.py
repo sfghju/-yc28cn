@@ -14,8 +14,11 @@ from datetime import datetime, timedelta
 PORT = int(os.environ.get("PORT", 8888))
 
 # ================== 【双系统彻底隔离】 ==================
-# 1. 站长明文专属通道 (浏览器直接看)
-VIP_API_PATH = "/vip"
+# 1. 你的专属自定义明文通道 (多层级 / 路径)
+VIP_PATH_CA = "/vipQQWW9983/8626/0549CASWWW"
+VIP_PATH_FF = "/vipQQWW9986/8626/0549CFKFGH"
+VIP_PATH_BTC = "/vipQQWW9983/8626/0549CCBDR"
+
 # 2. 网页前端专用通道 (防抓包)
 SECURE_API_PATH = "/api/v6/core/stream"
 SIGN_SECRET = "yc28_cyber_salt_v6_2026"
@@ -100,8 +103,9 @@ class RequestHandler(BaseHTTPRequestHandler):
                 if path != '/favicon.ico': self.wfile.write(HTML_PAGE.encode('utf-8'))
                 return
 
-            # ================== 2. 站长明文通道 (永不拦截) ==================
-            if path == VIP_API_PATH:
+            # ================== 2. 站长专属自定义通道 (永不拦截) ==================
+            # 精确匹配你设定的专属多层级路径
+            if path in [VIP_PATH_CA, VIP_PATH_FF, VIP_PATH_BTC]:
                 t_type = query.get('type', ['2'])[0]
                 if t_type not in ["2", "3", "13"]: t_type = "2"
                 payload = CACHE_DATA.get(t_type, {})
