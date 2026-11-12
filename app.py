@@ -106,7 +106,6 @@ class RequestHandler(BaseHTTPRequestHandler):
                 if t_type not in ["2", "3", "13"]: t_type = "2"
                 payload = CACHE_DATA.get(t_type, {})
                 
-                # 使用 text/plain，手机浏览器直接打开绝对不会报错，直接显示明文
                 self.send_response(200)
                 self.send_header('Content-Type', 'text/plain; charset=utf-8')
                 self.send_header('Access-Control-Allow-Origin', '*')
@@ -133,7 +132,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                         is_hacker = True
                 
                 if is_hacker:
-                    # 黑客抓包重放，触发红字嘲讽
+                    # 触发终极嘲讽，返回跳动的红字
                     self.send_response(200)
                     self.send_header('Content-Type', 'text/html; charset=utf-8')
                     self.end_headers()
@@ -146,18 +145,17 @@ class RequestHandler(BaseHTTPRequestHandler):
                             50% { transform: translateY(-30px); text-shadow: 0 0 50px red, 0 0 10px white; color: #ffcccc; }
                         }
                         .msg {
-                            font-size: 36px; font-weight: bold; text-align: center; line-height: 1.5;
+                            font-size: 32px; font-weight: bold; text-align: center; line-height: 1.6;
                             animation: jump 0.3s infinite; word-break: break-all; padding: 20px;
                         }
                     </style></head>
                     <body>
-                        <div class="msg">老弟你有什么实力啊<br>还想套取我的 API？</div>
+                        <div class="msg">你个人机<br>学好计算机技术才能深度抓取我的 API 接口<br>回去好好读书吧😂😂😂😂😂😂</div>
                     </body></html>
                     """
                     self.wfile.write(mock_html.encode('utf-8'))
                     return
                 
-                # 正常网页请求，返回十六进制数据
                 expected_sign = hashlib.md5(f"{req_time_str}{SIGN_SECRET}".encode('utf-8')).hexdigest()
                 if req_sign != expected_sign:
                     self.send_response(403)
