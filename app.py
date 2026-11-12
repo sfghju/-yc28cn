@@ -13,13 +13,12 @@ from datetime import datetime, timedelta
 
 PORT = int(os.environ.get("PORT", 8888))
 
-# ================== 【系统级安全配置】 ==================
-# 隐藏的路由，不是内行根本猜不到
-SECURE_API_PATH = "/api/v4/core/system_sync"
-# 前后端共享的签名盐值
-SIGN_SECRET = "yc28_cyber_salt_v4_9981"
-# 允许的时间窗口（秒），超过这个时间直接失效
-TIME_WINDOW = 2.0 
+# ================== 【核心安全架构】 ==================
+SECURE_API_PATH = "/api/v6/core/stream"
+SIGN_SECRET = "yc28_cyber_salt_v6_2026"
+# 你的专属永久密钥（包含 8888 吉利数字）
+ADMIN_TOKEN = "yc28_8888_vip_power"
+TIME_WINDOW = 2.0 # 抓包客的请求 2 秒后直接失效
 
 HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Linux; Android 10; SM-G975F) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36',
@@ -91,7 +90,7 @@ class RequestHandler(BaseHTTPRequestHandler):
             parsed_url = urlparse(self.path)
             path = parsed_url.path
             
-            # 网页直接放行
+            # 网页直接放行，绝对没有密码，任何人点开即看
             if path == '/' or path == '/index.html' or path == '/favicon.ico':
                 self.send_response(200)
                 if path != '/favicon.ico': self.send_header('Content-Type', 'text/html; charset=utf-8')
@@ -99,21 +98,37 @@ class RequestHandler(BaseHTTPRequestHandler):
                 if path != '/favicon.ico': self.wfile.write(HTML_PAGE.encode('utf-8'))
                 return
 
-            # ================== 【12层防御网关启动】 ==================
+            # ================== 【API 十层防御网关】 ==================
             if path == SECURE_API_PATH:
-                # 【第1层：防盗链 & 来源校验】
+                # 【第1层：站长特赦通道】带上 8888 密钥，无视一切限制，永久可用
+                admin_token = self.headers.get('X-Admin-Token', '')
+                if admin_token == ADMIN_TOKEN:
+                    query = parse_qs(parsed_url.query)
+                    t_type = query.get('type', ['2'])[0]
+                    if t_type not in ["2", "3", "13"]: t_type = "2"
+                    
+                    payload = CACHE_DATA.get(t_type, {})
+                    json_str = json.dumps(payload, ensure_ascii=False)
+                    self.send_response(200)
+                    self.send_header('Content-Type', 'application/json; charset=utf-8')
+                    self.send_header('Access-Control-Allow-Origin', '*')
+                    self.end_headers()
+                    self.wfile.write(json_str.encode('utf-8'))
+                    return
+
+                # 【第2层：防盗链校验】防止抓包工具直接请求
                 referer = self.headers.get('Referer', '')
                 if 'yc28cn' not in referer and 'onrender.com' not in referer:
                     self._send_decoy()
                     return
 
-                # 【第2层：客户端指纹校验 (UA)】
+                # 【第3层：UA 指纹校验】防止非浏览器脚本
                 user_agent = self.headers.get('User-Agent', '')
                 if 'Mozilla' not in user_agent and 'Chrome' not in user_agent:
                     self._send_decoy()
                     return
 
-                # 【第3层：动态时间戳 & 2秒防重放】
+                # 【第4层：动态时间戳防重放】核心防护：限制 2 秒
                 req_time_str = self.headers.get('X-Req-Time', '')
                 req_sign = self.headers.get('X-Req-Sign', '')
                 
@@ -122,9 +137,8 @@ class RequestHandler(BaseHTTPRequestHandler):
                     return
 
                 try:
-                    req_time = float(req_time_str) / 1000.0 # 转回秒
+                    req_time = float(req_time_str) / 1000.0
                     server_time = time.time()
-                    # 核心：时间差超过 TIME_WINDOW（2秒），直接判定为过期重放攻击
                     if abs(server_time - req_time) > TIME_WINDOW:
                         self._send_decoy()
                         return
@@ -132,21 +146,20 @@ class RequestHandler(BaseHTTPRequestHandler):
                     self._send_decoy()
                     return
 
-                # 【第4层：动态签名哈希校验】
-                # 前端算法：md5(time_stamp + salt)
+                # 【第5层：动态签名哈希校验】防止伪造时间戳
                 expected_sign = hashlib.md5(f"{req_time_str}{SIGN_SECRET}".encode('utf-8')).hexdigest()
                 if req_sign != expected_sign:
                     self._send_decoy()
                     return
 
-                # 【第5层：参数白名单校验】
+                # 【第6层：参数白名单校验】
                 query = parse_qs(parsed_url.query)
                 t_type = query.get('type', ['2'])[0]
                 if t_type not in ["2", "3", "13"]:
                     self._send_decoy()
                     return
 
-                # ================== 【第6层：十六进制加密数据传输】 ==================
+                # ================== 【第7层：十六进制加密传输】 ==================
                 payload = CACHE_DATA.get(t_type, {})
                 json_str = json.dumps(payload, ensure_ascii=False)
                 hex_data = json_str.encode('utf-8').hex()
@@ -158,14 +171,12 @@ class RequestHandler(BaseHTTPRequestHandler):
                 self.wfile.write(hex_data.encode('utf-8'))
                 return
 
-            # 其他路径全部返回诱饵乱码
             self._send_decoy()
-            
         except Exception:
             pass
 
     def _send_decoy(self):
-        """诱饵机制：不返回错误码，返回一堆乱七八糟的 16进制英文，让抓包者去解密"""
+        """第8、9、10层：诱饵拦截机制，报错不报真错，返回十六进制英文假数据"""
         self.send_response(200)
         self.send_header('Content-Type', 'text/plain; charset=utf-8')
         self.end_headers()
@@ -174,7 +185,7 @@ class RequestHandler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
         pass
 
-# ================== 前端网页代码 (去密码，强制防调试) ==================
+# ================== 前端网页代码 (绝对免密，极客UI) ==================
 HTML_PAGE = """
 <!DOCTYPE html>
 <html lang="zh-CN">
@@ -191,7 +202,6 @@ HTML_PAGE = """
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body { font-family: 'Share Tech Mono', monospace; background: var(--bg); color: var(--text); min-height: 100vh; overflow-x: hidden; position: relative; }
         
-        /* 赛博网格背景 */
         .cyber-grid {
             position: fixed; top: 0; left: 0; width: 100%; height: 100%; z-index: -1;
             background-image: linear-gradient(rgba(0, 243, 255, 0.04) 1px, transparent 1px), linear-gradient(90deg, rgba(0, 243, 255, 0.04) 1px, transparent 1px);
@@ -270,16 +280,15 @@ HTML_PAGE = """
     </div>
 
     <script>
-        // 【防调试与防篡改代码】
+        // 前端防调试，拦截 F12 和右键
         document.onkeydown = function(e) {
             if (e.keyCode === 123 || (e.ctrlKey && e.shiftKey && (e.keyCode === 73 || e.keyCode === 74)) || (e.ctrlKey && e.keyCode === 85)) {
                 return false;
             }
         };
 
-        // 核心安全参数
-        const SECURE_API = "/api/v4/core/system_sync";
-        const SIGN_SECRET = "yc28_cyber_salt_v4_9981";
+        const SECURE_API = "/api/v6/core/stream";
+        const SIGN_SECRET = "yc28_cyber_salt_v6_2026";
 
         let currentType = '2'; 
         let prevPeriod = ""; 
@@ -287,7 +296,7 @@ HTML_PAGE = """
         let timerInterval = null;
         let lastFetchedPeriod = "";
 
-        // 模拟 MD5 哈希算法（必须与 Python 后端一致）
+        // 模拟 MD5
         function md5(string) {
             function rotateLeft(lValue, iShiftBits) { return (lValue << iShiftBits) | (lValue >>> (32 - iShiftBits)); }
             function addUnsigned(lX, lY) { var lX4, lY4, lX8, lY8, lResult; lX8 = (lX & 0x80000000); lY8 = (lY & 0x80000000); lX4 = (lX & 0x40000000); lY4 = (lY & 0x40000000); lResult = (lX & 0x3FFFFFFF) + (lY & 0x3FFFFFFF); if (lX4 & lY4) { return (lResult ^ 0x80000000 ^ lX8 ^ lY8); } if (lX4 | lY4) { if (lResult & 0x40000000) { return (lResult ^ 0xC0000000 ^ lX8 ^ lY8); } else { return (lResult ^ 0x40000000 ^ lX8 ^ lY8); } } else { return (lResult ^ lX8 ^ lY8); } }
@@ -360,7 +369,6 @@ HTML_PAGE = """
 
         async function update() {
             try {
-                // 【核心：生成动态签名与时间戳】
                 const timeStamp = Date.now().toString();
                 const sign = md5(timeStamp + SIGN_SECRET);
 
@@ -374,7 +382,6 @@ HTML_PAGE = """
                 const text = await r.text();
                 let j;
 
-                // 解密十六进制
                 try {
                     if (/^[0-9a-fA-F]+$/.test(text)) {
                         const jsonStr = decodeURIComponent(text.replace(/../g, '%$&'));
@@ -419,7 +426,6 @@ HTML_PAGE = """
             } catch (e) {}
         }
         
-        // 每秒刷新一次
         setInterval(update, 1000); 
         update();
     </script>
@@ -429,7 +435,6 @@ HTML_PAGE = """
 
 if __name__ == '__main__':
     threading.Thread(target=background_worker, daemon=True).start()
-    print(f"🚀 终端启动...")
     
     server = HTTPServer(('0.0.0.0', PORT), RequestHandler)
     try:
