@@ -16,9 +16,8 @@ PORT = int(os.environ.get("PORT", 8888))
 # ================== 【核心安全架构】 ==================
 SECURE_API_PATH = "/api/v6/core/stream"
 SIGN_SECRET = "yc28_cyber_salt_v6_2026"
-# 你的专属永久密钥（包含 8888 吉利数字）
 ADMIN_TOKEN = "yc28_8888_vip_power"
-TIME_WINDOW = 2.0 # 抓包客的请求 2 秒后直接失效
+TIME_WINDOW = 2.0 
 
 HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Linux; Android 10; SM-G975F) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36',
@@ -90,7 +89,7 @@ class RequestHandler(BaseHTTPRequestHandler):
             parsed_url = urlparse(self.path)
             path = parsed_url.path
             
-            # 网页直接放行，绝对没有密码，任何人点开即看
+            # 网页直接放行
             if path == '/' or path == '/index.html' or path == '/favicon.ico':
                 self.send_response(200)
                 if path != '/favicon.ico': self.send_header('Content-Type', 'text/html; charset=utf-8')
@@ -98,9 +97,9 @@ class RequestHandler(BaseHTTPRequestHandler):
                 if path != '/favicon.ico': self.wfile.write(HTML_PAGE.encode('utf-8'))
                 return
 
-            # ================== 【API 十层防御网关】 ==================
+            # ================== 【API 防御网关】 ==================
             if path == SECURE_API_PATH:
-                # 【第1层：站长特赦通道】带上 8888 密钥，无视一切限制，永久可用
+                # 站长特权放行
                 admin_token = self.headers.get('X-Admin-Token', '')
                 if admin_token == ADMIN_TOKEN:
                     query = parse_qs(parsed_url.query)
@@ -116,50 +115,60 @@ class RequestHandler(BaseHTTPRequestHandler):
                     self.wfile.write(json_str.encode('utf-8'))
                     return
 
-                # 【第2层：防盗链校验】防止抓包工具直接请求
+                # 普通防御拦截
                 referer = self.headers.get('Referer', '')
-                if 'yc28cn' not in referer and 'onrender.com' not in referer:
-                    self._send_decoy()
-                    return
-
-                # 【第3层：UA 指纹校验】防止非浏览器脚本
                 user_agent = self.headers.get('User-Agent', '')
-                if 'Mozilla' not in user_agent and 'Chrome' not in user_agent:
-                    self._send_decoy()
-                    return
-
-                # 【第4层：动态时间戳防重放】核心防护：限制 2 秒
                 req_time_str = self.headers.get('X-Req-Time', '')
                 req_sign = self.headers.get('X-Req-Sign', '')
                 
-                if not req_time_str or not req_sign:
-                    self._send_decoy()
+                is_hacker = False
+                if 'yc28cn' not in referer and 'onrender.com' not in referer: is_hacker = True
+                elif 'Mozilla' not in user_agent and 'Chrome' not in user_agent: is_hacker = True
+                elif not req_time_str or not req_sign: is_hacker = True
+                else:
+                    try:
+                        req_time = float(req_time_str) / 1000.0
+                        if abs(time.time() - req_time) > TIME_WINDOW: is_hacker = True
+                    except ValueError:
+                        is_hacker = True
+                
+                if is_hacker:
+                    # 【触发嘲讽机制】
+                    self.send_response(200)
+                    self.send_header('Content-Type', 'text/html; charset=utf-8')
+                    self.end_headers()
+                    # 返回带有跳动的嘲讽页面的 HTML
+                    mock_html = """
+                    <html><head><meta name="viewport" content="width=device-width, initial-scale=1.0">
+                    <style>
+                        body { background: #000; margin: 0; overflow: hidden; display: flex; justify-content: center; align-items: center; height: 100vh; font-family: monospace; }
+                        @keyframes jump {
+                            0%, 100% { transform: translateY(0); text-shadow: 0 0 20px red; color: red; }
+                            50% { transform: translateY(-30px); text-shadow: 0 0 50px red, 0 0 10px white; color: #ffcccc; }
+                        }
+                        .msg {
+                            font-size: 36px; font-weight: bold; text-align: center; line-height: 1.5;
+                            animation: jump 0.3s infinite; word-break: break-all; padding: 20px;
+                        }
+                    </style></head>
+                    <body>
+                        <div class="msg">老弟你有什么实力啊<br>还想套取我的 API？</div>
+                    </body></html>
+                    """
+                    self.wfile.write(mock_html.encode('utf-8'))
                     return
-
-                try:
-                    req_time = float(req_time_str) / 1000.0
-                    server_time = time.time()
-                    if abs(server_time - req_time) > TIME_WINDOW:
-                        self._send_decoy()
-                        return
-                except ValueError:
-                    self._send_decoy()
-                    return
-
-                # 【第5层：动态签名哈希校验】防止伪造时间戳
+                
+                # 正常签名校验
                 expected_sign = hashlib.md5(f"{req_time_str}{SIGN_SECRET}".encode('utf-8')).hexdigest()
                 if req_sign != expected_sign:
-                    self._send_decoy()
+                    self.send_response(403)
+                    self.end_headers()
                     return
 
-                # 【第6层：参数白名单校验】
+                # 返回十六进制数据
                 query = parse_qs(parsed_url.query)
                 t_type = query.get('type', ['2'])[0]
-                if t_type not in ["2", "3", "13"]:
-                    self._send_decoy()
-                    return
-
-                # ================== 【第7层：十六进制加密传输】 ==================
+                if t_type not in ["2", "3", "13"]: t_type = "2"
                 payload = CACHE_DATA.get(t_type, {})
                 json_str = json.dumps(payload, ensure_ascii=False)
                 hex_data = json_str.encode('utf-8').hex()
@@ -171,21 +180,15 @@ class RequestHandler(BaseHTTPRequestHandler):
                 self.wfile.write(hex_data.encode('utf-8'))
                 return
 
-            self._send_decoy()
+            self.send_response(404)
+            self.end_headers()
         except Exception:
             pass
-
-    def _send_decoy(self):
-        """第8、9、10层：诱饵拦截机制，报错不报真错，返回十六进制英文假数据"""
-        self.send_response(200)
-        self.send_header('Content-Type', 'text/plain; charset=utf-8')
-        self.end_headers()
-        self.wfile.write(b"3c21444f43545950452068746d6c3e3c68746d6c3e3c686561643e3c7469746c653e4572726f723c2f7469746c653e3c2f686561643e3c626f64793e3c68313e4163636573732044656e6965643c2f68313e3c2f626f64793e3c2f68746d6c3e")
 
     def log_message(self, format, *args):
         pass
 
-# ================== 前端网页代码 (绝对免密，极客UI) ==================
+# ================== 正常前端网页代码 ==================
 HTML_PAGE = """
 <!DOCTYPE html>
 <html lang="zh-CN">
@@ -201,7 +204,6 @@ HTML_PAGE = """
         }
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body { font-family: 'Share Tech Mono', monospace; background: var(--bg); color: var(--text); min-height: 100vh; overflow-x: hidden; position: relative; }
-        
         .cyber-grid {
             position: fixed; top: 0; left: 0; width: 100%; height: 100%; z-index: -1;
             background-image: linear-gradient(rgba(0, 243, 255, 0.04) 1px, transparent 1px), linear-gradient(90deg, rgba(0, 243, 255, 0.04) 1px, transparent 1px);
@@ -212,35 +214,28 @@ HTML_PAGE = """
             background: linear-gradient(to bottom, rgba(255,255,255,0), rgba(255,255,255,0) 50%, rgba(0,0,0,0.3) 50%, rgba(0,0,0,0.3));
             background-size: 100% 4px; opacity: 0.6;
         }
-
         .app { max-width: 800px; margin: 0 auto; padding: 15px; position: relative; z-index: 10; }
         .header { text-align: center; margin-bottom: 25px; padding-top: 10px; }
         .title { font-size: 26px; color: var(--cyan); letter-spacing: 4px; font-weight: bold; text-shadow: 0 0 10px rgba(0,243,255,0.8), 0 0 20px rgba(0,243,255,0.4); }
-        
         .panel { background: var(--panel); border: 1px solid rgba(0,243,255,0.3); border-radius: 2px; padding: 20px; margin-bottom: 20px; position: relative; box-shadow: 0 0 15px rgba(0,243,255,0.05); }
         .panel::before { content: ''; position: absolute; top: 0; left: 0; width: 4px; height: 100%; background: var(--cyan); box-shadow: 0 0 10px var(--cyan); }
-
         .tabs { display: flex; gap: 10px; margin-bottom: 20px; }
         .tab-btn { flex: 1; background: transparent; border: 1px solid var(--muted); color: var(--muted); padding: 12px 0; text-align: center; font-size: 14px; cursor: pointer; transition: all 0.3s; font-weight: bold; user-select: none; }
         .tab-btn.active { border-color: var(--cyan); color: var(--cyan); background: rgba(0,243,255,0.1); box-shadow: inset 0 0 15px rgba(0,243,255,0.2); }
-
         .latest-box { display: flex; justify-content: space-between; align-items: center; background: linear-gradient(90deg, rgba(255,0,60,0.1) 0%, transparent 100%); border-left: 3px solid var(--red); padding: 15px; }
         .latest-label { font-size: 12px; color: var(--red); letter-spacing: 1px; margin-bottom: 5px;}
         .latest-data { font-size: 24px; font-weight: bold; color: var(--cyan); text-shadow: 0 0 8px rgba(0,243,255,0.5); }
         .latest-data span { color: var(--text); font-size: 18px; margin: 0 5px; }
-
         .countdown-box { text-align: right; }
         .cd-title { font-size: 12px; color: var(--muted); margin-bottom: 5px; }
         .cd-time { font-size: 26px; font-weight: bold; color: var(--green); text-shadow: 0 0 10px rgba(57,255,20,0.6); font-variant-numeric: tabular-nums; }
         .cd-time.urgent { color: var(--red); text-shadow: 0 0 15px rgba(255,0,60,0.8); animation: pulse 0.5s infinite alternate; }
         @keyframes pulse { 0% { opacity: 0.8; } 100% { opacity: 1; } }
-
         .table-container { border: 1px solid rgba(0,243,255,0.2); background: var(--panel); }
         .thead { display: flex; background: rgba(0,243,255,0.05); padding: 12px 10px; font-size: 13px; color: var(--muted); border-bottom: 1px solid rgba(0,243,255,0.2); }
         .trow { display: flex; padding: 15px 10px; font-size: 15px; border-bottom: 1px solid rgba(255,255,255,0.03); align-items: center; }
         .trow.new-row { animation: scanAnim 3s ease-out; }
         @keyframes scanAnim { 0% { background: rgba(57,255,20,0.4); } 100% { background: transparent; } }
-        
         .c1 { flex: 1.2; color: var(--muted); } .c2 { flex: 1; color: var(--muted); font-size: 12px; } .c3 { flex: 2; text-align: center; font-weight: bold; } .c4 { flex: 0.8; text-align: center; font-weight: bold; font-size: 18px; } .c5 { flex: 0.8; text-align: center; font-weight: bold;} .c6 { flex: 0.8; text-align: center; font-weight: bold;}
         .red { color: var(--red); } .cyan { color: var(--cyan); } .green { color: var(--green); }
     </style>
@@ -248,19 +243,14 @@ HTML_PAGE = """
 <body oncontextmenu="return false;">
     <div class="cyber-grid"></div>
     <div class="scanlines"></div>
-
     <div class="app">
-        <div class="header">
-            <div class="title">/// 舰长智算中枢 ///</div>
-        </div>
-
+        <div class="header"><div class="title">/// 舰长智算中枢 ///</div></div>
         <div class="panel">
             <div class="tabs">
                 <div class="tab-btn active" onclick="switchType('2', this)">加拿大28</div>
                 <div class="tab-btn" onclick="switchType('3', this)">分分28</div>
                 <div class="tab-btn" onclick="switchType('13', this)">比特28</div>
             </div>
-
             <div class="latest-box">
                 <div>
                     <div class="latest-label" id="type-name">[系统加载中...]</div>
@@ -272,31 +262,21 @@ HTML_PAGE = """
                 </div>
             </div>
         </div>
-
         <div class="table-container">
             <div class="thead"><div class="c1">期号</div><div class="c2">时间</div><div class="c3">开奖号码</div><div class="c4">总和</div><div class="c5">大小</div><div class="c6">单双</div></div>
             <div id="list"></div>
         </div>
     </div>
-
     <script>
-        // 前端防调试，拦截 F12 和右键
         document.onkeydown = function(e) {
             if (e.keyCode === 123 || (e.ctrlKey && e.shiftKey && (e.keyCode === 73 || e.keyCode === 74)) || (e.ctrlKey && e.keyCode === 85)) {
                 return false;
             }
         };
-
         const SECURE_API = "/api/v6/core/stream";
         const SIGN_SECRET = "yc28_cyber_salt_v6_2026";
-
-        let currentType = '2'; 
-        let prevPeriod = ""; 
-        let targetTime = null;
-        let timerInterval = null;
-        let lastFetchedPeriod = "";
-
-        // 模拟 MD5
+        let currentType = '2'; let prevPeriod = ""; let targetTime = null; let timerInterval = null; let lastFetchedPeriod = "";
+        
         function md5(string) {
             function rotateLeft(lValue, iShiftBits) { return (lValue << iShiftBits) | (lValue >>> (32 - iShiftBits)); }
             function addUnsigned(lX, lY) { var lX4, lY4, lX8, lY8, lResult; lX8 = (lX & 0x80000000); lY8 = (lY & 0x80000000); lX4 = (lX & 0x40000000); lY4 = (lY & 0x40000000); lResult = (lX & 0x3FFFFFFF) + (lY & 0x3FFFFFFF); if (lX4 & lY4) { return (lResult ^ 0x80000000 ^ lX8 ^ lY8); } if (lX4 | lY4) { if (lResult & 0x40000000) { return (lResult ^ 0xC0000000 ^ lX8 ^ lY8); } else { return (lResult ^ 0x40000000 ^ lX8 ^ lY8); } } else { return (lResult ^ lX8 ^ lY8); } }
@@ -331,20 +311,16 @@ HTML_PAGE = """
             var temp = wordToHex(a) + wordToHex(b) + wordToHex(c) + wordToHex(d);
             return temp.toLowerCase();
         }
-
         function switchType(type, btnEl) {
             if (currentType === type) return;
-            currentType = type;
-            prevPeriod = ""; 
+            currentType = type; prevPeriod = ""; 
             document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
             btnEl.classList.add('active');
             document.getElementById('top-data').innerHTML = "-- <span>+</span> -- <span>+</span> -- <span>=</span> --";
             document.getElementById('list').innerHTML = "";
             document.getElementById('countdown').innerText = "--:--";
-            targetTime = null;
-            update();
+            targetTime = null; update();
         }
-
         function startCountdown(targetTimeStr) {
             if (!targetTimeStr) return;
             const t = targetTimeStr.replace(/-/g, '/');
@@ -366,52 +342,38 @@ HTML_PAGE = """
                 }
             }, 100);
         }
-
         async function update() {
             try {
                 const timeStamp = Date.now().toString();
                 const sign = md5(timeStamp + SIGN_SECRET);
-
                 const r = await fetch(`${SECURE_API}?type=${currentType}`, {
-                    headers: {
-                        'X-Req-Time': timeStamp,
-                        'X-Req-Sign': sign
-                    }
+                    headers: { 'X-Req-Time': timeStamp, 'X-Req-Sign': sign }
                 });
-                
                 const text = await r.text();
                 let j;
-
                 try {
                     if (/^[0-9a-fA-F]+$/.test(text)) {
                         const jsonStr = decodeURIComponent(text.replace(/../g, '%$&'));
                         j = JSON.parse(jsonStr);
                     } else { return; }
                 } catch(e) { return; }
-
                 if (j && j.data && j.data.length > 0) {
                     const top = j.data[0];
                     document.getElementById('type-name').innerText = `[ ${j.name} · 实时接入 ]`;
-                    
                     let cTopB = top.big_small === '大' ? 'red' : 'cyan';
-                    let cTopO = top.odd_even === '单' ? 'red' : 'cyan';
                     document.getElementById('top-data').innerHTML = `${top.period}期 : <span class="${cTopB}">${top.num1}</span> <span>+</span> <span class="${cTopB}">${top.num2}</span> <span>+</span> <span class="${cTopB}">${top.num3}</span> <span>=</span> <span class="green">${top.total}</span>`;
-                    
                     let isNew = (prevPeriod !== "" && prevPeriod !== top.period);
                     prevPeriod = top.period;
-                    
                     if (lastFetchedPeriod !== top.period) {
                         lastFetchedPeriod = top.period;
                         startCountdown(j.next_draw_time);
                     }
-
                     let html = "";
                     j.data.forEach((row, idx) => {
                         let cB = row.big_small === '大' ? 'red' : 'cyan';
                         let cO = row.odd_even === '单' ? 'red' : 'cyan';
                         let cls = (isNew && idx === 0) ? 'new-row' : '';
                         let t = row.draw_time ? row.draw_time.substring(11,19) : "--:--";
-                        
                         html += `<div class="trow ${cls}">
                             <div class="c1">${row.period}</div>
                             <div class="c2">${t}</div>
@@ -425,9 +387,7 @@ HTML_PAGE = """
                 }
             } catch (e) {}
         }
-        
-        setInterval(update, 1000); 
-        update();
+        setInterval(update, 1000); update();
     </script>
 </body>
 </html>
@@ -435,7 +395,6 @@ HTML_PAGE = """
 
 if __name__ == '__main__':
     threading.Thread(target=background_worker, daemon=True).start()
-    
     server = HTTPServer(('0.0.0.0', PORT), RequestHandler)
     try:
         server.serve_forever()
