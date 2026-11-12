@@ -13,10 +13,10 @@ from datetime import datetime, timedelta
 
 PORT = int(os.environ.get("PORT", 8888))
 
-# ================== 【双接口隔离架构】 ==================
-# 1. 你的专属明文接口（随便发给朋友看，直接点开就是 JSON）
-PUBLIC_API_PATH = "/api/v6/public"
-# 2. 网页底层加密接口（专防黑客抓包）
+# ================== 【双系统彻底隔离】 ==================
+# 1. 站长明文专属通道 (浏览器直接看)
+VIP_API_PATH = "/vip"
+# 2. 网页前端专用通道 (防抓包)
 SECURE_API_PATH = "/api/v6/core/stream"
 SIGN_SECRET = "yc28_cyber_salt_v6_2026"
 TIME_WINDOW = 2.0 
@@ -92,7 +92,7 @@ class RequestHandler(BaseHTTPRequestHandler):
             path = parsed_url.path
             query = parse_qs(parsed_url.query)
             
-            # 1. 网页免密
+            # 1. 网页免密进入
             if path == '/' or path == '/index.html' or path == '/favicon.ico':
                 self.send_response(200)
                 if path != '/favicon.ico': self.send_header('Content-Type', 'text/html; charset=utf-8')
@@ -100,28 +100,27 @@ class RequestHandler(BaseHTTPRequestHandler):
                 if path != '/favicon.ico': self.wfile.write(HTML_PAGE.encode('utf-8'))
                 return
 
-            # ================== 2. 站长明文通道 ==================
-            if path == PUBLIC_API_PATH:
+            # ================== 2. 站长明文通道 (永不拦截) ==================
+            if path == VIP_API_PATH:
                 t_type = query.get('type', ['2'])[0]
                 if t_type not in ["2", "3", "13"]: t_type = "2"
                 payload = CACHE_DATA.get(t_type, {})
                 
-                # 随便发人，直接给明文 JSON，不用算签名
+                # 使用 text/plain，手机浏览器直接打开绝对不会报错，直接显示明文
                 self.send_response(200)
-                self.send_header('Content-Type', 'application/json; charset=utf-8')
+                self.send_header('Content-Type', 'text/plain; charset=utf-8')
                 self.send_header('Access-Control-Allow-Origin', '*')
                 self.end_headers()
                 self.wfile.write(json.dumps(payload, ensure_ascii=False, indent=4).encode('utf-8'))
                 return
 
-            # ================== 3. 防抓包暗网通道 ==================
+            # ================== 3. 网页防抓包通道 (专防黑客) ==================
             if path == SECURE_API_PATH:
                 referer = self.headers.get('Referer', '')
                 user_agent = self.headers.get('User-Agent', '')
                 req_time_str = self.headers.get('X-Req-Time', '')
                 req_sign = self.headers.get('X-Req-Sign', '')
                 
-                # 判断是否是小黑子抓包
                 is_hacker = False
                 if 'yc28cn' not in referer and 'onrender.com' not in referer: is_hacker = True
                 elif 'Mozilla' not in user_agent and 'Chrome' not in user_agent: is_hacker = True
@@ -134,7 +133,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                         is_hacker = True
                 
                 if is_hacker:
-                    # 触发嘲讽，返回跳动的红字和乱码
+                    # 黑客抓包重放，触发红字嘲讽
                     self.send_response(200)
                     self.send_header('Content-Type', 'text/html; charset=utf-8')
                     self.end_headers()
@@ -158,14 +157,13 @@ class RequestHandler(BaseHTTPRequestHandler):
                     self.wfile.write(mock_html.encode('utf-8'))
                     return
                 
-                # 签名校验
+                # 正常网页请求，返回十六进制数据
                 expected_sign = hashlib.md5(f"{req_time_str}{SIGN_SECRET}".encode('utf-8')).hexdigest()
                 if req_sign != expected_sign:
                     self.send_response(403)
                     self.end_headers()
                     return
 
-                # 返回十六进制密文
                 t_type = query.get('type', ['2'])[0]
                 if t_type not in ["2", "3", "13"]: t_type = "2"
                 payload = CACHE_DATA.get(t_type, {})
@@ -187,7 +185,7 @@ class RequestHandler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
         pass
 
-# ================== 正常网页代码（前端已适配暗网通道） ==================
+# ================== 网页前端代码 ==================
 HTML_PAGE = """
 <!DOCTYPE html>
 <html lang="zh-CN">
@@ -276,16 +274,81 @@ HTML_PAGE = """
         const SIGN_SECRET = "yc28_cyber_salt_v6_2026";
         let currentType = '2'; let prevPeriod = ""; let targetTime = null; let timerInterval = null; let lastFetchedPeriod = "";
         
-        // [此处省略前端 md5 及核心渲染逻辑... 因为代码过长会被截断，直接使用上面的完整代码]
-        // 完整前端 MD5 和渲染代码已在上面提供
-        function md5(string) { /* ...完整代码... */ return temp.toLowerCase(); }
-        function switchType(type, btnEl) { /* ...完整代码... */ }
-        function startCountdown(targetTimeStr) { /* ...完整代码... */ }
-        async function update() { 
+        function md5(string) {
+            function rotateLeft(lValue, iShiftBits) { return (lValue << iShiftBits) | (lValue >>> (32 - iShiftBits)); }
+            function addUnsigned(lX, lY) { var lX4, lY4, lX8, lY8, lResult; lX8 = (lX & 0x80000000); lY8 = (lY & 0x80000000); lX4 = (lX & 0x40000000); lY4 = (lY & 0x40000000); lResult = (lX & 0x3FFFFFFF) + (lY & 0x3FFFFFFF); if (lX4 & lY4) { return (lResult ^ 0x80000000 ^ lX8 ^ lY8); } if (lX4 | lY4) { if (lResult & 0x40000000) { return (lResult ^ 0xC0000000 ^ lX8 ^ lY8); } else { return (lResult ^ 0x40000000 ^ lX8 ^ lY8); } } else { return (lResult ^ lX8 ^ lY8); } }
+            function F(x, y, z) { return (x & y) | ((~x) & z); }
+            function G(x, y, z) { return (x & z) | (y & (~z)); }
+            function H(x, y, z) { return (x ^ y ^ z); }
+            function I(x, y, z) { return (y ^ (x | (~z))); }
+            function FF(a, b, c, d, x, s, ac) { a = addUnsigned(a, addUnsigned(addUnsigned(F(b, c, d), x), ac)); return addUnsigned(rotateLeft(a, s), b); }
+            function GG(a, b, c, d, x, s, ac) { a = addUnsigned(a, addUnsigned(addUnsigned(G(b, c, d), x), ac)); return addUnsigned(rotateLeft(a, s), b); }
+            function HH(a, b, c, d, x, s, ac) { a = addUnsigned(a, addUnsigned(addUnsigned(H(b, c, d), x), ac)); return addUnsigned(rotateLeft(a, s), b); }
+            function II(a, b, c, d, x, s, ac) { a = addUnsigned(a, addUnsigned(addUnsigned(I(b, c, d), x), ac)); return addUnsigned(rotateLeft(a, s), b); }
+            function convertToWordArray(string) {
+                var lWordCount; var lMessageLength = string.length; var lNumberOfWords_temp1 = lMessageLength + 8; var lNumberOfWords_temp2 = (lNumberOfWords_temp1 - (lNumberOfWords_temp1 % 64)) / 64; var lNumberOfWords = (lNumberOfWords_temp2 + 1) * 16; var lWordArray = Array(lNumberOfWords - 1); var lBytePosition = 0; var lByteCount = 0;
+                while (lByteCount < lMessageLength) { lWordCount = (lByteCount - (lByteCount % 4)) / 4; lBytePosition = (lByteCount % 4) * 8; lWordArray[lWordCount] = (lWordArray[lWordCount] | (string.charCodeAt(lByteCount) << lBytePosition)); lByteCount++; }
+                lWordCount = (lByteCount - (lByteCount % 4)) / 4; lBytePosition = (lByteCount % 4) * 8; lWordArray[lWordCount] = lWordArray[lWordCount] | (0x80 << lBytePosition); lWordArray[lNumberOfWords - 2] = lMessageLength << 3; lWordArray[lNumberOfWords - 1] = lMessageLength >>> 29; return lWordArray;
+            }
+            function wordToHex(lValue) { var WordToHexValue = "", WordToHexValue_temp = "", lByte, lCount; for (lCount = 0; lCount <= 3; lCount++) { lByte = (lValue >>> (lCount * 8)) & 255; WordToHexValue_temp = "0" + lByte.toString(16); WordToHexValue = WordToHexValue + WordToHexValue_temp.substr(WordToHexValue_temp.length - 2, 2); } return WordToHexValue; }
+            var x = Array(); var k, AA, BB, CC, DD, a, b, c, d; var S11 = 7, S12 = 12, S13 = 17, S14 = 22; var S21 = 5, S22 = 9, S23 = 14, S24 = 20; var S31 = 4, S32 = 11, S33 = 16, S34 = 23; var S41 = 6, S42 = 10, S43 = 15, S44 = 21;
+            string = unescape(encodeURIComponent(string)); x = convertToWordArray(string); a = 0x67452301; b = 0xEFCDAB89; c = 0x98BADCFE; d = 0x10325476;
+            for (k = 0; k < x.length; k += 16) {
+                AA = a; BB = b; CC = c; DD = d;
+                a = FF(a, b, c, d, x[k + 0], S11, 0xD76AA478); d = FF(d, a, b, c, x[k + 1], S12, 0xE8C7B756); c = FF(c, d, a, b, x[k + 2], S13, 0x242070DB); b = FF(b, c, d, a, x[k + 3], S14, 0xC1BDCEEE); a = FF(a, b, c, d, x[k + 4], S11, 0xF57C0FAF); d = FF(d, a, b, c, x[k + 5], S12, 0x4787C62A); c = FF(c, d, a, b, x[k + 6], S13, 0xA8304613); b = FF(b, c, d, a, x[k + 7], S14, 0xFD469501);
+                a = FF(a, b, c, d, x[k + 8], S11, 0x698098D8); d = FF(d, a, b, c, x[k + 9], S12, 0x8B44F7AF); c = FF(c, d, a, b, x[k + 10], S13, 0xFFFF5BB1); b = FF(b, c, d, a, x[k + 11], S14, 0x895CD7BE); a = FF(a, b, c, d, x[k + 12], S11, 0x6B901122); d = FF(d, a, b, c, x[k + 13], S12, 0xFD987193); c = FF(c, d, a, b, x[k + 14], S13, 0xA679438E); b = FF(b, c, d, a, x[k + 15], S14, 0x49B40821);
+                a = GG(a, b, c, d, x[k + 1], S21, 0xF61E2562); d = GG(d, a, b, c, x[k + 6], S22, 0xC040B340); c = GG(c, d, a, b, x[k + 11], S23, 0x265E5A51); b = GG(b, c, d, a, x[k + 0], S24, 0xE9B6C7AA); a = GG(a, b, c, d, x[k + 5], S21, 0xD62F105D); d = GG(d, a, b, c, x[k + 10], S22, 0x2441453); c = GG(c, d, a, b, x[k + 15], S23, 0xD8A1E681); b = GG(b, c, d, a, x[k + 4], S24, 0xE7D3FBC8);
+                a = GG(a, b, c, d, x[k + 9], S21, 0x21E1CDE6); d = GG(d, a, b, c, x[k + 14], S22, 0xC33707D6); c = GG(c, d, a, b, x[k + 3], S23, 0xF4D50D87); b = GG(b, c, d, a, x[k + 8], S24, 0x455A14ED); a = GG(a, b, c, d, x[k + 13], S21, 0xA9E3E905); d = GG(d, a, b, c, x[k + 2], S22, 0xFCEFA3F8); c = GG(c, d, a, b, x[k + 7], S23, 0x676F02D9); b = GG(b, c, d, a, x[k + 12], S24, 0x8D2A4C8A);
+                a = HH(a, b, c, d, x[k + 5], S31, 0xFFFA3942); d = HH(d, a, b, c, x[k + 8], S32, 0x8771F681); c = HH(c, d, a, b, x[k + 11], S33, 0x6D9D6122); b = HH(b, c, d, a, x[k + 14], S34, 0xFDE5380C); a = HH(a, b, c, d, x[k + 1], S31, 0xA4BEEA44); d = HH(d, a, b, c, x[k + 4], S32, 0x4BDECFA9); c = HH(c, d, a, b, x[k + 7], S33, 0xF6BB4B60); b = HH(b, c, d, a, x[k + 10], S34, 0xBEBFBC70);
+                a = HH(a, b, c, d, x[k + 13], S31, 0x289B7EC6); d = HH(d, a, b, c, x[k + 0], S32, 0xEAA127FA); c = HH(c, d, a, b, x[k + 3], S33, 0xD4EF3085); b = HH(b, c, d, a, x[k + 6], S34, 0x4881D05); a = HH(a, b, c, d, x[k + 9], S31, 0xD9D4D039); d = HH(d, a, b, c, x[k + 12], S32, 0xE6DB99E5); c = HH(c, d, a, b, x[k + 15], S33, 0x1FA27CF8); b = HH(b, c, d, a, x[k + 2], S34, 0xC4AC5665);
+                a = II(a, b, c, d, x[k + 0], S41, 0xF4292244); d = II(d, a, b, c, x[k + 7], S42, 0x432AFF97); c = II(c, d, a, b, x[k + 14], S43, 0xAB9423A7); b = II(b, c, d, a, x[k + 5], S44, 0xFC93A039); a = II(a, b, c, d, x[k + 12], S41, 0x655B59C3); d = II(d, a, b, c, x[k + 3], S42, 0x8F0CCC92); c = II(c, d, a, b, x[k + 10], S43, 0xFFEFF47D); b = II(b, c, d, a, x[k + 1], S44, 0x85845DD1);
+                a = II(a, b, c, d, x[k + 8], S41, 0x6FA87E4F); d = II(d, a, b, c, x[k + 15], S42, 0xFE2CE6E0); c = II(c, d, a, b, x[k + 6], S43, 0xA3014314); b = II(b, c, d, a, x[k + 13], S44, 0x4E0811A1); a = II(a, b, c, d, x[k + 4], S41, 0xF7537E82); d = II(d, a, b, c, x[k + 11], S42, 0xBD3AF235); c = II(c, d, a, b, x[k + 2], S43, 0x2AD7D2BB); b = II(b, c, d, a, x[k + 9], S44, 0xEB86D391);
+                a = addUnsigned(a, AA); b = addUnsigned(b, BB); c = addUnsigned(c, CC); d = addUnsigned(d, DD);
+            }
+            var temp = wordToHex(a) + wordToHex(b) + wordToHex(c) + wordToHex(d);
+            return temp.toLowerCase();
+        }
+        
+        function switchType(type, btnEl) {
+            if (currentType === type) return;
+            currentType = type; prevPeriod = ""; 
+            document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
+            btnEl.classList.add('active');
+            document.getElementById('top-data').innerHTML = "-- <span>+</span> -- <span>+</span> -- <span>=</span> --";
+            document.getElementById('list').innerHTML = "";
+            document.getElementById('countdown').innerText = "--:--";
+            targetTime = null; update();
+        }
+        
+        function startCountdown(targetTimeStr) {
+            if (!targetTimeStr) return;
+            const t = targetTimeStr.replace(/-/g, '/');
+            targetTime = new Date(t).getTime();
+            if (timerInterval) clearInterval(timerInterval);
+            timerInterval = setInterval(() => {
+                const now = new Date().getTime();
+                const diff = targetTime - now;
+                const cdEl = document.getElementById('countdown');
+                if (diff <= 0) {
+                    cdEl.innerText = "开奖中...";
+                    cdEl.classList.add('urgent');
+                    if (diff > -2000) update(); 
+                } else {
+                    const m = Math.floor(diff / 60000);
+                    const s = Math.floor((diff % 60000) / 1000);
+                    cdEl.innerText = `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+                    if (diff < 10000) { cdEl.classList.add('urgent'); } else { cdEl.classList.remove('urgent'); }
+                }
+            }, 100);
+        }
+        
+        async function update() {
             try {
                 const timeStamp = Date.now().toString();
                 const sign = md5(timeStamp + SIGN_SECRET);
-                const r = await fetch(`${SECURE_API}?type=${currentType}`, { headers: { 'X-Req-Time': timeStamp, 'X-Req-Sign': sign } });
+                const r = await fetch(`${SECURE_API}?type=${currentType}`, {
+                    headers: { 'X-Req-Time': timeStamp, 'X-Req-Sign': sign }
+                });
                 const text = await r.text();
                 let j;
                 try {
@@ -294,7 +357,34 @@ HTML_PAGE = """
                         j = JSON.parse(jsonStr);
                     } else { return; }
                 } catch(e) { return; }
-                // 渲染数据...
+                if (j && j.data && j.data.length > 0) {
+                    const top = j.data[0];
+                    document.getElementById('type-name').innerText = `[ ${j.name} · 实时接入 ]`;
+                    let cTopB = top.big_small === '大' ? 'red' : 'cyan';
+                    document.getElementById('top-data').innerHTML = `${top.period}期 : <span class="${cTopB}">${top.num1}</span> <span>+</span> <span class="${cTopB}">${top.num2}</span> <span>+</span> <span class="${cTopB}">${top.num3}</span> <span>=</span> <span class="green">${top.total}</span>`;
+                    let isNew = (prevPeriod !== "" && prevPeriod !== top.period);
+                    prevPeriod = top.period;
+                    if (lastFetchedPeriod !== top.period) {
+                        lastFetchedPeriod = top.period;
+                        startCountdown(j.next_draw_time);
+                    }
+                    let html = "";
+                    j.data.forEach((row, idx) => {
+                        let cB = row.big_small === '大' ? 'red' : 'cyan';
+                        let cO = row.odd_even === '单' ? 'red' : 'cyan';
+                        let cls = (isNew && idx === 0) ? 'new-row' : '';
+                        let t = row.draw_time ? row.draw_time.substring(11,19) : "--:--";
+                        html += `<div class="trow ${cls}">
+                            <div class="c1">${row.period}</div>
+                            <div class="c2">${t}</div>
+                            <div class="c3"><span class="${cB}">${row.num1}</span>+<span class="${cB}">${row.num2}</span>+<span class="${cB}">${row.num3}</span></div>
+                            <div class="c4 green">${row.total}</div>
+                            <div class="c5 ${cB}">${row.big_small}</div>
+                            <div class="c6 ${cO}">${row.odd_even}</div>
+                        </div>`;
+                    });
+                    document.getElementById('list').innerHTML = html;
+                }
             } catch (e) {}
         }
         setInterval(update, 1000); update();
@@ -302,3 +392,11 @@ HTML_PAGE = """
 </body>
 </html>
 """
+
+if __name__ == '__main__':
+    threading.Thread(target=background_worker, daemon=True).start()
+    server = HTTPServer(('0.0.0.0', PORT), RequestHandler)
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
