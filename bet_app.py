@@ -67,11 +67,10 @@ def init_db():
         if not cursor.fetchone():
             conn.execute("INSERT INTO users (username, nickname, password, role, avatar) VALUES ('ADMIN888', '站长', '123456', 'admin', 'https://api.dicebear.com/7.x/bottts/svg?seed=admin')")
         
-        # 生成海量机器人，自带中文名与头像
         robot_count = conn.execute("SELECT COUNT(*) FROM users WHERE role='robot'").fetchone()[0]
         if robot_count < 5000:
-            print("正在初始化 5000 个机器人矩阵...")
-            surnames = ["赵", "钱", "孙", "李", "周", "吴", "郑", "王", "冯", "陈", "褚", "卫", "蒋", "沈", "韩", "杨", "朱", "秦", "尤", "许", "何", "吕", "施", "张"]
+            print("正在初始化机器人矩阵...")
+            surnames = ["赵", "钱", "孙", "李", "周", "吴", "郑", "王", "冯", "陈", "褚", "卫", "蒋", "沈", "韩", "杨", "朱", "秦", "尤", "许"]
             names = ["哥", "姐", "总", "少", "神", "王", "帝", "霸", "龙", "虎", "强", "帅", "美", "丽", "花", "爷", "董", "老板"]
             robots_to_add = 5000 - robot_count
             for i in range(robots_to_add):
@@ -86,21 +85,20 @@ def init_db():
 
 init_db()
 
-# ================== 机器人平滑下注引擎 ==================
+# ================== 机器人实时下注引擎 ==================
 def robot_continuous_bet(game_type):
-    """每秒调用的机器人下注逻辑，制造24小时不断下注的假象"""
-    # 如果已经封盘，立即停止
+    """每秒机器人下注，并直接推送到聊天公屏"""
     if LIVE_DATA[game_type]['left_time'] <= GAMES[game_type]['close_sec']:
         return
 
-    # 平滑下注策略：每秒随机抽取 2~6 个机器人
-    num_robots = random.randint(2, 6)
+    # 每秒抽取 1~3 个机器人实时下注，避免刷屏太快
+    num_robots = random.randint(1, 3)
 
     with get_db() as conn:
-        robots = conn.execute("SELECT id FROM users WHERE role='robot' ORDER BY RANDOM() LIMIT ?", (num_robots,)).fetchall()
+        robots = conn.execute("SELECT id, nickname FROM users WHERE role='robot' ORDER BY RANDOM() LIMIT ?", (num_robots,)).fetchall()
         
         for r in robots:
-            amt = random.choice([10, 20, 50, 100, 200, 500, 1000, 2000])
+            amt = random.choice([10, 20, 50, 100, 200, 500])
             b_type = random.choice(['bs', 'oe', 'num', 'combo', 'pattern'])
             
             if b_type == 'bs':
@@ -117,36 +115,17 @@ def robot_continuous_bet(game_type):
             # 写入订单
             conn.execute('''INSERT INTO bets (user_id, game_type, period, bet_type, bet_value, amount, odds) VALUES (?, ?, ?, ?, ?, ?, ?)''', 
                          (r['id'], game_type, LIVE_DATA[game_type]['next_period'], b_type, b_val, amt, odds))
+            
+            # 实时插入聊天公屏 (专属格式)
+            msg_content = f"{b_val}:{amt}"
+            conn.execute("INSERT INTO messages (game_type, user_id, role, content) VALUES (?, ?, 'user', ?)", 
+                         (game_type, r['id'], msg_content))
         
         conn.commit()
-        # 实时统计本期参与人数
+        
+        # 更新人数
         count = conn.execute("SELECT COUNT(DISTINCT user_id) FROM bets WHERE game_type=? AND period=?", (game_type, LIVE_DATA[game_type]['next_period'])).fetchone()[0]
         LIVE_DATA[game_type]['robot_count'] = count
-
-# ================== 账单播报 ==================
-def broadcast_bill(game_type, period):
-    with get_db() as conn:
-        bets = conn.execute('''SELECT u.nickname, b.bet_value, b.amount FROM bets b JOIN users u ON b.user_id = u.id WHERE b.game_type=? AND b.period=? AND b.status='pending' ''', (game_type, period)).fetchall()
-        if not bets: return
-        
-        user_bets = {}
-        for b in bets:
-            name = b['nickname']
-            if name not in user_bets: user_bets[name] = {'items': [], 'total': 0}
-            user_bets[name]['items'].append(f"{b['bet_value']}:{b['amount']}")
-            user_bets[name]['total'] += b['amount']
-        
-        bill_lines = [f"第 {period} 期玩家投注账单 (部分)"]
-        # 播报前 40 个幸运玩家
-        display_items = list(user_bets.items())[:40] 
-        for u, data in display_items:
-            items_str = " ".join(data['items'])
-            bill_lines.append(f"{u}-[{items_str}]_{data['total']}")
-        
-        bill_lines.append(f"... 本期共有 {len(user_bets)} 名玩家参与，感谢支持！")
-            
-        conn.execute("INSERT INTO messages (game_type, user_id, role, content) VALUES (?, 0, 'robot', ?)", (game_type, "\n".join(bill_lines)))
-        conn.commit()
 
 # ================== 自动结算 ==================
 def settle_bets(game_type, period, nums, total):
@@ -222,13 +201,10 @@ def fetch_loop():
                         
                         if LIVE_DATA[g_type]['left_time'] <= cfg['close_sec']:
                             LIVE_DATA[g_type]['status'] = "封盘中"
-                            if REPORTED_PERIODS[g_type] != LIVE_DATA[g_type]['next_period'] and LIVE_DATA[g_type]['left_time'] <= 0:
-                                REPORTED_PERIODS[g_type] = LIVE_DATA[g_type]['next_period']
-                                threading.Thread(target=broadcast_bill, args=(g_type, LIVE_DATA[g_type]['next_period'])).start()
                         else:
                             LIVE_DATA[g_type]['status'] = "下注中"
                             
-                            # 每秒调度一次机器人，只要没封盘就一直下注
+                            # 实时模拟机器人下注
                             if now_ts - last_tick_time >= 1.0:
                                 threading.Thread(target=robot_continuous_bet, args=(g_type,)).start()
                                 
@@ -261,14 +237,47 @@ def api_bet():
         conn.execute("UPDATE users SET balance = balance - ? WHERE id=?", (data['amount'], session['user_id']))
         conn.execute('''INSERT INTO bets (user_id, game_type, period, bet_type, bet_value, amount, odds) VALUES (?, ?, ?, ?, ?, ?, ?)''', 
                      (session['user_id'], g_type, LIVE_DATA[g_type]['next_period'], data['bet_type'], data['bet_value'], data['amount'], data['odds']))
+        
+        # 玩家下注也推送到公屏
+        conn.execute("INSERT INTO messages (game_type, user_id, role, content) VALUES (?, ?, 'user', ?)", 
+                     (g_type, session['user_id'], f"{data['bet_value']}:{data['amount']}"))
         conn.commit()
     return jsonify({"success": True, "msg": "下注成功"})
+
+@app.route('/api/cancel_bet', methods=['POST'])
+def api_cancel_bet():
+    if 'user_id' not in session: return jsonify({"success": False, "msg": "未登录"})
+    bet_id = request.json.get('bet_id')
+    with get_db() as conn:
+        bet = conn.execute("SELECT * FROM bets WHERE id=? AND user_id=?", (bet_id, session['user_id'])).fetchone()
+        if not bet: return jsonify({"success": False, "msg": "注单不存在"})
+        if bet['status'] != 'pending': return jsonify({"success": False, "msg": "已开奖，无法取消"})
+        
+        # 封盘判定
+        if LIVE_DATA[bet['game_type']]['left_time'] <= GAMES[bet['game_type']]['close_sec']:
+            return jsonify({"success": False, "msg": "已封盘，禁止取消"})
+            
+        conn.execute("UPDATE bets SET status='cancel' WHERE id=?", (bet_id,))
+        conn.execute("UPDATE users SET balance = balance + ? WHERE id=?", (bet['amount'], session['user_id']))
+        conn.commit()
+    return jsonify({"success": True, "msg": "取消成功，金额已退回"})
+
+@app.route('/api/my_last_win', methods=['POST'])
+def api_my_last_win():
+    if 'user_id' not in session: return jsonify({"success": False})
+    period = request.json.get('period')
+    with get_db() as conn:
+        # 查该用户在刚刚开奖的一期是否有中奖订单
+        wins = conn.execute("SELECT SUM(win_amount - amount) as profit FROM bets WHERE user_id=? AND period=? AND status='win'", (session['user_id'], period)).fetchone()
+        if wins and wins['profit'] and wins['profit'] > 0:
+            return jsonify({"success": True, "profit": round(wins['profit'], 2)})
+    return jsonify({"success": False})
 
 @app.route('/api/chat/<g_type>')
 def api_chat(g_type):
     if 'user_id' not in session: return jsonify([])
     with get_db() as conn:
-        msgs = conn.execute('''SELECT m.*, u.nickname, u.avatar FROM messages m LEFT JOIN users u ON m.user_id = u.id WHERE m.game_type=? ORDER BY m.id DESC LIMIT 30''', (g_type,)).fetchall()
+        msgs = conn.execute('''SELECT m.*, u.nickname, u.avatar FROM messages m LEFT JOIN users u ON m.user_id = u.id WHERE m.game_type=? ORDER BY m.id DESC LIMIT 40''', (g_type,)).fetchall()
     return jsonify([dict(m) for m in msgs])
 
 @app.route('/api/my_bets')
@@ -660,12 +669,20 @@ HTML_GAME = BASE_CSS + """
     .trend-ball.blue { background: #5ac8fa; box-shadow: 0 2px 5px rgba(90,200,250,0.3);}
     .trend-attr { color: #8898aa; }
     
-    .chat-area { background: #f4f7f9; height: 30vh; overflow-y: auto; padding: 15px; display: flex; flex-direction: column; gap: 12px; }
-    .msg { display: flex; gap: 10px; font-size: 14px; }
-    .msg.robot { background: #fff; padding: 12px; border-radius: 10px; border: 1px solid #eef2f5; font-family: monospace; white-space: pre-wrap; color: #333; font-size: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.02);}
-    .msg.user { justify-content: flex-end; }
-    .msg.user .bubble { background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%); color: #fff; padding: 10px 15px; border-radius: 15px; border-bottom-right-radius: 2px; max-width: 80%; font-size: 13px; box-shadow: 0 4px 10px rgba(42,82,152,0.2);}
-    .msg.admin .bubble { background: #fff; color: #f57c00; border: 1px solid #f57c00; padding: 10px 15px; border-radius: 15px; border-bottom-left-radius: 2px; font-size: 13px;}
+    .chat-area { background: #f4f7f9; height: 35vh; overflow-y: auto; padding: 15px; display: flex; flex-direction: column; gap: 15px; }
+    .msg { display: flex; gap: 10px; font-size: 14px; align-items: flex-start;}
+    .msg-avatar { width: 40px; height: 40px; border-radius: 50%; background: #fff; flex-shrink: 0; box-shadow: 0 2px 5px rgba(0,0,0,0.05);}
+    .msg-content { display: flex; flex-direction: column; max-width: 75%; }
+    .msg-name { font-size: 12px; color: #8898aa; margin-bottom: 4px; margin-left: 5px;}
+    .msg-bubble { padding: 10px 14px; border-radius: 8px; border-top-left-radius: 2px; background: #fff; color: #333; font-size: 14px; box-shadow: 0 2px 5px rgba(0,0,0,0.03); line-height: 1.4;}
+    
+    .msg.me { flex-direction: row-reverse; }
+    .msg.me .msg-content { align-items: flex-end; }
+    .msg.me .msg-name { margin-right: 5px; margin-left: 0;}
+    .msg.me .msg-bubble { border-top-left-radius: 8px; border-top-right-radius: 2px; background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%); color: #fff; box-shadow: 0 4px 10px rgba(42,82,152,0.2);}
+    
+    .msg.system { justify-content: center; }
+    .msg.system .msg-bubble { background: rgba(0,0,0,0.05); color: #8898aa; font-size: 12px; border-radius: 20px; padding: 5px 15px; box-shadow: none;}
     
     .action-btns { display: flex; justify-content: space-around; background: #fff; padding: 12px 0; border-bottom: 1px solid #eef2f5; }
     .act-btn { font-size: 14px; color: #2a5298; cursor: pointer; text-decoration: none; font-weight: 500;}
@@ -734,7 +751,7 @@ HTML_GAME = BASE_CSS + """
 
     <div class="kbd">
         <div class="kbd-row">
-            <div class="k-btn k-gray" onclick="cancelInput()"><span class="k-t">取消下注</span></div>
+            <div class="k-btn k-gray" onclick="cancelInput()"><span class="k-t">取消输入</span></div>
             <div class="k-btn" onclick="addBet('豹子', 88)"><span class="k-t">豹子</span><span class="k-o">88.00</span></div>
             <div class="k-btn" onclick="addBet('顺子', 16)"><span class="k-t">顺子</span><span class="k-o">16.00</span></div>
             <div class="k-btn" onclick="addBet('对子', 3.6)"><span class="k-t">对子</span><span class="k-o">3.60</span></div>
@@ -810,6 +827,8 @@ HTML_GAME = BASE_CSS + """
 
 <script>
     const G_TYPE = "{{ g_type }}"; let liveData = null; let currentBet = {};
+    let lastCheckedPeriod = "";
+    
     const ODDS_MAP = {'0':960, '27':960, '1':320, '26':320, '2':160, '25':160, '3':97, '24':97, '4':64.5, '23':64.5, '5':46.5, '22':46.5, '6':35, '21':35, '7':27.2, '20':27.2, '8':22, '19':22, '9':18, '18':18, '10':15.8, '17':15.8, '11':14.4, '16':14.4, '12':13.6, '15':13.6, '13':13.3, '14':13.3};
     let sumHtml = '';
     for(let i=0; i<=27; i++) { sumHtml += `<div class="sum-item" onclick="addBet('${i}', ${ODDS_MAP[i]})"><span class="sum-t">${i}</span><span class="sum-o">${ODDS_MAP[i]}</span></div>`; }
@@ -824,13 +843,39 @@ HTML_GAME = BASE_CSS + """
             data.forEach(b => {
                 let cls = b.status === 'win' ? 'text-green' : (b.status === 'lose' ? 'text-red' : '');
                 let win_amt = b.status === 'win' ? b.win_amount : '-';
-                tbody.innerHTML += `<tr style="border-bottom:1px solid #f0f0f0;"><td style="padding:10px;">${b.period}</td><td>${b.bet_value}</td><td>${b.amount}</td><td class="${cls}">${win_amt}</td></tr>`;
+                let cancelBtn = b.status === 'pending' ? `<button onclick="cancelBet(${b.id})" style="background:#ef473a; color:#fff; border:none; padding:4px 8px; border-radius:4px; font-size:12px; cursor:pointer;">取消</button>` : '';
+                tbody.innerHTML += `<tr style="border-bottom:1px solid #f0f0f0;"><td style="padding:10px;">${b.period}</td><td>${b.bet_value}</td><td>${b.amount}</td><td class="${cls}">${win_amt}</td><td>${cancelBtn}</td></tr>`;
             });
             openModal('modal-bets');
         });
     }
+
+    function cancelBet(id) {
+        if(!confirm("确定要取消该注单吗？")) return;
+        fetch('/api/cancel_bet', {
+            method:'POST', headers:{'Content-Type':'application/json'},
+            body: JSON.stringify({bet_id: id})
+        }).then(r=>r.json()).then(d=>{
+            alert(d.msg);
+            if(d.success) { fetchMyBets(); fetchLive(); }
+        });
+    }
+
     function fetchLive() {
         fetch('/api/live/' + G_TYPE).then(r => r.json()).then(d => {
+            // 发现新一期开奖，检测是否中奖
+            if(liveData && d.period !== liveData.period && lastCheckedPeriod !== d.period) {
+                lastCheckedPeriod = d.period;
+                fetch('/api/my_last_win', {
+                    method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({period: d.period})
+                }).then(res=>res.json()).then(winData => {
+                    if(winData.success) {
+                        alert(`🎉 恭喜您中奖了！\n\n本期纯盈利：${winData.profit} 元`);
+                        setTimeout(()=>location.reload(), 1000);
+                    }
+                });
+            }
+            
             liveData = d;
             document.getElementById('next-period').innerText = d.next_period;
             document.getElementById('cur-period').innerText = d.period;
@@ -872,15 +917,29 @@ HTML_GAME = BASE_CSS + """
             let box = document.getElementById('chat-box'); box.innerHTML = '';
             msgs.reverse().forEach(m => {
                 let d = document.createElement('div');
-                if(m.role === 'robot') { d.className = 'msg robot'; d.innerText = m.content; }
-                else if (m.role === 'admin') { d.className = 'msg admin'; d.innerHTML = `<div class="bubble">[客服] ${m.content}</div>`; }
-                else { d.className = 'msg user'; d.innerHTML = `<div class="bubble">${m.content}</div>`; }
+                if(m.role === 'robot') {
+                    // 旧版的系统账单，不再显示
+                    return; 
+                } else if (m.role === 'admin') {
+                    d.className = 'msg system';
+                    d.innerHTML = `<div class="msg-bubble">[客服] ${m.content}</div>`;
+                } else {
+                    let isMe = (m.user_id === {{ session.user_id }});
+                    d.className = isMe ? 'msg me' : 'msg';
+                    d.innerHTML = `
+                        <img src="${m.avatar}" class="msg-avatar">
+                        <div class="msg-content">
+                            <div class="msg-name">${m.nickname}</div>
+                            <div class="msg-bubble">${m.content}</div>
+                        </div>
+                    `;
+                }
                 box.appendChild(d);
             });
             box.scrollTop = box.scrollHeight;
         });
     }
-    setInterval(fetchChat, 3000); fetchChat();
+    setInterval(fetchChat, 2000); fetchChat();
     
     function addBet(key, odds) {
         if(liveData && liveData.left_time <= (G_TYPE==='2'?30:5)) return alert("已封盘，停止下注");
@@ -892,6 +951,7 @@ HTML_GAME = BASE_CSS + """
     }
     function backspace() { let input = document.getElementById('bet-input'); input.value = input.value.slice(0, -1); }
     function cancelInput() { document.getElementById('bet-input').value = ""; }
+    
     function submitBet() {
         let inputVal = document.getElementById('bet-input').value.trim(); if(!inputVal) return alert("请先输入下注内容");
         let parts = inputVal.split(/\s+/); let promises = [];
@@ -910,7 +970,11 @@ HTML_GAME = BASE_CSS + """
         }
         if(promises.length === 0) return alert("下注格式错误，请使用如：大:100");
         Promise.all(promises).then(results => {
-            if(results.every(r => r.success)) { alert("下注成功！"); document.getElementById('bet-input').value = ""; fetchLive(); fetchChat(); }
+            if(results.every(r => r.success)) { 
+                alert("🎉 下注成功！"); 
+                document.getElementById('bet-input').value = ""; 
+                fetchLive(); fetchChat(); 
+            }
             else alert("部分下注失败，可能余额不足或已封盘");
         });
     }
@@ -942,7 +1006,7 @@ HTML_ADMIN = BASE_CSS + """
                 <div class="title" style="color: #fff; font-size: 18px;">🤖 机器人活跃系统</div>
                 <div class="desc" style="color: rgba(255,255,255,0.7); margin-top: 8px;">机器总数: {{ robot_total }} 个</div>
                 <div class="desc" style="color: rgba(255,255,255,0.7); margin-top: 4px;">
-                    当前下注: 
+                    实时下注人数: 
                     {% for name, cnt in robot_stats %}
                         [{{ name }}: {{ cnt }}人] 
                     {% endfor %}
