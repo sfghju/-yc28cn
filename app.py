@@ -13,7 +13,6 @@ from datetime import datetime, timedelta
 
 PORT = int(os.environ.get("PORT", 8888))
 
-# ================== 【电报机器人配置】 ==================
 TELEGRAM_CONFIG = {
     "2": {"token": "9025598598:AAHYBe8zoph8Caap_QDik1-RDEFQf00Pysg", "chat_id": "8770794344", "name": "加拿大28"},
     "3": {"token": "9059984335:AAHDutIGL7RDXWIPpEJ5Opjhj_Q8fBn-eVI", "chat_id": "8770794344", "name": "分分28"},
@@ -21,7 +20,6 @@ TELEGRAM_CONFIG = {
 }
 
 LAST_SENT_PERIOD = {"2": "", "3": "", "13": ""}
-
 SECURE_API_PATH = "/api/v6/core/stream"
 SIGN_SECRET = "yc28_cyber_salt_v6_2026"
 TIME_WINDOW = 2.0 
@@ -43,24 +41,21 @@ CACHE_DATA = {
     "13": {"data": [], "next_draw_time": ""}
 }
 
-# ================== 电报发送函数 ==================
+# ================== 电报发送函数（同步顺序发送，防拦截） ==================
 def send_telegram_message(token, chat_id, text):
     url = f"https://api.telegram.org/bot{token}/sendMessage"
     data = json.dumps({"chat_id": chat_id, "text": text}).encode('utf-8')
     req = urllib.request.Request(url, data=data, headers={'Content-Type': 'application/json'})
     ctx = ssl._create_unverified_context()
     
-    for attempt in range(3):
-        try:
-            with urllib.request.urlopen(req, timeout=15, context=ctx) as resp:
-                if resp.status == 200:
-                    print(f"✅ 电报播报成功")
-                    return
-        except Exception as e:
-            print(f"⚠️ 电报发送失败重试中 ({attempt+1}/3)...")
-            time.sleep(2)
+    try:
+        with urllib.request.urlopen(req, timeout=15, context=ctx) as resp:
+            if resp.status == 200:
+                print(f"✅ {chat_id} 电报播报成功")
+    except Exception as e:
+        # 打印具体的失败原因，方便排查
+        print(f"❌ 电报发送失败: {e}")
 
-# ================== 抓取与播报核心 ==================
 def fetch_single_type(t_type):
     cfg = TYPE_MAP[t_type]
     try:
@@ -95,8 +90,10 @@ def fetch_single_type(t_type):
             if records:
                 next_draw_time = ""
                 if latest_draw_time:
+                    # 开奖时间是北京时间，加上周期算出下一期时间
                     dt_next = datetime.strptime(latest_draw_time, "%Y-%m-%d %H:%M:%S") + timedelta(seconds=cfg["interval"])
                     next_draw_time = dt_next.strftime("%Y-%m-%d %H:%M:%S")
+                
                 CACHE_DATA[t_type] = {"data": records[:50], "next_draw_time": next_draw_time}
                 
                 latest_period = records[0]['period']
@@ -105,15 +102,25 @@ def fetch_single_type(t_type):
                     
                     cd_str = "开奖中..."
                     if next_draw_time:
-                        now = datetime.now()
+                        # ⚠️ 修正时区：Render 是 UTC，北京时间是 UTC+8
+                        now_utc = datetime.utcnow()
+                        now_bj = now_utc + timedelta(hours=8) 
+                        
                         dt_next = datetime.strptime(next_draw_time, "%Y-%m-%d %H:%M:%S")
-                        diff = int((dt_next - now).total_seconds())
+                        diff = int((dt_next - now_bj).total_seconds())
+                        
                         if diff > 0:
-                            cd_str = f"{diff // 60:02d}分 {diff % 60:02d}秒"
+                            # 区分：分分和比特只显示秒，加拿大显示分秒
+                            if t_type in ["3", "13"]:
+                                cd_str = f"{diff}秒"
+                            else:
+                                cd_str = f"{diff // 60}分 {diff % 60}秒"
+                        else:
+                            cd_str = "0秒"
 
                     history_text = ""
                     for r in records[:50]:
-                        history_text += f"{r['period']}期 : {r['num1']}+{r['num2']}+{r['num3']}={r['total']} ({r['big_small']}{r['odd_even']})\n"
+                        history_text += f"{r['period']}期: {r['num1']}+{r['num2']}+{r['num3']}={r['total']} ({r['big_small']}{r['odd_even']})\n"
 
                     top = records[0]
                     msg = (
@@ -125,7 +132,8 @@ def fetch_single_type(t_type):
                         f"📊 近期50期开奖记录：\n{history_text}"
                     )
                     
-                    threading.Thread(target=send_telegram_message, args=(TELEGRAM_CONFIG[t_type]["token"], TELEGRAM_CONFIG[t_type]["chat_id"], msg)).start()
+                    # 不使用多线程，直接顺序发送，防止触发 Telegram 频控
+                    send_telegram_message(TELEGRAM_CONFIG[t_type]["token"], TELEGRAM_CONFIG[t_type]["chat_id"], msg)
 
     except Exception:
         pass
@@ -134,7 +142,7 @@ def background_worker():
     while True:
         for t in TYPE_MAP.keys():
             fetch_single_type(t)
-            time.sleep(0.5)
+            time.sleep(1) # 错开1秒，防并发
         time.sleep(3)
 
 class RequestHandler(BaseHTTPRequestHandler):
@@ -188,10 +196,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                             0%, 100% { transform: translateY(0); text-shadow: 0 0 20px red; color: red; }
                             50% { transform: translateY(-30px); text-shadow: 0 0 50px red, 0 0 10px white; color: #ffcccc; }
                         }
-                        .msg {
-                            font-size: 32px; font-weight: bold; text-align: center; line-height: 1.6;
-                            animation: jump 0.3s infinite; word-break: break-all; padding: 20px;
-                        }
+                        .msg { font-size: 32px; font-weight: bold; text-align: center; line-height: 1.6; animation: jump 0.3s infinite; word-break: break-all; padding: 20px; }
                     </style></head>
                     <body>
                         <div class="msg">你个人机<br>学好计算机技术才能深度抓取我的 API 接口<br>回去好好读书吧😂😂😂😂😂😂</div>
@@ -222,7 +227,7 @@ class RequestHandler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
         pass
 
-# ================== 完整网页前端代码 ==================
+# ================== 网页前端代码 ==================
 HTML_PAGE = """
 <!DOCTYPE html>
 <html lang="zh-CN">
