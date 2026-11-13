@@ -13,13 +13,15 @@ from datetime import datetime, timedelta
 
 PORT = int(os.environ.get("PORT", 8888))
 
-# ================== 【双系统彻底隔离】 ==================
-# 1. 你的专属自定义明文通道 (多层级 / 路径)
-VIP_PATH_CA = "/vipQQWW9983/8626/0549CASWWW"
-VIP_PATH_FF = "/vipQQWW9986/8626/0549CFKFGH"
-VIP_PATH_BTC = "/vipQQWW9983/8626/0549CCBDR"
+# ================== 【电报机器人配置】 ==================
+TELEGRAM_CONFIG = {
+    "2": {"token": "9025598598:AAHYBe8zoph8Caap_QDik1-RDEFQf00Pysg", "chat_id": "8770794344", "name": "加拿大28"},
+    "3": {"token": "9059984335:AAHDutIGL7RDXWIPpEJ5Opjhj_Q8fBn-eVI", "chat_id": "8770794344", "name": "分分28"},
+    "13": {"token": "9013441843:AAGdUU5naFcs4K6pdYD4di5D9f7EedU1PoA", "chat_id": "8770794344", "name": "比特28"}
+}
 
-# 2. 网页前端专用通道 (防抓包)
+LAST_SENT_PERIOD = {"2": "", "3": "", "13": ""}
+
 SECURE_API_PATH = "/api/v6/core/stream"
 SIGN_SECRET = "yc28_cyber_salt_v6_2026"
 TIME_WINDOW = 2.0 
@@ -41,6 +43,24 @@ CACHE_DATA = {
     "13": {"data": [], "next_draw_time": ""}
 }
 
+# ================== 电报发送函数 ==================
+def send_telegram_message(token, chat_id, text):
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
+    data = json.dumps({"chat_id": chat_id, "text": text}).encode('utf-8')
+    req = urllib.request.Request(url, data=data, headers={'Content-Type': 'application/json'})
+    ctx = ssl._create_unverified_context()
+    
+    for attempt in range(3):
+        try:
+            with urllib.request.urlopen(req, timeout=15, context=ctx) as resp:
+                if resp.status == 200:
+                    print(f"✅ 电报播报成功")
+                    return
+        except Exception as e:
+            print(f"⚠️ 电报发送失败重试中 ({attempt+1}/3)...")
+            time.sleep(2)
+
+# ================== 抓取与播报核心 ==================
 def fetch_single_type(t_type):
     cfg = TYPE_MAP[t_type]
     try:
@@ -78,6 +98,35 @@ def fetch_single_type(t_type):
                     dt_next = datetime.strptime(latest_draw_time, "%Y-%m-%d %H:%M:%S") + timedelta(seconds=cfg["interval"])
                     next_draw_time = dt_next.strftime("%Y-%m-%d %H:%M:%S")
                 CACHE_DATA[t_type] = {"data": records[:50], "next_draw_time": next_draw_time}
+                
+                latest_period = records[0]['period']
+                if LAST_SENT_PERIOD[t_type] != latest_period:
+                    LAST_SENT_PERIOD[t_type] = latest_period
+                    
+                    cd_str = "开奖中..."
+                    if next_draw_time:
+                        now = datetime.now()
+                        dt_next = datetime.strptime(next_draw_time, "%Y-%m-%d %H:%M:%S")
+                        diff = int((dt_next - now).total_seconds())
+                        if diff > 0:
+                            cd_str = f"{diff // 60:02d}分 {diff % 60:02d}秒"
+
+                    history_text = ""
+                    for r in records[:50]:
+                        history_text += f"{r['period']}期 : {r['num1']}+{r['num2']}+{r['num3']}={r['total']} ({r['big_small']}{r['odd_even']})\n"
+
+                    top = records[0]
+                    msg = (
+                        f"🔥【{cfg['name']}】最新开奖播报 🔥\n\n"
+                        f"期号：{top['period']}\n"
+                        f"开奖：{top['num1']} + {top['num2']} + {top['num3']} = {top['total']}\n"
+                        f"属性：{top['big_small']} {top['odd_even']}\n"
+                        f"⏳ 距离下一期：{cd_str}\n\n"
+                        f"📊 近期50期开奖记录：\n{history_text}"
+                    )
+                    
+                    threading.Thread(target=send_telegram_message, args=(TELEGRAM_CONFIG[t_type]["token"], TELEGRAM_CONFIG[t_type]["chat_id"], msg)).start()
+
     except Exception:
         pass
 
@@ -95,7 +144,6 @@ class RequestHandler(BaseHTTPRequestHandler):
             path = parsed_url.path
             query = parse_qs(parsed_url.query)
             
-            # 1. 网页免密进入
             if path == '/' or path == '/index.html' or path == '/favicon.ico':
                 self.send_response(200)
                 if path != '/favicon.ico': self.send_header('Content-Type', 'text/html; charset=utf-8')
@@ -103,13 +151,9 @@ class RequestHandler(BaseHTTPRequestHandler):
                 if path != '/favicon.ico': self.wfile.write(HTML_PAGE.encode('utf-8'))
                 return
 
-            # ================== 2. 站长专属自定义通道 (永不拦截) ==================
-            # 精确匹配你设定的专属多层级路径
-            if path in [VIP_PATH_CA, VIP_PATH_FF, VIP_PATH_BTC]:
+            if path in ["/vipQQWW9983/8626/0549CASWWW", "/vipQQWW9986/8626/0549CFKFGH", "/vipQQWW9983/8626/0549CCBDR"]:
                 t_type = query.get('type', ['2'])[0]
-                if t_type not in ["2", "3", "13"]: t_type = "2"
                 payload = CACHE_DATA.get(t_type, {})
-                
                 self.send_response(200)
                 self.send_header('Content-Type', 'text/plain; charset=utf-8')
                 self.send_header('Access-Control-Allow-Origin', '*')
@@ -117,7 +161,6 @@ class RequestHandler(BaseHTTPRequestHandler):
                 self.wfile.write(json.dumps(payload, ensure_ascii=False, indent=4).encode('utf-8'))
                 return
 
-            # ================== 3. 网页防抓包通道 (专防黑客) ==================
             if path == SECURE_API_PATH:
                 referer = self.headers.get('Referer', '')
                 user_agent = self.headers.get('User-Agent', '')
@@ -130,13 +173,10 @@ class RequestHandler(BaseHTTPRequestHandler):
                 elif not req_time_str or not req_sign: is_hacker = True
                 else:
                     try:
-                        req_time = float(req_time_str) / 1000.0
-                        if abs(time.time() - req_time) > TIME_WINDOW: is_hacker = True
-                    except ValueError:
-                        is_hacker = True
+                        if abs(time.time() - float(req_time_str) / 1000.0) > TIME_WINDOW: is_hacker = True
+                    except: is_hacker = True
                 
                 if is_hacker:
-                    # 触发终极嘲讽，返回跳动的红字
                     self.send_response(200)
                     self.send_header('Content-Type', 'text/html; charset=utf-8')
                     self.end_headers()
@@ -160,23 +200,18 @@ class RequestHandler(BaseHTTPRequestHandler):
                     self.wfile.write(mock_html.encode('utf-8'))
                     return
                 
-                expected_sign = hashlib.md5(f"{req_time_str}{SIGN_SECRET}".encode('utf-8')).hexdigest()
-                if req_sign != expected_sign:
+                if req_sign != hashlib.md5(f"{req_time_str}{SIGN_SECRET}".encode('utf-8')).hexdigest():
                     self.send_response(403)
                     self.end_headers()
                     return
 
                 t_type = query.get('type', ['2'])[0]
-                if t_type not in ["2", "3", "13"]: t_type = "2"
                 payload = CACHE_DATA.get(t_type, {})
-                json_str = json.dumps(payload, ensure_ascii=False)
-                hex_data = json_str.encode('utf-8').hex()
-
                 self.send_response(200)
                 self.send_header('Content-Type', 'text/plain; charset=utf-8')
                 self.send_header('Access-Control-Allow-Origin', '*')
                 self.end_headers()
-                self.wfile.write(hex_data.encode('utf-8'))
+                self.wfile.write(json.dumps(payload, ensure_ascii=False).encode('utf-8').hex().encode('utf-8'))
                 return
 
             self.send_response(404)
@@ -187,7 +222,7 @@ class RequestHandler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
         pass
 
-# ================== 网页前端代码 ==================
+# ================== 完整网页前端代码 ==================
 HTML_PAGE = """
 <!DOCTYPE html>
 <html lang="zh-CN">
