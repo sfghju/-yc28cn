@@ -1,4 +1,5 @@
 import urllib.request
+import urllib.error
 import ssl
 import gzip
 import re
@@ -15,15 +16,13 @@ PORT = int(os.environ.get("PORT", 8888))
 
 # ================== 【电报机器人配置】 ==================
 TELEGRAM_CONFIG = {
-    # 加拿大换成了你刚申请的最新 Token
+    # 你刚才截图里的最新 Token
     "2": {"token": "9292163726:AAHCKiTKTfJ55yK0dFqET8vOvSHyp3BYiQq", "chat_id": "8770794344", "name": "加拿大28"},
-    # 分分保持不变
     "3": {"token": "9059984335:AAHDutIGL7RDXWIPpEJ5Opjhj_Q8fBn-eVI", "chat_id": "8770794344", "name": "分分28"}, 
-    # 比特保持不变
     "13": {"token": "9013441843:AAHrZhx3yvgwOsHp8k7MrzASaNEcNSgUgK0", "chat_id": "8770794344", "name": "比特28"}
 }
 
-# 状态记录（每个类型独立）
+# 状态记录
 BOT_STATE = {
     "2": {"last_period": "", "last_cd_sec": -1},
     "3": {"last_period": "", "last_cd_sec": -1},
@@ -51,8 +50,8 @@ CACHE_DATA = {
     "13": {"data": [], "next_draw_time": ""}
 }
 
-# ================== 电报发送函数 ==================
-def send_telegram_message(token, chat_id, text):
+# ================== 电报发送函数（开启错误日志） ==================
+def send_telegram_message(token, chat_id, text, bot_name):
     url = f"https://api.telegram.org/bot{token}/sendMessage"
     data = json.dumps({"chat_id": chat_id, "text": text}).encode('utf-8')
     req = urllib.request.Request(url, data=data, headers={'Content-Type': 'application/json'})
@@ -60,8 +59,12 @@ def send_telegram_message(token, chat_id, text):
     try:
         with urllib.request.urlopen(req, timeout=10, context=ctx) as resp:
             pass
+    except urllib.error.HTTPError as e:
+        # 如果发不出去，直接打印电报告诉我们的原因！
+        error_msg = e.read().decode('utf-8')
+        print(f"❌【{bot_name}】发送失败！电报报错: {error_msg}")
     except Exception as e:
-        print(f"❌ 发送失败: {e}")
+        print(f"❌【{bot_name}】发送失败！网络错误: {e}")
 
 # ================== 独立抓取与播报线程 ==================
 def worker_for_type(t_type):
@@ -104,7 +107,6 @@ def worker_for_type(t_type):
                         dt_next = datetime.strptime(latest_draw_time, "%Y-%m-%d %H:%M:%S") + timedelta(seconds=cfg["interval"])
                         next_draw_time = dt_next.strftime("%Y-%m-%d %H:%M:%S")
                     
-                    # 更新缓存
                     CACHE_DATA[t_type] = {"data": records[:30], "next_draw_time": next_draw_time}
                     
                     latest_period = records[0]['period']
@@ -112,9 +114,8 @@ def worker_for_type(t_type):
                     # 1. 判定是否出了新开奖
                     if BOT_STATE[t_type]["last_period"] != latest_period:
                         BOT_STATE[t_type]["last_period"] = latest_period
-                        BOT_STATE[t_type]["last_cd_sec"] = -1 # 重置倒计时状态
+                        BOT_STATE[t_type]["last_cd_sec"] = -1 
                         
-                        # 组装近期30期
                         history_text = ""
                         for r in records[:30]: 
                             history_text += f"{r['period']}期: {r['num1']}+{r['num2']}+{r['num3']}={r['total']} ({r['big_small']}{r['odd_even']})\n"
@@ -127,33 +128,34 @@ def worker_for_type(t_type):
                             f"属性：{top['big_small']} {top['odd_even']}\n\n"
                             f"📊 近期30期记录：\n{history_text}"
                         )
-                        send_telegram_message(TELEGRAM_CONFIG[t_type]["token"], TELEGRAM_CONFIG[t_type]["chat_id"], msg)
+                        send_telegram_message(TELEGRAM_CONFIG[t_type]["token"], TELEGRAM_CONFIG[t_type]["chat_id"], msg, cfg["name"])
                     
-                    # 2. 判定倒计时跳动
+                    # 2. 倒计时播报逻辑
                     else:
                         if next_draw_time:
                             now_utc = datetime.now(timezone.utc)
                             dt_next = datetime.strptime(next_draw_time, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc) - timedelta(hours=8)
                             diff = int((dt_next - now_utc).total_seconds())
                             
-                            # 10秒提醒
                             if diff == 10 and BOT_STATE[t_type]["last_cd_sec"] != 10:
                                 BOT_STATE[t_type]["last_cd_sec"] = 10
                                 cd_msg = f"⏳【{cfg['name']}】距离下一期开奖还有10秒，请注意时间！"
-                                send_telegram_message(TELEGRAM_CONFIG[t_type]["token"], TELEGRAM_CONFIG[t_type]["chat_id"], cd_msg)
+                                send_telegram_message(TELEGRAM_CONFIG[t_type]["token"], TELEGRAM_CONFIG[t_type]["chat_id"], cd_msg, cfg["name"])
                             
-                            # 最后 5、4、3、2、1 秒播报
                             elif 1 <= diff <= 5 and BOT_STATE[t_type]["last_cd_sec"] != diff:
                                 BOT_STATE[t_type]["last_cd_sec"] = diff
                                 cd_msg = f"⏳【{cfg['name']}】距离下一期开奖，还剩 {diff} 秒！"
-                                send_telegram_message(TELEGRAM_CONFIG[t_type]["token"], TELEGRAM_CONFIG[t_type]["chat_id"], cd_msg)
+                                send_telegram_message(TELEGRAM_CONFIG[t_type]["token"], TELEGRAM_CONFIG[t_type]["chat_id"], cd_msg, cfg["name"])
+                else:
+                    if BOT_STATE[t_type]["last_period"] == "":
+                        print(f"⚠️【{cfg['name']}】抓取成功，但正则未能匹配到数据。网页长度: {len(plain_text)}")
 
         except Exception as e:
-            pass
+            print(f"⚠️【{cfg['name']}】网页抓取异常: {e}")
         
-        time.sleep(1) # 每秒查一次
+        time.sleep(1)
 
-# ================== Web 路由模块 ==================
+# ================== Web 路由模块 (网页和接口保持原样) ==================
 class RequestHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         try:
@@ -236,7 +238,6 @@ class RequestHandler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
         pass
 
-# ================== 网页前端代码 ==================
 HTML_PAGE = """
 <!DOCTYPE html>
 <html lang="zh-CN">
@@ -445,7 +446,6 @@ HTML_PAGE = """
 """
 
 if __name__ == '__main__':
-    # 启动三个独立的监控线程
     for t in TYPE_MAP.keys():
         threading.Thread(target=worker_for_type, args=(t,), daemon=True).start()
         time.sleep(0.5)
