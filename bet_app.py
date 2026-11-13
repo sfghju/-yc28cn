@@ -6,7 +6,8 @@ import threading
 import os
 import re
 import sqlite3
-from flask import Flask, request, jsonify, render_template_string, session, redirect
+import random
+from flask import Flask, request, jsonify, render_template_string, session, redirect, send_file
 from datetime import datetime, timedelta
 
 app = Flask(__name__)
@@ -28,9 +29,9 @@ ODDS = {
 }
 
 LIVE_DATA = {
-    "2": {"period": "", "next_period": "", "left_time": 0, "nums": [], "total": 0, "status": "loading", "history": []},
-    "3": {"period": "", "next_period": "", "left_time": 0, "nums": [], "total": 0, "status": "loading", "history": []},
-    "13": {"period": "", "next_period": "", "left_time": 0, "nums": [], "total": 0, "status": "loading", "history": []}
+    "2": {"period": "", "next_period": "", "left_time": 0, "nums": [], "total": 0, "status": "loading", "history": [], "robot_count": 0},
+    "3": {"period": "", "next_period": "", "left_time": 0, "nums": [], "total": 0, "status": "loading", "history": [], "robot_count": 0},
+    "13": {"period": "", "next_period": "", "left_time": 0, "nums": [], "total": 0, "status": "loading", "history": [], "robot_count": 0}
 }
 REPORTED_PERIODS = {"2": "", "3": "", "13": ""}
 
@@ -44,7 +45,8 @@ def init_db():
     with get_db() as conn:
         conn.execute('''CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT UNIQUE NOT NULL, nickname TEXT UNIQUE NOT NULL,
-            password TEXT NOT NULL, balance REAL DEFAULT 0.0, role TEXT DEFAULT 'user', status TEXT DEFAULT 'normal'
+            password TEXT NOT NULL, balance REAL DEFAULT 0.0, role TEXT DEFAULT 'user', status TEXT DEFAULT 'normal',
+            avatar TEXT DEFAULT ''
         )''')
         conn.execute('''CREATE TABLE IF NOT EXISTS bets (
             id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, game_type TEXT, period TEXT,
@@ -63,11 +65,65 @@ def init_db():
         cursor = conn.cursor()
         cursor.execute("SELECT * FROM users WHERE username='ADMIN888'")
         if not cursor.fetchone():
-            conn.execute("INSERT INTO users (username, nickname, password, role) VALUES ('ADMIN888', '站长', '123456', 'admin')")
-        conn.commit()
+            conn.execute("INSERT INTO users (username, nickname, password, role, avatar) VALUES ('ADMIN888', '站长', '123456', 'admin', 'https://api.dicebear.com/7.x/bottts/svg?seed=admin')")
+        
+        # 生成海量机器人，自带中文名与头像
+        robot_count = conn.execute("SELECT COUNT(*) FROM users WHERE role='robot'").fetchone()[0]
+        if robot_count < 5000:
+            print("正在初始化 5000 个机器人矩阵...")
+            surnames = ["赵", "钱", "孙", "李", "周", "吴", "郑", "王", "冯", "陈", "褚", "卫", "蒋", "沈", "韩", "杨", "朱", "秦", "尤", "许", "何", "吕", "施", "张"]
+            names = ["哥", "姐", "总", "少", "神", "王", "帝", "霸", "龙", "虎", "强", "帅", "美", "丽", "花", "爷", "董", "老板"]
+            robots_to_add = 5000 - robot_count
+            for i in range(robots_to_add):
+                uname = f"R{random.randint(10000, 99999)}_{i}"
+                nick = random.choice(surnames) + random.choice(names) + str(random.randint(1, 99))
+                avatar = f"https://api.dicebear.com/7.x/adventurer/svg?seed={uname}"
+                try:
+                    conn.execute("INSERT INTO users (username, nickname, password, role, balance, avatar) VALUES (?, ?, '123456', 'robot', 9999999, ?)", (uname, nick, avatar))
+                except:
+                    pass
+            conn.commit()
 
 init_db()
 
+# ================== 机器人平滑下注引擎 ==================
+def robot_continuous_bet(game_type):
+    """每秒调用的机器人下注逻辑，制造24小时不断下注的假象"""
+    # 如果已经封盘，立即停止
+    if LIVE_DATA[game_type]['left_time'] <= GAMES[game_type]['close_sec']:
+        return
+
+    # 平滑下注策略：每秒随机抽取 2~6 个机器人
+    num_robots = random.randint(2, 6)
+
+    with get_db() as conn:
+        robots = conn.execute("SELECT id FROM users WHERE role='robot' ORDER BY RANDOM() LIMIT ?", (num_robots,)).fetchall()
+        
+        for r in robots:
+            amt = random.choice([10, 20, 50, 100, 200, 500, 1000, 2000])
+            b_type = random.choice(['bs', 'oe', 'num', 'combo', 'pattern'])
+            
+            if b_type == 'bs':
+                b_val = random.choice(['大', '小']); odds = 2.8
+            elif b_type == 'oe':
+                b_val = random.choice(['单', '双']); odds = 2.8
+            elif b_type == 'num':
+                b_val = str(random.randint(0, 27)); odds = ODDS['nums'].get(int(b_val), 10)
+            elif b_type == 'combo':
+                b_val = random.choice(['大单', '小双', '大双', '小单']); odds = 6.3 if '大单' in b_val or '小双' in b_val else 6.7
+            else:
+                b_val = random.choice(['豹子', '顺子', '对子', '极大', '极小']); odds = 88 if b_val=='豹子' else (16 if b_val in ['极大','极小','顺子'] else 3.6)
+            
+            # 写入订单
+            conn.execute('''INSERT INTO bets (user_id, game_type, period, bet_type, bet_value, amount, odds) VALUES (?, ?, ?, ?, ?, ?, ?)''', 
+                         (r['id'], game_type, LIVE_DATA[game_type]['next_period'], b_type, b_val, amt, odds))
+        
+        conn.commit()
+        # 实时统计本期参与人数
+        count = conn.execute("SELECT COUNT(DISTINCT user_id) FROM bets WHERE game_type=? AND period=?", (game_type, LIVE_DATA[game_type]['next_period'])).fetchone()[0]
+        LIVE_DATA[game_type]['robot_count'] = count
+
+# ================== 账单播报 ==================
 def broadcast_bill(game_type, period):
     with get_db() as conn:
         bets = conn.execute('''SELECT u.nickname, b.bet_value, b.amount FROM bets b JOIN users u ON b.user_id = u.id WHERE b.game_type=? AND b.period=? AND b.status='pending' ''', (game_type, period)).fetchall()
@@ -80,14 +136,19 @@ def broadcast_bill(game_type, period):
             user_bets[name]['items'].append(f"{b['bet_value']}:{b['amount']}")
             user_bets[name]['total'] += b['amount']
         
-        bill_lines = [f"第 {period} 期玩家投注账单"]
-        for u, data in user_bets.items():
+        bill_lines = [f"第 {period} 期玩家投注账单 (部分)"]
+        # 播报前 40 个幸运玩家
+        display_items = list(user_bets.items())[:40] 
+        for u, data in display_items:
             items_str = " ".join(data['items'])
             bill_lines.append(f"{u}-[{items_str}]_{data['total']}")
+        
+        bill_lines.append(f"... 本期共有 {len(user_bets)} 名玩家参与，感谢支持！")
             
         conn.execute("INSERT INTO messages (game_type, user_id, role, content) VALUES (?, 0, 'robot', ?)", (game_type, "\n".join(bill_lines)))
         conn.commit()
 
+# ================== 自动结算 ==================
 def settle_bets(game_type, period, nums, total):
     n1, n2, n3 = nums
     is_triple = (n1 == n2 == n3)
@@ -126,9 +187,13 @@ def settle_bets(game_type, period, nums, total):
                 conn.execute("UPDATE bets SET status='lose' WHERE id=?", (bet['id'],))
         conn.commit()
 
+# ================== 核心抓取与控制 ==================
 def fetch_loop():
     ctx = ssl._create_unverified_context()
+    last_tick_time = time.time()
+    
     while True:
+        now_ts = time.time()
         for g_type, cfg in GAMES.items():
             try:
                 req = urllib.request.Request(cfg['url'], headers={'User-Agent': 'Mozilla/5.0'})
@@ -147,7 +212,7 @@ def fetch_loop():
                             LIVE_DATA[g_type] = {
                                 "period": latest['period'], "next_period": str(int(latest['period']) + 1),
                                 "left_time": cfg['interval'], "nums": [latest['num1'], latest['num2'], latest['num3']],
-                                "total": latest['total'], "history": history
+                                "total": latest['total'], "history": history, "robot_count": 0
                             }
                         
                         draw_dt = datetime.strptime(latest['draw_time'], "%Y-%m-%d %H:%M:%S")
@@ -157,17 +222,27 @@ def fetch_loop():
                         
                         if LIVE_DATA[g_type]['left_time'] <= cfg['close_sec']:
                             LIVE_DATA[g_type]['status'] = "封盘中"
-                            if REPORTED_PERIODS[g_type] != LIVE_DATA[g_type]['next_period']:
+                            if REPORTED_PERIODS[g_type] != LIVE_DATA[g_type]['next_period'] and LIVE_DATA[g_type]['left_time'] <= 0:
                                 REPORTED_PERIODS[g_type] = LIVE_DATA[g_type]['next_period']
                                 threading.Thread(target=broadcast_bill, args=(g_type, LIVE_DATA[g_type]['next_period'])).start()
                         else:
                             LIVE_DATA[g_type]['status'] = "下注中"
+                            
+                            # 每秒调度一次机器人，只要没封盘就一直下注
+                            if now_ts - last_tick_time >= 1.0:
+                                threading.Thread(target=robot_continuous_bet, args=(g_type,)).start()
+                                
             except Exception:
                 pass
-        time.sleep(1.5)
+        
+        if now_ts - last_tick_time >= 1.0:
+            last_tick_time = now_ts
+            
+        time.sleep(1)
 
 threading.Thread(target=fetch_loop, daemon=True).start()
 
+# ================== API 路由 ==================
 @app.route('/api/live/<g_type>')
 def api_live(g_type): return jsonify(LIVE_DATA.get(g_type, {}))
 
@@ -186,8 +261,6 @@ def api_bet():
         conn.execute("UPDATE users SET balance = balance - ? WHERE id=?", (data['amount'], session['user_id']))
         conn.execute('''INSERT INTO bets (user_id, game_type, period, bet_type, bet_value, amount, odds) VALUES (?, ?, ?, ?, ?, ?, ?)''', 
                      (session['user_id'], g_type, LIVE_DATA[g_type]['next_period'], data['bet_type'], data['bet_value'], data['amount'], data['odds']))
-        conn.execute("INSERT INTO messages (game_type, user_id, role, content) VALUES (?, ?, 'user', ?)", 
-                     (g_type, session['user_id'], f"[{user['nickname']}] {data['bet_value']}:{data['amount']}"))
         conn.commit()
     return jsonify({"success": True, "msg": "下注成功"})
 
@@ -195,7 +268,7 @@ def api_bet():
 def api_chat(g_type):
     if 'user_id' not in session: return jsonify([])
     with get_db() as conn:
-        msgs = conn.execute('''SELECT m.*, u.nickname FROM messages m LEFT JOIN users u ON m.user_id = u.id WHERE m.game_type=? ORDER BY m.id DESC LIMIT 30''', (g_type,)).fetchall()
+        msgs = conn.execute('''SELECT m.*, u.nickname, u.avatar FROM messages m LEFT JOIN users u ON m.user_id = u.id WHERE m.game_type=? ORDER BY m.id DESC LIMIT 30''', (g_type,)).fetchall()
     return jsonify([dict(m) for m in msgs])
 
 @app.route('/api/my_bets')
@@ -217,7 +290,7 @@ def api_request_money():
             if user['balance'] < amt: return jsonify({"success": False, "msg": "余额不足"})
         conn.execute("INSERT INTO transactions (user_id, type, amount) VALUES (?, ?, ?)", (session['user_id'], data['type'], amt))
         conn.commit()
-    return jsonify({"success": True, "msg": "申请已提交，等待审核"})
+    return jsonify({"success": True, "msg": "申请已提交"})
 
 @app.route('/api/change_pwd', methods=['POST'])
 def api_change_pwd():
@@ -228,21 +301,26 @@ def api_change_pwd():
         if user['password'] != data.get('old'): return jsonify({"success": False, "msg": "原密码错误"})
         conn.execute("UPDATE users SET password=? WHERE id=?", (data.get('new'), session['user_id']))
         conn.commit()
-    return jsonify({"success": True, "msg": "密码修改成功，请重新登录"})
+    return jsonify({"success": True, "msg": "密码修改成功"})
 
-# ================== 客服独立 API ==================
+@app.route('/api/update_avatar', methods=['POST'])
+def api_update_avatar():
+    if 'user_id' not in session: return jsonify({"success": False})
+    avatar = request.json.get('avatar')
+    with get_db() as conn:
+        conn.execute("UPDATE users SET avatar=? WHERE id=?", (avatar, session['user_id']))
+        conn.commit()
+    return jsonify({"success": True})
+
 @app.route('/api/cs', methods=['GET', 'POST'])
 def api_cs():
-    if 'user_id' not in session: return jsonify({"success": False, "msg": "请先登录"})
+    if 'user_id' not in session: return jsonify({"success": False})
     uid = session['user_id']
     if request.method == 'POST':
-        try:
-            with get_db() as conn:
-                conn.execute("INSERT INTO messages (game_type, user_id, role, content) VALUES ('CS', ?, 'user', ?)", (uid, request.json.get('content')))
-                conn.commit()
-            return jsonify({"success": True})
-        except Exception as e:
-            return jsonify({"success": False, "msg": str(e)})
+        with get_db() as conn:
+            conn.execute("INSERT INTO messages (game_type, user_id, role, content) VALUES ('CS', ?, 'user', ?)", (uid, request.json.get('content')))
+            conn.commit()
+        return jsonify({"success": True})
     with get_db() as conn:
         msgs = conn.execute("SELECT * FROM messages WHERE game_type='CS' AND user_id=? ORDER BY id DESC LIMIT 20", (uid,)).fetchall()
     return jsonify([dict(m) for m in msgs])
@@ -256,30 +334,20 @@ def api_admin_cs_list():
 
 @app.route('/api/admin/cs_chat/<int:uid>', methods=['GET', 'POST'])
 def api_admin_cs_chat(uid):
-    if session.get('role') != 'admin': return jsonify({"success": False, "msg": "无权限"})
+    if session.get('role') != 'admin': return jsonify({"success": False})
     if request.method == 'POST':
-        try:
-            with get_db() as conn:
-                conn.execute("INSERT INTO messages (game_type, user_id, role, content) VALUES ('CS', ?, 'admin', ?)", (uid, request.json.get('content')))
-                conn.commit()
-            return jsonify({"success": True})
-        except Exception as e:
-            return jsonify({"success": False, "msg": str(e)})
+        with get_db() as conn:
+            conn.execute("INSERT INTO messages (game_type, user_id, role, content) VALUES ('CS', ?, 'admin', ?)", (uid, request.json.get('content')))
+            conn.commit()
+        return jsonify({"success": True})
     with get_db() as conn:
         msgs = conn.execute("SELECT * FROM messages WHERE game_type='CS' AND user_id=? ORDER BY id DESC LIMIT 20", (uid,)).fetchall()
     return jsonify([dict(m) for m in msgs])
 
-# 一键生成假数据
-@app.route('/api/admin/mock_cs')
-def api_admin_mock_cs():
-    if session.get('role') != 'admin': return jsonify({"success": False})
-    with get_db() as conn:
-        if not conn.execute("SELECT id FROM users WHERE username='TEST001'").fetchone():
-            conn.execute("INSERT INTO users (username, nickname, password) VALUES ('TEST001', '测试用户', '123456')")
-            uid = conn.execute("SELECT id FROM users WHERE username='TEST001'").fetchone()['id']
-            conn.execute("INSERT INTO messages (game_type, user_id, role, content) VALUES ('CS', ?, 'user', '你好，我想充值')", (uid,))
-            conn.commit()
-    return jsonify({"success": True})
+@app.route('/admin/backup')
+def backup():
+    if session.get('role') != 'admin': return "无权限"
+    return send_file('captain28.db', as_attachment=True)
 
 # ================== 页面路由 ==================
 @app.route('/login', methods=['GET', 'POST'])
@@ -291,7 +359,7 @@ def login():
             if user:
                 if user['status'] == 'banned': return "<script>alert('该账号已被封禁！');history.back();</script>"
                 session.permanent = True
-                session.update({'user_id': user['id'], 'role': user['role'], 'username': user['username'], 'nickname': user['nickname']})
+                session.update({'user_id': user['id'], 'role': user['role'], 'username': user['username'], 'nickname': user['nickname'], 'avatar': user['avatar']})
                 return redirect('/admin' if user['role'] == 'admin' else '/')
         return "<script>alert('账号或密码错误');history.back();</script>"
     return render_template_string(HTML_LOGIN)
@@ -300,19 +368,18 @@ def login():
 def register():
     if request.method == 'POST':
         u, nickname, p1, p2 = request.form.get('username'), request.form.get('nickname'), request.form.get('pwd1'), request.form.get('pwd2')
-        if not re.match(r'^[A-Z0-9]+$', u): return "<script>alert('登录账号必须为大写+数字！');history.back();</script>"
-        if not re.match(r'^[\u4e00-\u9fa5]{2,5}$', nickname): return "<script>alert('游戏昵称必须为2~5个纯中文汉字！');history.back();</script>"
-        if p1 != p2: return "<script>alert('两次密码不一致！');history.back();</script>"
-        if p1 == u: return "<script>alert('密码不能与账号相同！');history.back();</script>"
+        if not re.match(r'^[A-Z0-9]+$', u): return "<script>alert('账号必须大写+数字！');history.back();</script>"
+        if not re.match(r'^[\u4e00-\u9fa5]{2,5}$', nickname): return "<script>alert('昵称必须为2~5个中文！');history.back();</script>"
+        if p1 != p2: return "<script>alert('密码不一致！');history.back();</script>"
         try:
             with get_db() as conn:
                 if conn.execute("SELECT id FROM users WHERE nickname=?", (nickname,)).fetchone():
-                    return "<script>alert('该中文名已被使用！');history.back();</script>"
-                conn.execute("INSERT INTO users (username, nickname, password) VALUES (?, ?, ?)", (u, nickname, p1))
+                    return "<script>alert('中文名已被使用！');history.back();</script>"
+                conn.execute("INSERT INTO users (username, nickname, password, avatar) VALUES (?, ?, ?, ?)", (u, nickname, p1, f"https://api.dicebear.com/7.x/adventurer/svg?seed={u}"))
                 conn.commit()
-            return "<script>alert('注册成功，请登录');location.href='/login';</script>"
+            return "<script>alert('注册成功');location.href='/login';</script>"
         except sqlite3.IntegrityError:
-            return "<script>alert('登录账号已存在');history.back();</script>"
+            return "<script>alert('账号已存在');history.back();</script>"
     return render_template_string(HTML_REGISTER)
 
 @app.route('/logout')
@@ -320,7 +387,6 @@ def logout():
     session.clear()
     return redirect('/login')
 
-# 彻底剥离管理员自动跳转，任何人都能看首页
 @app.route('/')
 def index():
     if 'user_id' not in session: return redirect('/login')
@@ -366,9 +432,16 @@ def admin():
                     else: conn.execute("UPDATE transactions SET status='rejected' WHERE id=?", (tx_id,))
             conn.commit()
 
-        users = conn.execute("SELECT * FROM users").fetchall()
+        users = conn.execute("SELECT * FROM users WHERE role != 'robot' ORDER BY id DESC LIMIT 100").fetchall()
         txs = conn.execute('''SELECT t.*, u.nickname FROM transactions t JOIN users u ON t.user_id = u.id WHERE t.status='pending' ORDER BY t.id DESC''').fetchall()
-    return render_template_string(HTML_ADMIN, users=users, txs=txs, session=session)
+        
+        robot_total = conn.execute("SELECT COUNT(*) FROM users WHERE role='robot'").fetchone()[0]
+        robot_stats = []
+        for g_type in ['2', '3', '13']:
+            cnt = LIVE_DATA[g_type]['robot_count']
+            robot_stats.append((GAMES[g_type]['name'], cnt))
+            
+    return render_template_string(HTML_ADMIN, users=users, txs=txs, session=session, robot_total=robot_total, robot_stats=robot_stats)
 
 @app.route('/admin/chat/<int:uid>')
 def admin_chat_page(uid):
@@ -378,83 +451,92 @@ def admin_chat_page(uid):
         if not user: return "用户不存在"
     return render_template_string(HTML_ADMIN_CS, target_uid=uid, target_name=user['nickname'])
 
-# ================== 基础 CSS & 页面模板 ==================
+# ================== UI 模板 ==================
 BASE_CSS = """
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
-    body { background: #f0f2f5; color: #333; min-height: 100vh; padding-bottom: 60px; }
-    .header { background: #00a2ff; color: #fff; padding: 15px; display: flex; justify-content: space-between; align-items: center; font-size: 16px; font-weight: bold; position: sticky; top: 0; z-index: 100;}
+    @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700&display=swap');
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Noto Sans SC', sans-serif; }
+    body { background: #f4f7f9; color: #333; min-height: 100vh; padding-bottom: 60px; }
+    .header { background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%); color: #fff; padding: 15px 20px; display: flex; justify-content: space-between; align-items: center; font-size: 16px; font-weight: 500; position: sticky; top: 0; z-index: 100; box-shadow: 0 4px 12px rgba(0,0,0,0.1);}
     .header a { color: #fff; text-decoration: none; }
-    .container { padding: 10px; max-width: 600px; margin: 0 auto; }
-    .card { background: #fff; border-radius: 8px; padding: 15px; margin-bottom: 10px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
-    .input-group { margin-bottom: 15px; }
-    .input-group input { width: 100%; padding: 12px; border: 1px solid #ddd; border-radius: 4px; font-size: 16px; outline: none; }
-    .btn { width: 100%; padding: 12px; background: #00a2ff; color: #fff; border: none; border-radius: 4px; font-size: 16px; cursor: pointer; font-weight: bold; }
-    .btn:active { opacity: 0.8; }
+    .container { padding: 15px; max-width: 600px; margin: 0 auto; }
+    .card { background: #fff; border-radius: 12px; padding: 20px; margin-bottom: 15px; box-shadow: 0 4px 15px rgba(0,0,0,0.03); border: 1px solid #eef2f5; }
+    .input-group { margin-bottom: 20px; }
+    .input-group input { width: 100%; padding: 14px 16px; border: 1px solid #dce2e8; border-radius: 8px; font-size: 16px; outline: none; transition: all 0.3s; background: #fcfdfd;}
+    .input-group input:focus { border-color: #2a5298; box-shadow: 0 0 0 3px rgba(42,82,152,0.1); }
+    .btn { width: 100%; padding: 15px; background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%); color: #fff; border: none; border-radius: 8px; font-size: 16px; font-weight: 700; cursor: pointer; box-shadow: 0 4px 10px rgba(42,82,152,0.2); transition: 0.3s; }
+    .btn:active { transform: scale(0.98); }
+    .btn-green { background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%); box-shadow: 0 4px 10px rgba(17,153,142,0.2); }
+    .btn-red { background: linear-gradient(135deg, #cb2d3e 0%, #ef473a 100%); box-shadow: 0 4px 10px rgba(203,45,62,0.2); }
     .text-center { text-align: center; }
-    .text-red { color: #ff3b30; }
-    .text-green { color: #34c759; }
-    .text-blue { color: #00a2ff; }
-    .text-gray { color: #888; }
+    .text-red { color: #ef473a; }
+    .text-green { color: #11998e; }
+    .text-blue { color: #2a5298; }
+    .text-gray { color: #8898aa; }
+    .avatar { width: 40px; height: 40px; border-radius: 50%; background: #eee; object-fit: cover; border: 2px solid #fff; box-shadow: 0 2px 5px rgba(0,0,0,0.1);}
+    
+    .tab-bar { position: fixed; bottom: 0; left: 0; width: 100%; height: 60px; background: #fff; border-top: 1px solid #eef2f5; display: flex; z-index: 500; box-shadow: 0 -2px 10px rgba(0,0,0,0.02);}
+    .tab-item { flex: 1; display: flex; flex-direction: column; justify-content: center; align-items: center; font-size: 12px; color: #8898aa; cursor: pointer; text-decoration: none; font-weight: 500;}
+    .tab-item.active { color: #1e3c72; }
+    .tab-item i { font-size: 20px; margin-bottom: 4px; }
+    
     .modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 2000; justify-content: center; align-items: center; }
-    .modal-content { background: #fff; width: 90%; max-width: 400px; max-height: 80vh; border-radius: 8px; padding: 20px; overflow-y: auto; position: relative; }
-    .close-modal { position: absolute; top: 10px; right: 15px; font-size: 20px; cursor: pointer; color: #888; }
-    .tab-bar { position: fixed; bottom: 0; left: 0; width: 100%; height: 60px; background: #fff; border-top: 1px solid #eee; display: flex; z-index: 500; }
-    .tab-item { flex: 1; display: flex; flex-direction: column; justify-content: center; align-items: center; font-size: 12px; color: #888; cursor: pointer; text-decoration: none; }
-    .tab-item.active { color: #00a2ff; }
+    .modal-content { background: #fff; width: 90%; max-width: 400px; max-height: 80vh; border-radius: 12px; padding: 25px; overflow-y: auto; position: relative; }
+    .close-modal { position: absolute; top: 15px; right: 20px; font-size: 20px; cursor: pointer; color: #8898aa; }
 </style>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 """
 
 HTML_LOGIN = BASE_CSS + """
-<div class="header" style="justify-content: center;">舰长2.8平台</div>
+<div class="header" style="justify-content: center;">舰长2.8 · 商务终端</div>
 <div class="container" style="margin-top: 50px;">
     <div class="card">
-        <h3 class="text-center" style="margin-bottom: 20px;">登录</h3>
+        <h3 class="text-center" style="margin-bottom: 25px; color: #1e3c72; font-weight: 700;">安全登录</h3>
         <form method="POST">
-            <div class="input-group"><input type="text" name="username" placeholder="请输入账号" required></div>
+            <div class="input-group"><input type="text" name="username" placeholder="请输入会员账号" required></div>
             <div class="input-group"><input type="password" name="password" placeholder="请输入密码" required></div>
-            <button type="submit" class="btn">登录</button>
+            <button type="submit" class="btn">立即登录</button>
         </form>
-        <div class="text-center" style="margin-top: 15px; font-size: 14px;">
-            <a href="/register" class="text-blue" style="text-decoration: none;">没有账号？点击注册</a>
+        <div class="text-center" style="margin-top: 20px; font-size: 14px;">
+            <a href="/register" class="text-blue" style="text-decoration: none;">没有账号？申请注册</a>
         </div>
     </div>
 </div>
 """
 
 HTML_ADMIN_LOGIN = BASE_CSS + """
-<div class="header" style="justify-content: center; background: #333;">舰长2.8 · 后台管理</div>
+<div class="header" style="justify-content: center; background: #111;">舰长2.8 · 管理后台</div>
 <div class="container" style="margin-top: 50px;">
     <div class="card">
-        <h3 class="text-center" style="margin-bottom: 20px;">站长登录</h3>
+        <h3 class="text-center" style="margin-bottom: 25px; color: #111;">管理员登录</h3>
         <form method="POST" action="/login">
             <div class="input-group"><input type="text" name="username" placeholder="管理员账号" required></div>
             <div class="input-group"><input type="password" name="password" placeholder="管理员密码" required></div>
-            <button type="submit" class="btn" style="background:#333;">进入后台</button>
+            <button type="submit" class="btn" style="background: #111;">进入后台</button>
         </form>
     </div>
 </div>
 """
 
 HTML_REGISTER = BASE_CSS + """
-<div class="header" style="justify-content: center;">舰长2.8平台</div>
+<div class="header" style="justify-content: center;">舰长2.8 · 商务终端</div>
 <div class="container" style="margin-top: 30px;">
     <div class="card">
-        <h3 class="text-center" style="margin-bottom: 20px;">注册</h3>
+        <h3 class="text-center" style="margin-bottom: 20px; color: #1e3c72; font-weight: 700;">会员注册</h3>
         <form method="POST" onsubmit="return validateReg()">
-            <div class="input-group"><input type="text" id="u" name="username" placeholder="登录账号 (大写字母+数字)" required></div>
+            <div class="input-group"><input type="text" id="u" name="username" placeholder="账号 (大写字母+数字)" required></div>
             <div class="input-group"><input type="text" id="nick" name="nickname" placeholder="游戏昵称 (2~5个纯中文名)" required></div>
             <div class="input-group"><input type="password" id="p1" name="pwd1" placeholder="设置密码" required></div>
-            <div class="input-group"><input type="password" id="p2" name="pwd2" placeholder="再次确认密码" required></div>
+            <div class="input-group"><input type="password" id="p2" name="pwd2" placeholder="确认密码" required></div>
             <div class="input-group" style="display:flex; align-items:center; justify-content:space-between;">
-                <input type="text" id="captcha-input" placeholder="输入验证码" required style="width: 55%;">
-                <div id="captcha-box" onclick="drawCaptcha()" style="width: 40%; height: 45px; background:#eee; border:1px solid #ddd; border-radius:4px; display:flex; justify-content:center; align-items:center; font-size:22px; font-weight:bold; letter-spacing:5px; cursor:pointer; color:#00a2ff; user-select:none;"></div>
+                <input type="text" id="captcha-input" placeholder="验证码" required style="width: 55%;">
+                <div id="captcha-box" onclick="drawCaptcha()" style="width: 40%; height: 50px; background:#fcfdfd; border:1px solid #dce2e8; border-radius:8px; display:flex; justify-content:center; align-items:center; font-size:22px; font-weight:bold; letter-spacing:5px; cursor:pointer; color:#2a5298; user-select:none;"></div>
             </div>
             <button type="submit" class="btn">立即注册</button>
         </form>
         <div class="text-center" style="margin-top: 15px; font-size: 14px;">
-            <a href="/login" class="text-blue" style="text-decoration: none;">已有账号？去登录</a>
+            <a href="/login" class="text-blue" style="text-decoration: none;">已有账号？返回登录</a>
         </div>
     </div>
 </div>
@@ -468,10 +550,10 @@ HTML_REGISTER = BASE_CSS + """
     drawCaptcha();
     function validateReg() {
         let u = document.getElementById('u').value;
-        if(!/^[A-Z0-9]+$/.test(u)) { alert("登录账号必须为大写字母+数字！"); return false; }
+        if(!/^[A-Z0-9]+$/.test(u)) { alert("账号必须为大写字母+数字！"); return false; }
         let nick = document.getElementById('nick').value;
-        if(!/^[\u4e00-\u9fa5]{2,5}$/.test(nick)) { alert("游戏昵称必须为2~5个纯中文汉字！"); return false; }
-        if(document.getElementById('p1').value !== document.getElementById('p2').value) { alert("两次密码不一致！"); return false; }
+        if(!/^[\u4e00-\u9fa5]{2,5}$/.test(nick)) { alert("昵称必须为2~5个中文！"); return false; }
+        if(document.getElementById('p1').value !== document.getElementById('p2').value) { alert("密码不一致！"); return false; }
         if(document.getElementById('captcha-input').value.toUpperCase() !== currentCaptcha) { alert("验证码错误！"); drawCaptcha(); return false; }
         return true;
     }
@@ -480,60 +562,63 @@ HTML_REGISTER = BASE_CSS + """
 
 HTML_HOME = BASE_CSS + """
 <div class="header">
-    <span>舰长2.8平台</span>
-    <span>余额: <span style="color:#ffd700;">{{ user.balance }}</span></span>
-</div>
-<div class="container">
-    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
-        <div style="font-size: 18px; font-weight: bold; color: #333;">欢迎，{{ user.nickname }}</div>
-        <div style="display: flex; gap: 10px;">
-            {% if session.role == 'admin' %}
-            <button onclick="location.href='/admin'" style="background: #ff9500; border: none; padding: 8px 12px; border-radius: 4px; font-size: 12px; color: #fff; font-weight:bold;">去后台</button>
-            {% endif %}
-            <button onclick="openModal('modal-pwd')" style="background: #f0f2f5; border: none; padding: 8px 12px; border-radius: 4px; font-size: 12px; color: #555;">修改密码</button>
-            <button onclick="location.href='/logout'" style="background: #ffe5e5; border: none; padding: 8px 12px; border-radius: 4px; font-size: 12px; color: #ff3b30;">退出</button>
+    <div style="display:flex; align-items:center; gap:10px;">
+        <img src="{{ user.avatar }}" class="avatar" onclick="changeAvatar()">
+        <div>
+            <div style="font-size: 14px;">{{ user.nickname }}</div>
+            <div style="font-size: 12px; color: rgba(255,255,255,0.7);">ID: {{ user.id }}</div>
         </div>
     </div>
-    
+    <div style="text-align: right;">
+        <div style="font-size: 12px; color: rgba(255,255,255,0.7);">账户余额 (元)</div>
+        <div style="font-size: 20px; font-weight: bold; color: #ffd700;">{{ user.balance }}</div>
+    </div>
+</div>
+<div class="container">
     <div style="display:flex; gap:10px; margin-bottom:15px;">
-        <button class="btn" style="background:#34c759; margin:0; padding: 15px; font-size: 16px;" onclick="requestMoney('deposit')">充值上分</button>
-        <button class="btn" style="background:#ff3b30; margin:0; padding: 15px; font-size: 16px;" onclick="requestMoney('withdraw')">提现下分</button>
+        <button class="btn btn-green" onclick="requestMoney('deposit')">充值上分</button>
+        <button class="btn btn-red" onclick="requestMoney('withdraw')">提现下分</button>
     </div>
 
     <div class="card" style="padding: 0; overflow: hidden;">
         <a href="/game/2" style="text-decoration: none; color: inherit; display: flex; align-items: center; padding: 20px; border-bottom: 1px solid #f0f0f0;">
-            <div style="width: 50px; height: 50px; background: #e6f2ff; border-radius: 8px; display: flex; justify-content: center; align-items: center; font-size: 24px; color: #00a2ff; margin-right: 15px;">🇨🇦</div>
-            <div>
-                <div style="font-size: 18px; font-weight: bold;">加拿大28 <span style="font-size: 10px; background: #00a2ff; color: #fff; padding: 2px 4px; border-radius: 2px;">官方</span></div>
-                <div style="font-size: 12px; color: #888; margin-top: 5px;">有 13231 人在玩</div>
+            <div style="width: 50px; height: 50px; background: #e3f2fd; border-radius: 12px; display: flex; justify-content: center; align-items: center; font-size: 24px; color: #1976d2; margin-right: 15px;">🇨🇦</div>
+            <div style="flex: 1;">
+                <div style="font-size: 16px; font-weight: 700; color: #1e3c72;">加拿大28</div>
+                <div style="font-size: 12px; color: #8898aa; margin-top: 4px;">极速开奖 · 官方认证</div>
             </div>
+            <i class="fas fa-chevron-right text-gray"></i>
         </a>
         <a href="/game/3" style="text-decoration: none; color: inherit; display: flex; align-items: center; padding: 20px; border-bottom: 1px solid #f0f0f0;">
-            <div style="width: 50px; height: 50px; background: #fff2e6; border-radius: 8px; display: flex; justify-content: center; align-items: center; font-size: 24px; color: #ff9500; margin-right: 15px;">⏱️</div>
-            <div>
-                <div style="font-size: 18px; font-weight: bold;">分分28 <span style="font-size: 10px; background: #ff9500; color: #fff; padding: 2px 4px; border-radius: 2px;">推荐</span></div>
-                <div style="font-size: 12px; color: #888; margin-top: 5px;">有 11081 人在玩</div>
+            <div style="width: 50px; height: 50px; background: #fff3e0; border-radius: 12px; display: flex; justify-content: center; align-items: center; font-size: 24px; color: #f57c00; margin-right: 15px;">⏱️</div>
+            <div style="flex: 1;">
+                <div style="font-size: 16px; font-weight: 700; color: #1e3c72;">分分28</div>
+                <div style="font-size: 12px; color: #8898aa; margin-top: 4px;">高频暴击 · 极速体验</div>
             </div>
+            <i class="fas fa-chevron-right text-gray"></i>
         </a>
         <a href="/game/13" style="text-decoration: none; color: inherit; display: flex; align-items: center; padding: 20px;">
-            <div style="width: 50px; height: 50px; background: #e6ffe6; border-radius: 8px; display: flex; justify-content: center; align-items: center; font-size: 24px; color: #34c759; margin-right: 15px;">₿</div>
-            <div>
-                <div style="font-size: 18px; font-weight: bold;">比特28 <span style="font-size: 10px; background: #34c759; color: #fff; padding: 2px 4px; border-radius: 2px;">官方</span></div>
-                <div style="font-size: 12px; color: #888; margin-top: 5px;">有 11983 人在玩</div>
+            <div style="width: 50px; height: 50px; background: #e8f5e9; border-radius: 12px; display: flex; justify-content: center; align-items: center; font-size: 24px; color: #388e3c; margin-right: 15px;">₿</div>
+            <div style="flex: 1;">
+                <div style="font-size: 16px; font-weight: 700; color: #1e3c72;">比特28</div>
+                <div style="font-size: 12px; color: #8898aa; margin-top: 4px;">全球行情 · 公平公正</div>
             </div>
+            <i class="fas fa-chevron-right text-gray"></i>
         </a>
     </div>
 </div>
 
 <div class="tab-bar">
-    <a href="/" class="tab-item">🎮 游戏大厅</a>
-    <a href="/cs" class="tab-item">💬 联系客服</a>
+    <a href="/" class="tab-item active"><i class="fas fa-home"></i>大厅</a>
+    <a href="/cs" class="tab-item"><i class="fas fa-headset"></i>客服</a>
+    <a href="javascript:void(0)" onclick="openModal('modal-pwd')" class="tab-item"><i class="fas fa-user-shield"></i>设置</a>
+    <a href="/logout" class="tab-item"><i class="fas fa-sign-out-alt"></i>退出</a>
 </div>
 
 <div id="modal-pwd" class="modal">
     <div class="modal-content">
         <span class="close-modal" onclick="closeModal('modal-pwd')">✖</span>
-        <h3 style="text-align:center; margin-bottom:15px;">修改密码</h3>
+        <h3 style="text-align:center; margin-bottom:20px; color: #1e3c72;">安全设置</h3>
         <div class="input-group"><input type="password" id="old-pwd" placeholder="原密码"></div>
         <div class="input-group"><input type="password" id="new-pwd" placeholder="新密码"></div>
         <button class="btn" onclick="changePwd()">确认修改</button>
@@ -546,6 +631,11 @@ function requestMoney(type) {
     if(!amt || isNaN(amt) || Number(amt) <= 0) return;
     fetch('/api/request_money', { method: 'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({type: type, amount: amt}) })
     .then(r=>r.json()).then(d=>alert(d.msg));
+}
+function changeAvatar() {
+    let url = prompt("请输入头像图片链接(URL)，或直接点击取消使用随机头像:");
+    if(url === null) url = "https://api.dicebear.com/7.x/adventurer/svg?seed=" + Math.random();
+    fetch('/api/update_avatar', { method: 'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({avatar: url}) }).then(()=>location.reload());
 }
 function openModal(id) { document.getElementById(id).style.display = 'flex'; }
 function closeModal(id) { document.getElementById(id).style.display = 'none'; }
@@ -560,64 +650,67 @@ function changePwd() {
 
 HTML_GAME = BASE_CSS + """
 <style>
-    .game-header { background: #00a2ff; color: #fff; padding: 10px 15px; display: flex; align-items: center; justify-content: space-between; position: sticky; top: 0; z-index: 10;}
+    .game-header { background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%); color: #fff; padding: 12px 20px; display: flex; align-items: center; justify-content: space-between; position: sticky; top: 0; z-index: 10;}
     .game-header a { color: #fff; text-decoration: none; font-size: 20px; }
-    .info-bar { background: #fff; padding: 10px; display: flex; justify-content: space-between; border-bottom: 1px solid #eee; }
-    .trend-box { background: #fff; padding: 8px 10px; display: flex; gap: 10px; overflow-x: auto; border-bottom: 1px solid #eee; white-space: nowrap; }
-    .trend-item { display: flex; flex-direction: column; align-items: center; font-size: 11px; min-width: 35px; }
-    .trend-ball { width: 24px; height: 24px; border-radius: 50%; background: #00a2ff; color: #fff; line-height: 24px; text-align: center; font-size: 12px; font-weight: bold; margin: 2px 0; }
-    .trend-ball.red { background: #ff3b30; }
-    .trend-ball.blue { background: #5ac8fa; }
-    .trend-attr { color: #888; }
-    .chat-area { background: #f9f9f9; height: 30vh; overflow-y: auto; padding: 10px; display: flex; flex-direction: column; gap: 10px; }
-    .msg { display: flex; gap: 8px; font-size: 14px; }
-    .msg.robot { background: #fff; padding: 10px; border-radius: 8px; border: 1px solid #e0e0e0; font-family: monospace; white-space: pre-wrap; color: #333; font-size: 12px;}
+    .info-bar { background: #fff; padding: 15px; display: flex; justify-content: space-between; border-bottom: 1px solid #eef2f5; }
+    .trend-box { background: #fff; padding: 10px 15px; display: flex; gap: 10px; overflow-x: auto; border-bottom: 1px solid #eef2f5; white-space: nowrap; }
+    .trend-item { display: flex; flex-direction: column; align-items: center; font-size: 11px; min-width: 40px; }
+    .trend-ball { width: 28px; height: 28px; border-radius: 50%; background: #2a5298; color: #fff; line-height: 28px; text-align: center; font-size: 13px; font-weight: bold; margin: 4px 0; box-shadow: 0 2px 5px rgba(42,82,152,0.3);}
+    .trend-ball.red { background: #ef473a; box-shadow: 0 2px 5px rgba(239,71,58,0.3);}
+    .trend-ball.blue { background: #5ac8fa; box-shadow: 0 2px 5px rgba(90,200,250,0.3);}
+    .trend-attr { color: #8898aa; }
+    
+    .chat-area { background: #f4f7f9; height: 30vh; overflow-y: auto; padding: 15px; display: flex; flex-direction: column; gap: 12px; }
+    .msg { display: flex; gap: 10px; font-size: 14px; }
+    .msg.robot { background: #fff; padding: 12px; border-radius: 10px; border: 1px solid #eef2f5; font-family: monospace; white-space: pre-wrap; color: #333; font-size: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.02);}
     .msg.user { justify-content: flex-end; }
-    .msg.user .bubble { background: #00a2ff; color: #fff; padding: 8px 12px; border-radius: 15px; max-width: 80%; font-size: 13px;}
-    .msg.admin .bubble { background: #fff; color: #ff9500; border: 1px solid #ff9500; padding: 8px 12px; border-radius: 15px; font-size: 13px;}
-    .action-btns { display: flex; justify-content: space-around; background: #fff; padding: 10px 0; border-bottom: 1px solid #eee; }
-    .act-btn { font-size: 14px; color: #00a2ff; cursor: pointer; text-decoration: none; }
-    .bet-panel { background: #fff; padding: 10px; border-top: 1px solid #ddd; transition: 0.3s; }
+    .msg.user .bubble { background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%); color: #fff; padding: 10px 15px; border-radius: 15px; border-bottom-right-radius: 2px; max-width: 80%; font-size: 13px; box-shadow: 0 4px 10px rgba(42,82,152,0.2);}
+    .msg.admin .bubble { background: #fff; color: #f57c00; border: 1px solid #f57c00; padding: 10px 15px; border-radius: 15px; border-bottom-left-radius: 2px; font-size: 13px;}
+    
+    .action-btns { display: flex; justify-content: space-around; background: #fff; padding: 12px 0; border-bottom: 1px solid #eef2f5; }
+    .act-btn { font-size: 14px; color: #2a5298; cursor: pointer; text-decoration: none; font-weight: 500;}
+    
+    .bet-panel { background: #fff; padding: 15px; border-top: 1px solid #eef2f5; transition: 0.3s; }
     .bet-panel.locked { pointer-events: none; opacity: 0.6; }
-    .input-bar { display: flex; gap: 10px; margin-bottom: 10px; }
-    .input-bar input { flex: 1; padding: 10px; border: 1px solid #ccc; border-radius: 4px; font-size: 16px; outline: none; }
-    .sum-scroll { display: flex; overflow-x: auto; white-space: nowrap; gap: 5px; margin-bottom: 10px; padding-bottom: 5px; }
+    .input-bar { display: flex; gap: 10px; margin-bottom: 15px; }
+    .input-bar input { flex: 1; padding: 12px; border: 1px solid #dce2e8; border-radius: 8px; font-size: 16px; outline: none; background: #fcfdfd;}
+    
+    .sum-scroll { display: flex; overflow-x: auto; white-space: nowrap; gap: 8px; margin-bottom: 15px; padding-bottom: 5px; }
     .sum-scroll::-webkit-scrollbar { height: 0; }
-    .sum-item { min-width: 60px; background: #fff; border: 1px solid #ddd; border-radius: 4px; padding: 8px 0; text-align: center; cursor: pointer; display: flex; flex-direction: column; align-items: center;}
-    .sum-item:active { background: #e6f2ff; border-color: #00a2ff; }
-    .sum-t { font-size: 16px; font-weight: bold; color: #333; }
-    .sum-o { font-size: 10px; color: #888; }
-    .kbd { display: flex; flex-direction: column; gap: 4px; }
-    .kbd-row { display: flex; gap: 4px; }
-    .k-btn { flex: 1; background: #fff; border: 1px solid #ddd; border-radius: 4px; padding: 8px 0; text-align: center; cursor: pointer; user-select: none; display: flex; flex-direction: column; justify-content: center; align-items: center; }
-    .k-btn:active { background: #e6f2ff; border-color: #00a2ff; }
-    .k-t { font-size: 15px; font-weight: bold; color: #333; }
-    .k-t.num { color: #00a2ff; font-size: 18px; }
-    .k-o { font-size: 10px; color: #888; }
-    .k-gray { background: #aeb9c5; color: #fff; border-color: #aeb9c5; }
-    .k-gray .k-t { color: #fff; }
-    .k-blue { background: #00a2ff; border-color: #00a2ff; }
+    .sum-item { min-width: 65px; background: #fff; border: 1px solid #dce2e8; border-radius: 8px; padding: 10px 0; text-align: center; cursor: pointer; display: flex; flex-direction: column; align-items: center; box-shadow: 0 2px 5px rgba(0,0,0,0.02);}
+    .sum-item:active { background: #e3f2fd; border-color: #2a5298; }
+    .sum-t { font-size: 18px; font-weight: bold; color: #1e3c72; }
+    .sum-o { font-size: 11px; color: #8898aa; margin-top: 2px;}
+    
+    .kbd { display: flex; flex-direction: column; gap: 6px; }
+    .kbd-row { display: flex; gap: 6px; }
+    .k-btn { flex: 1; background: #fff; border: 1px solid #dce2e8; border-radius: 8px; padding: 10px 0; text-align: center; cursor: pointer; user-select: none; display: flex; flex-direction: column; justify-content: center; align-items: center; box-shadow: 0 2px 5px rgba(0,0,0,0.02);}
+    .k-btn:active { background: #e3f2fd; border-color: #2a5298; }
+    .k-t { font-size: 16px; font-weight: bold; color: #1e3c72; }
+    .k-t.num { color: #2a5298; font-size: 20px; }
+    .k-o { font-size: 11px; color: #8898aa; margin-top: 2px;}
+    
+    .k-gray { background: #f4f7f9; color: #8898aa; border-color: #dce2e8; }
+    .k-gray .k-t { color: #8898aa; }
+    .k-blue { background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%); border: none; box-shadow: 0 4px 10px rgba(42,82,152,0.3);}
     .k-blue .k-t { color: #fff; font-size: 18px; }
-    .modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 2000; justify-content: center; align-items: center; }
-    .modal-content { background: #fff; width: 90%; max-width: 400px; max-height: 80vh; border-radius: 8px; padding: 20px; overflow-y: auto; position: relative; }
-    .close-modal { position: absolute; top: 10px; right: 15px; font-size: 20px; cursor: pointer; color: #888; }
 </style>
 
 <div class="game-header">
     <a href="/">〈</a>
     <span>{{ game_name }}-2.8</span>
-    <span style="font-size:14px;">余额: {{ user.balance }}</span>
+    <span style="font-size:14px;">余额: <span style="color:#ffd700; font-weight:bold;">{{ user.balance }}</span></span>
 </div>
 
 <div class="info-bar">
     <div>
-        <div style="font-size: 12px; color: #888;">第 <span id="next-period">--</span> 期开奖</div>
-        <div style="font-size: 18px; font-weight: bold; color: #333; margin-top: 4px;" id="status-box"><span id="status-text" style="background:#ddd; color:#666; padding:2px 6px; border-radius:4px; font-size:12px;">加载中</span> <span id="cd-text" class="text-red"></span></div>
+        <div style="font-size: 12px; color: #8898aa;">第 <span id="next-period">--</span> 期开奖</div>
+        <div style="font-size: 18px; font-weight: bold; color: #1e3c72; margin-top: 6px;" id="status-box"><span id="status-text" style="background:#eef2f5; color:#8898aa; padding:4px 8px; border-radius:6px; font-size:12px;">加载中</span> <span id="cd-text" class="text-red" style="font-weight:bold;"></span></div>
     </div>
     <div style="text-align: right;">
-        <div style="font-size: 12px; color: #888;">第 <span id="cur-period">--</span> 期开奖</div>
-        <div style="font-size: 18px; font-weight: bold; margin-top: 4px;">
-            <span id="cur-nums">-</span> = <span id="cur-total" class="text-blue">-</span> <span id="cur-attr" style="font-size:14px; margin-left:5px;">-</span>
+        <div style="font-size: 12px; color: #8898aa;">第 <span id="cur-period">--</span> 期开奖</div>
+        <div style="font-size: 18px; font-weight: bold; margin-top: 6px;">
+            <span id="cur-nums">-</span> = <span id="cur-total" style="color: #2a5298;">-</span> <span id="cur-attr" style="font-size:14px; margin-left:5px; color: #8898aa;">-</span>
         </div>
     </div>
 </div>
@@ -625,8 +718,8 @@ HTML_GAME = BASE_CSS + """
 <div class="trend-box" id="trend-box"></div>
 
 <div class="action-btns">
-    <a href="javascript:void(0)" class="act-btn" onclick="openModal('modal-odds')">📖 赔率说明</a>
-    <a href="javascript:void(0)" class="act-btn" onclick="fetchMyBets()">📋 我的账单</a>
+    <a href="javascript:void(0)" class="act-btn" onclick="openModal('modal-odds')"><i class="fas fa-book-open"></i> 赔率说明</a>
+    <a href="javascript:void(0)" class="act-btn" onclick="fetchMyBets()"><i class="fas fa-file-invoice"></i> 我的账单</a>
 </div>
 
 <div class="chat-area" id="chat-box"></div>
@@ -636,7 +729,7 @@ HTML_GAME = BASE_CSS + """
         <input type="text" id="bet-input" placeholder="可点击下方键盘，也可直接打字输入 (如: 大:100)">
     </div>
     
-    <div style="font-size:12px; color:#888; margin-bottom:5px;">购买和值 (左右滑动查看更多)</div>
+    <div style="font-size:12px; color:#8898aa; margin-bottom:8px;">购买和值 (左右滑动查看更多)</div>
     <div class="sum-scroll" id="sum-scroll"></div>
 
     <div class="kbd">
@@ -645,7 +738,7 @@ HTML_GAME = BASE_CSS + """
             <div class="k-btn" onclick="addBet('豹子', 88)"><span class="k-t">豹子</span><span class="k-o">88.00</span></div>
             <div class="k-btn" onclick="addBet('顺子', 16)"><span class="k-t">顺子</span><span class="k-o">16.00</span></div>
             <div class="k-btn" onclick="addBet('对子', 3.6)"><span class="k-t">对子</span><span class="k-o">3.60</span></div>
-            <div class="k-btn k-gray" onclick="backspace()"><span class="k-t">⌫</span></div>
+            <div class="k-btn k-gray" onclick="backspace()"><i class="fas fa-backspace"></i></div>
         </div>
         <div class="kbd-row">
             <div class="k-btn" onclick="addBet('大', 2.8)"><span class="k-t">大</span><span class="k-o">2.80</span></div>
@@ -675,7 +768,7 @@ HTML_GAME = BASE_CSS + """
             <div class="k-btn" onclick="addBet('极小', 16)"><span class="k-t">极小</span><span class="k-o">16.0</span></div>
             <div class="k-btn" onclick="addBet('小双', 6.7)"><span class="k-t">小双</span><span class="k-o">6.70</span></div>
         </div>
-        <div class="kbd-row" style="margin-top:4px;">
+        <div class="kbd-row" style="margin-top:6px;">
             <div class="k-btn k-blue" onclick="submitBet()" style="flex: 3;"><span class="k-t">确认下注</span></div>
         </div>
     </div>
@@ -684,7 +777,7 @@ HTML_GAME = BASE_CSS + """
 <div id="modal-odds" class="modal">
     <div class="modal-content">
         <span class="close-modal" onclick="closeModal('modal-odds')">✖</span>
-        <h3 style="text-align:center; margin-bottom:15px;">赔率说明</h3>
+        <h3 style="text-align:center; margin-bottom:20px; color: #1e3c72;">赔率说明</h3>
         <div style="font-size:14px; line-height:2; color:#555;">
             <p>💵0/27=960倍 | 1/26=320倍</p>
             <p>💵2/25=160倍 | 3/24=97倍</p>
@@ -693,13 +786,13 @@ HTML_GAME = BASE_CSS + """
             <p>💵8/19=22倍 | 9/18=18倍</p>
             <p>💵10/17=15.8倍 | 11/16=14.4倍</p>
             <p>💵12/15=13.6倍 | 13/14=13.3倍</p>
-            <p style="margin-top:10px;">🈵大小单双=2.8倍</p>
+            <p style="margin-top:15px;">🈵大小单双=2.8倍</p>
             <p>🈵大单/小双 6.30倍</p>
             <p>🈵大双/小单 6.70倍</p>
             <p>⚠️遇13/14 对子 顺子 豹子中奖回本金</p>
             <p>🔶豹子88倍 | 🔷极值16倍</p>
             <p>🔶顺子16倍 | 🔷对子3.60倍</p>
-            <p style="margin-top:15px; font-weight:bold; color:#ff3b30; text-align:center;">最终解释权归舰长平台所有</p>
+            <p style="margin-top:20px; font-weight:bold; color:#ef473a; text-align:center;">最终解释权归舰长平台所有</p>
         </div>
     </div>
 </div>
@@ -707,9 +800,9 @@ HTML_GAME = BASE_CSS + """
 <div id="modal-bets" class="modal">
     <div class="modal-content">
         <span class="close-modal" onclick="closeModal('modal-bets')">✖</span>
-        <h3 style="text-align:center; margin-bottom:15px;">近期账单</h3>
+        <h3 style="text-align:center; margin-bottom:20px; color: #1e3c72;">近期账单</h3>
         <table style="width:100%; border-collapse:collapse; font-size:13px; text-align:center;">
-            <tr style="background:#f5f5f5;"><th>期号</th><th>内容</th><th>金额</th><th>状态</th></tr>
+            <tr style="background:#f4f7f9;"><th style="padding:10px;">期号</th><th>内容</th><th>金额</th><th>状态</th></tr>
             <tbody id="bets-table-body"></tbody>
         </table>
     </div>
@@ -727,11 +820,11 @@ HTML_GAME = BASE_CSS + """
     function fetchMyBets() {
         fetch('/api/my_bets').then(r=>r.json()).then(data => {
             let tbody = document.getElementById('bets-table-body'); tbody.innerHTML = '';
-            if(data.length === 0) tbody.innerHTML = '<tr><td colspan="4">暂无记录</td></tr>';
+            if(data.length === 0) tbody.innerHTML = '<tr><td colspan="4" style="padding:20px;">暂无记录</td></tr>';
             data.forEach(b => {
-                let cls = b.status === 'win' ? 'green' : (b.status === 'lose' ? 'red' : '');
+                let cls = b.status === 'win' ? 'text-green' : (b.status === 'lose' ? 'text-red' : '');
                 let win_amt = b.status === 'win' ? b.win_amount : '-';
-                tbody.innerHTML += `<tr style="border-bottom:1px solid #eee;"><td>${b.period}</td><td>${b.bet_value}</td><td>${b.amount}</td><td class="${cls}">${win_amt}</td></tr>`;
+                tbody.innerHTML += `<tr style="border-bottom:1px solid #f0f0f0;"><td style="padding:10px;">${b.period}</td><td>${b.bet_value}</td><td>${b.amount}</td><td class="${cls}">${win_amt}</td></tr>`;
             });
             openModal('modal-bets');
         });
@@ -742,7 +835,7 @@ HTML_GAME = BASE_CSS + """
             document.getElementById('next-period').innerText = d.next_period;
             document.getElementById('cur-period').innerText = d.period;
             if(d.nums && d.nums.length === 3) {
-                document.getElementById('cur-nums').innerHTML = d.nums.map(n => `<span style="display:inline-block; width:24px; height:24px; line-height:24px; border-radius:50%; background:#00a2ff; color:#fff; text-align:center; font-size:14px; margin:0 2px;">${n}</span>`).join(' + ');
+                document.getElementById('cur-nums').innerHTML = d.nums.map(n => `<span style="display:inline-block; width:26px; height:26px; line-height:26px; border-radius:50%; background:#2a5298; color:#fff; text-align:center; font-size:14px; margin:0 2px; box-shadow:0 2px 5px rgba(42,82,152,0.3);">${n}</span>`).join(' <span style="color:#8898aa; margin:0 2px;">+</span> ');
                 document.getElementById('cur-total').innerText = d.total;
                 let attr = d.total >= 14 ? '大' : '小'; attr += d.total % 2 === 0 ? '双' : '单';
                 document.getElementById('cur-attr').innerText = attr;
@@ -767,9 +860,9 @@ HTML_GAME = BASE_CSS + """
         let cdEl = document.getElementById('cd-text'); let panel = document.getElementById('bet-panel');
         
         if(leftClose > 0) {
-            cdEl.innerText = leftClose + "秒封盘"; cdEl.style.color = "#ff3b30"; panel.classList.remove('locked');
+            cdEl.innerText = leftClose + "秒封盘"; cdEl.style.color = "#ef473a"; panel.classList.remove('locked');
         } else {
-            cdEl.innerText = "已封盘"; cdEl.style.color = "#888"; panel.classList.add('locked');
+            cdEl.innerText = "已封盘"; cdEl.style.color = "#8898aa"; panel.classList.add('locked');
             document.getElementById('bet-input').value = "封盘中禁止下注";
         }
     }, 1000);
@@ -826,40 +919,55 @@ HTML_GAME = BASE_CSS + """
 
 HTML_ADMIN = BASE_CSS + """
 <style>
-    .admin-tab-content { display: none; padding: 10px; max-width: 600px; margin: 0 auto; }
+    .admin-tab-content { display: none; padding: 15px; max-width: 600px; margin: 0 auto; }
     .admin-tab-content.active { display: block; }
-    .list-group { background: #fff; border-radius: 8px; overflow: hidden; margin-bottom: 10px; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
-    .list-item { display: flex; justify-content: space-between; align-items: center; padding: 15px; border-bottom: 1px solid #f0f0f0; font-size: 14px; text-decoration: none; color: inherit;}
+    .list-group { background: #fff; border-radius: 12px; overflow: hidden; margin-bottom: 15px; box-shadow: 0 4px 15px rgba(0,0,0,0.03); border: 1px solid #eef2f5;}
+    .list-item { display: flex; justify-content: space-between; align-items: center; padding: 18px 20px; border-bottom: 1px solid #f4f7f9; font-size: 14px; text-decoration: none; color: inherit;}
     .list-item:last-child { border-bottom: none; }
     .list-item .info { flex: 1; }
-    .list-item .title { font-weight: bold; color: #333; font-size: 15px; margin-bottom: 4px; }
-    .list-item .desc { color: #888; font-size: 12px; }
+    .list-item .title { font-weight: 700; color: #1e3c72; font-size: 15px; margin-bottom: 6px; }
+    .list-item .desc { color: #8898aa; font-size: 12px; }
     .list-item .action { text-align: right; }
 </style>
 
-<div class="header" style="background:#333;">
+<div class="header" style="background:#111;">
     <span>管理后台</span>
     <div><a href="/logout">退出</a></div>
 </div>
 
 <div id="tab-users" class="admin-tab-content active">
+    <div class="list-group" style="background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%); color: #fff; border: none;">
+        <div class="list-item" style="border: none; padding: 20px;">
+            <div class="info">
+                <div class="title" style="color: #fff; font-size: 18px;">🤖 机器人活跃系统</div>
+                <div class="desc" style="color: rgba(255,255,255,0.7); margin-top: 8px;">机器总数: {{ robot_total }} 个</div>
+                <div class="desc" style="color: rgba(255,255,255,0.7); margin-top: 4px;">
+                    当前下注: 
+                    {% for name, cnt in robot_stats %}
+                        [{{ name }}: {{ cnt }}人] 
+                    {% endfor %}
+                </div>
+            </div>
+        </div>
+    </div>
+
     <div class="list-group">
-        <div class="list-item" style="background:#f9f9f9; font-weight:bold;">充值/提现审批</div>
+        <div class="list-item" style="background:#f4f7f9; font-weight:bold; color: #1e3c72;">充值/提现审批</div>
         {% if not txs %}
-        <div class="list-item" style="color:#888; justify-content:center;">暂无待审批流水</div>
+        <div class="list-item" style="color:#8898aa; justify-content:center;">暂无待审批流水</div>
         {% endif %}
         {% for t in txs %}
         <div class="list-item">
             <div class="info">
                 <div class="title">{{ t.nickname }}</div>
-                <div class="desc">{{ '申请充值' if t.type=='deposit' else '申请提现' }}: <span class="{{ 'green' if t.type=='deposit' else 'red' }}">{{ t.amount }}</span></div>
+                <div class="desc">{{ '申请充值' if t.type=='deposit' else '申请提现' }}: <span class="{{ 'text-green' if t.type=='deposit' else 'text-red' }}" style="font-weight:bold;">{{ t.amount }}</span></div>
             </div>
             <div class="action">
-                <form method="POST" style="display:flex; gap:5px;">
+                <form method="POST" style="display:flex; gap:8px;">
                     <input type="hidden" name="act" value="approve_tx">
                     <input type="hidden" name="tx_id" value="{{ t.id }}">
-                    <button type="submit" name="action" value="approve" style="background:#34c759; color:#fff; border:none; padding:6px 10px; border-radius:4px;">同意</button>
-                    <button type="submit" name="action" value="reject" style="background:#ff3b30; color:#fff; border:none; padding:6px 10px; border-radius:4px;">拒绝</button>
+                    <button type="submit" name="action" value="approve" style="background:#11998e; color:#fff; border:none; padding:8px 12px; border-radius:6px; font-weight:bold;">同意</button>
+                    <button type="submit" name="action" value="reject" style="background:#ef473a; color:#fff; border:none; padding:8px 12px; border-radius:6px; font-weight:bold;">拒绝</button>
                 </form>
             </div>
         </div>
@@ -867,49 +975,52 @@ HTML_ADMIN = BASE_CSS + """
     </div>
 
     <div class="list-group">
-        <div class="list-item" style="background:#f9f9f9; font-weight:bold;">手动上分/扣款</div>
+        <div class="list-item" style="background:#f4f7f9; font-weight:bold; color: #1e3c72;">手动上分/扣款</div>
         <div class="list-item">
-            <form method="POST" style="display:flex; flex-wrap:wrap; gap:5px; width:100%;">
+            <form method="POST" style="display:flex; flex-wrap:wrap; gap:8px; width:100%;">
                 <input type="hidden" name="act" value="manual_money">
-                <input type="number" name="uid" placeholder="用户ID" required style="padding:8px; border:1px solid #ddd; border-radius:4px; width:30%;">
-                <input type="number" step="0.01" name="amount" placeholder="金额" required style="padding:8px; border:1px solid #ddd; border-radius:4px; width:40%;">
-                <button type="submit" name="m_type" value="add" style="background:#34c759; color:#fff; border:none; padding:8px; border-radius:4px; flex:1;">充值</button>
-                <button type="submit" name="m_type" value="sub" style="background:#ff3b30; color:#fff; border:none; padding:8px; border-radius:4px; flex:1;">扣款</button>
+                <input type="number" name="uid" placeholder="用户ID" required style="padding:10px; border:1px solid #dce2e8; border-radius:8px; width:25%;">
+                <input type="number" step="0.01" name="amount" placeholder="金额" required style="padding:10px; border:1px solid #dce2e8; border-radius:8px; width:35%;">
+                <button type="submit" name="m_type" value="add" style="background:#11998e; color:#fff; border:none; padding:10px; border-radius:8px; flex:1; font-weight:bold;">充值</button>
+                <button type="submit" name="m_type" value="sub" style="background:#ef473a; color:#fff; border:none; padding:10px; border-radius:8px; flex:1; font-weight:bold;">扣款</button>
             </form>
         </div>
     </div>
 
     <div class="list-group">
-        <div class="list-item" style="background:#f9f9f9; font-weight:bold;">注册用户列表</div>
+        <div class="list-item" style="background:#f4f7f9; font-weight:bold; color: #1e3c72;">真实注册用户 (前100名)</div>
         {% for u in users %}
         <div class="list-item">
             <div class="info">
-                <div class="title">{{ u.nickname }} <span style="font-size:12px; font-weight:normal; color:#888;">({{ u.username }})</span></div>
-                <div class="desc">ID: {{ u.id }} | 余额: <span class="text-blue">{{ u.balance }}</span></div>
+                <div class="title">{{ u.nickname }} <span style="font-size:12px; font-weight:normal; color:#8898aa;">({{ u.username }})</span></div>
+                <div class="desc">ID: {{ u.id }} | 余额: <span class="text-blue" style="font-weight:bold;">{{ u.balance }}</span></div>
             </div>
             <div class="action">
                 <form method="POST">
                     <input type="hidden" name="uid" value="{{ u.id }}">
                     {% if u.status == 'banned' %}
-                    <button type="submit" name="act" value="unban" style="background:#eee; color:#333; border:none; padding:6px 10px; border-radius:4px;">解除拉黑</button>
+                    <button type="submit" name="act" value="unban" style="background:#f4f7f9; color:#333; border:none; padding:8px 12px; border-radius:6px;">解除拉黑</button>
                     {% else %}
-                    <button type="submit" name="act" value="ban" style="background:#ff3b30; color:#fff; border:none; padding:6px 10px; border-radius:4px;">拉黑</button>
+                    <button type="submit" name="act" value="ban" style="background:#ef473a; color:#fff; border:none; padding:8px 12px; border-radius:6px;">拉黑</button>
                     {% endif %}
                 </form>
             </div>
         </div>
         {% endfor %}
     </div>
+    
+    <div style="text-align:center; margin-top:20px;">
+        <a href="/admin/backup" style="display:inline-block; padding: 12px 25px; background:#1e3c72; color:#fff; text-decoration:none; border-radius:8px; font-weight:bold;"><i class="fas fa-download"></i> 紧急备份下载数据库</a>
+    </div>
 </div>
 
 <div id="tab-cs" class="admin-tab-content">
-    <button onclick="mockCS()" style="width:100%; margin-bottom:10px; background:#ff9500; color:#fff; border:none; padding:10px; border-radius:4px; font-weight:bold;">一键生成测试客户消息</button>
     <div class="list-group" id="cs-user-list"></div>
 </div>
 
 <div class="tab-bar">
-    <div class="tab-item active" onclick="switchTab('users', this)">👥 用户管理</div>
-    <div class="tab-item" onclick="switchTab('cs', this)">💬 客服消息</div>
+    <div class="tab-item active" onclick="switchTab('users', this)"><i class="fas fa-users"></i> 用户管理</div>
+    <div class="tab-item" onclick="switchTab('cs', this)"><i class="fas fa-comments"></i> 客服消息</div>
 </div>
 
 <script>
@@ -920,24 +1031,17 @@ HTML_ADMIN = BASE_CSS + """
         el.classList.add('active');
         if(tabId === 'cs') fetchCSList();
     }
-
-    function mockCS() {
-        fetch('/api/admin/mock_cs').then(r=>r.json()).then(d=>{
-            if(d.success) { alert('测试消息已生成，请刷新列表'); fetchCSList(); }
-        });
-    }
-
     function fetchCSList() {
         fetch('/api/admin/cs_list').then(r=>r.json()).then(users => {
             let box = document.getElementById('cs-user-list');
-            if(users.length === 0) { box.innerHTML = '<div class="list-item" style="color:#888; justify-content:center;">暂无客户消息，可点击上方按钮测试</div>'; return; }
+            if(users.length === 0) { box.innerHTML = '<div class="list-item" style="color:#8898aa; justify-content:center;">暂无客户消息</div>'; return; }
             box.innerHTML = users.map(u => `
                 <a href="/admin/chat/${u.id}" class="list-item">
                     <div class="info">
                         <div class="title">${u.nickname}</div>
                         <div class="desc">ID: ${u.id}</div>
                     </div>
-                    <div class="action" style="color:#00a2ff;">进入聊天 ></div>
+                    <div class="action" style="color:#2a5298; font-weight:bold;">进入聊天 ></div>
                 </a>
             `).join('');
         });
@@ -948,16 +1052,16 @@ HTML_ADMIN = BASE_CSS + """
 # === 客户端独立聊天页面 ===
 HTML_CLIENT_CS = BASE_CSS + """
 <style>
-    .chat-container { display: flex; flex-direction: column; height: 100vh; background: #f0f2f5; }
-    .chat-header { background: #00a2ff; color: #fff; padding: 15px; display: flex; align-items: center; justify-content: space-between; font-size: 16px; font-weight: bold; }
+    .chat-container { display: flex; flex-direction: column; height: 100vh; background: #f4f7f9; }
+    .chat-header { background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%); color: #fff; padding: 15px 20px; display: flex; align-items: center; justify-content: space-between; font-size: 16px; font-weight: bold; }
     .chat-header a { color: #fff; text-decoration: none; font-size: 20px; }
-    .chat-body { flex: 1; overflow-y: auto; padding: 10px; display: flex; flex-direction: column; gap: 10px; }
-    .chat-footer { padding: 10px; background: #fff; display: flex; gap: 8px; align-items: center; border-top: 1px solid #eee; }
-    .chat-footer input[type="text"] { flex: 1; border: 1px solid #ddd; padding: 10px; border-radius: 4px; outline: none; font-size: 15px; }
-    .btn-send { background: #00a2ff; color: #fff; border: none; padding: 10px 20px; border-radius: 4px; font-weight: bold; font-size: 15px; }
-    .msg-bubble { max-width: 80%; padding: 10px 14px; border-radius: 8px; font-size: 15px; word-break: break-all; }
-    .msg-me { background: #00a2ff; color: #fff; align-self: flex-end; border-bottom-right-radius: 0; }
-    .msg-other { background: #fff; color: #333; align-self: flex-start; border-bottom-left-radius: 0; }
+    .chat-body { flex: 1; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 15px; }
+    .chat-footer { padding: 15px 20px; background: #fff; display: flex; gap: 10px; align-items: center; border-top: 1px solid #eef2f5; }
+    .chat-footer input[type="text"] { flex: 1; border: 1px solid #dce2e8; padding: 12px 15px; border-radius: 20px; outline: none; font-size: 15px; background:#fcfdfd;}
+    .btn-send { background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%); color: #fff; border: none; padding: 12px 25px; border-radius: 20px; font-weight: bold; font-size: 15px; box-shadow: 0 4px 10px rgba(42,82,152,0.2);}
+    .msg-bubble { max-width: 80%; padding: 12px 16px; border-radius: 12px; font-size: 15px; word-break: break-all; line-height: 1.5;}
+    .msg-me { background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%); color: #fff; align-self: flex-end; border-bottom-right-radius: 2px; box-shadow: 0 4px 10px rgba(42,82,152,0.2);}
+    .msg-other { background: #fff; color: #333; align-self: flex-start; border-bottom-left-radius: 2px; box-shadow: 0 4px 10px rgba(0,0,0,0.03);}
 </style>
 
 <div class="chat-container">
@@ -969,7 +1073,7 @@ HTML_CLIENT_CS = BASE_CSS + """
     <div class="chat-body" id="cs-body"></div>
     <div class="chat-footer">
         <input type="file" id="cs-img" accept="image/*" style="display:none;" onchange="sendCSImg()">
-        <label for="cs-img" style="padding:10px; background:#f0f2f5; border-radius:4px; cursor:pointer; font-size:20px;">📷</label>
+        <label for="cs-img" style="padding:12px; background:#f4f7f9; border-radius:50%; cursor:pointer; font-size:20px; color:#2a5298;"><i class="fas fa-camera"></i></label>
         <input type="text" id="cs-input" placeholder="请描述您的问题...">
         <button class="btn-send" onclick="sendCSMsg()">发送</button>
     </div>
@@ -985,7 +1089,7 @@ HTML_CLIENT_CS = BASE_CSS + """
                 if(m.role === 'admin') d.className = 'msg-bubble msg-other'; 
                 else d.className = 'msg-bubble msg-me';
                 
-                if(m.content.startsWith('data:image')) d.innerHTML = `<img src="${m.content}" style="max-width:100%; border-radius:4px;">`;
+                if(m.content.startsWith('data:image')) d.innerHTML = `<img src="${m.content}" style="max-width:100%; border-radius:8px;">`;
                 else d.innerText = m.content;
                 box.appendChild(d);
             });
@@ -999,17 +1103,15 @@ HTML_CLIENT_CS = BASE_CSS + """
         fetch('/api/cs', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({content: val}) })
         .then(r=>r.json()).then(d=>{
             if(d.success) { document.getElementById('cs-input').value=''; fetchCS(); }
-            else { alert("发送失败: " + d.msg); }
-        }).catch(e => alert("网络错误，请重试"));
+            else alert("发送失败: " + d.msg);
+        }).catch(e => alert("网络错误"));
     }
     function sendCSImg() {
         let file = document.getElementById('cs-img').files[0]; if(!file) return;
         let reader = new FileReader();
         reader.onload = function(e) { 
             fetch('/api/cs', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({content: e.target.result}) })
-            .then(r=>r.json()).then(d=>{
-                if(d.success) fetchCS(); else alert("发送失败: " + d.msg);
-            });
+            .then(r=>r.json()).then(d=>{ if(d.success) fetchCS(); });
         };
         reader.readAsDataURL(file);
     }
@@ -1019,16 +1121,16 @@ HTML_CLIENT_CS = BASE_CSS + """
 # === 客服端独立聊天页面 ===
 HTML_ADMIN_CS = BASE_CSS + """
 <style>
-    .chat-container { display: flex; flex-direction: column; height: 100vh; background: #f0f2f5; }
-    .chat-header { background: #00a2ff; color: #fff; padding: 15px; display: flex; align-items: center; justify-content: space-between; font-size: 16px; font-weight: bold; }
+    .chat-container { display: flex; flex-direction: column; height: 100vh; background: #f4f7f9; }
+    .chat-header { background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%); color: #fff; padding: 15px 20px; display: flex; align-items: center; justify-content: space-between; font-size: 16px; font-weight: bold; }
     .chat-header a { color: #fff; text-decoration: none; font-size: 20px; }
-    .chat-body { flex: 1; overflow-y: auto; padding: 10px; display: flex; flex-direction: column; gap: 10px; }
-    .chat-footer { padding: 10px; background: #fff; display: flex; gap: 8px; align-items: center; border-top: 1px solid #eee; }
-    .chat-footer input[type="text"] { flex: 1; border: 1px solid #ddd; padding: 10px; border-radius: 4px; outline: none; font-size: 15px; }
-    .btn-send { background: #00a2ff; color: #fff; border: none; padding: 10px 20px; border-radius: 4px; font-weight: bold; font-size: 15px; }
-    .msg-bubble { max-width: 80%; padding: 10px 14px; border-radius: 8px; font-size: 15px; word-break: break-all; }
-    .msg-me { background: #00a2ff; color: #fff; align-self: flex-end; border-bottom-right-radius: 0; }
-    .msg-other { background: #fff; color: #333; align-self: flex-start; border-bottom-left-radius: 0; }
+    .chat-body { flex: 1; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 15px; }
+    .chat-footer { padding: 15px 20px; background: #fff; display: flex; gap: 10px; align-items: center; border-top: 1px solid #eef2f5; }
+    .chat-footer input[type="text"] { flex: 1; border: 1px solid #dce2e8; padding: 12px 15px; border-radius: 20px; outline: none; font-size: 15px; background:#fcfdfd;}
+    .btn-send { background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%); color: #fff; border: none; padding: 12px 25px; border-radius: 20px; font-weight: bold; font-size: 15px; box-shadow: 0 4px 10px rgba(42,82,152,0.2);}
+    .msg-bubble { max-width: 80%; padding: 12px 16px; border-radius: 12px; font-size: 15px; word-break: break-all; line-height: 1.5;}
+    .msg-me { background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%); color: #fff; align-self: flex-end; border-bottom-right-radius: 2px; box-shadow: 0 4px 10px rgba(42,82,152,0.2);}
+    .msg-other { background: #fff; color: #333; align-self: flex-start; border-bottom-left-radius: 2px; box-shadow: 0 4px 10px rgba(0,0,0,0.03);}
 </style>
 
 <div class="chat-container">
@@ -1056,7 +1158,7 @@ HTML_ADMIN_CS = BASE_CSS + """
                 if(m.role === 'admin') d.className = 'msg-bubble msg-me'; 
                 else d.className = 'msg-bubble msg-other';
                 
-                if(m.content.startsWith('data:image')) d.innerHTML = `<img src="${m.content}" style="max-width:100%; border-radius:4px;">`;
+                if(m.content.startsWith('data:image')) d.innerHTML = `<img src="${m.content}" style="max-width:100%; border-radius:8px;">`;
                 else d.innerText = m.content;
                 box.appendChild(d);
             });
@@ -1070,8 +1172,8 @@ HTML_ADMIN_CS = BASE_CSS + """
         fetch('/api/admin/cs_chat/' + TARGET_UID, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({content: val}) })
         .then(r=>r.json()).then(d=>{
             if(d.success) { document.getElementById('cs-input').value=''; fetchCS(); }
-            else { alert("发送失败: " + d.msg); }
-        }).catch(e => alert("网络错误，请重试"));
+            else alert("发送失败: " + d.msg);
+        }).catch(e => alert("网络错误"));
     }
 </script>
 """
