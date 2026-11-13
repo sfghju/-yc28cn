@@ -1,5 +1,4 @@
 import urllib.request
-import urllib.error
 import ssl
 import gzip
 import re
@@ -10,33 +9,16 @@ import os
 import hashlib
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import urlparse, parse_qs
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 
 PORT = int(os.environ.get("PORT", 8888))
 
-# ================== 【电报机器人配置】 ==================
-TELEGRAM_CONFIG = {
-    "2": {"token": "9292163726:AAGwyF3RmZtzsORHpk6kveuFpmmGjSSaRqE", "chat_id": "8770794344", "name": "加拿大28"},
-    "3": {"token": "9059984335:AAHDutIGL7RDXWIPpEJ5Opjhj_Q8fBn-eVI", "chat_id": "8770794344", "name": "分分28"}, 
-    "13": {"token": "9013441843:AAHrZhx3yvgwOsHp8k7MrzASaNEcNSgUgK0", "chat_id": "8770794344", "name": "比特28"}
-}
+# ================== 【专属明文接口路径】 ==================
+VIP_PATH_CA = "/vipASDFGHJKLQQQWERTYUIOPWW9983/8626/0549CASWWW"
+VIP_PATH_FF = "/vipASDFGHJKLQQASDFGHJKLWW9986/8626/0549CFKFGH"
+VIP_PATH_BTC = "/vipASDFGHJKLQQZXCVBNMWW9983/8626/0549CCBDR"
 
-# 本地持久化文件，记录已发送过的期号（防止服务器重启导致重复发送）
-STATE_FILE = "bot_state.json"
-send_lock = threading.Lock()
-
-# 读取本地状态
-def load_state():
-    if os.path.exists(STATE_FILE):
-        try:
-            with open(STATE_FILE, "r") as f:
-                return json.load(f)
-        except:
-            pass
-    return {"2": "", "3": "", "13": ""}
-
-BOT_STATE = load_state()
-
+# 网页底层防抓包接口
 SECURE_API_PATH = "/api/v6/core/stream"
 SIGN_SECRET = "yc28_cyber_salt_v6_2026"
 TIME_WINDOW = 2.0 
@@ -58,133 +40,53 @@ CACHE_DATA = {
     "13": {"data": [], "next_draw_time": ""}
 }
 
-# ================== 电报发送函数 ==================
-def send_telegram_message(token, chat_id, text, bot_name):
-    url = f"https://api.telegram.org/bot{token}/sendMessage"
-    data = json.dumps({"chat_id": chat_id, "text": text}).encode('utf-8')
-    req = urllib.request.Request(url, data=data, headers={'Content-Type': 'application/json'})
-    ctx = ssl._create_unverified_context()
+# ================== 抓取线程 ==================
+def fetch_single_type(t_type):
+    cfg = TYPE_MAP[t_type]
     try:
-        with urllib.request.urlopen(req, timeout=10, context=ctx) as resp:
-            pass
-    except Exception as e:
+        req = urllib.request.Request(cfg["url"], headers=HEADERS)
+        ctx = ssl._create_unverified_context()
+        with urllib.request.urlopen(req, timeout=10, context=ctx) as response:
+            data = response.read()
+            if response.info().get('Content-Encoding') == 'gzip':
+                data = gzip.decompress(data)
+            html = data.decode('utf-8', errors='ignore')
+            clean_pattern = re.compile(r'<[^>]+>')
+            plain_text = clean_pattern.sub(' ', html)
+            plain_text = re.sub(r'\s+', ' ', plain_text).strip()
+            row_pattern = re.compile(r'(\d{7,}).*?(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}).*?(\d+)\s*\+\s*(\d+)\s*\+\s*(\d+)\s*=\s*(\d+)')
+
+            records = []
+            latest_draw_time = None
+            for match in row_pattern.finditer(plain_text):
+                period = match.group(1)
+                draw_time = match.group(2)
+                n1, n2, n3, total = map(int, match.groups()[2:])
+                if n1 + n2 + n3 != total: continue
+                big_small = '小' if total <= 13 else '大'
+                odd_even = '双' if total % 2 == 0 else '单'
+                if not latest_draw_time: latest_draw_time = draw_time
+                records.append({
+                    'period': period, 'draw_time': draw_time,
+                    'num1': n1, 'num2': n2, 'num3': n3, 'total': total,
+                    'big_small': big_small, 'odd_even': odd_even
+                })
+            
+            if records:
+                next_draw_time = ""
+                if latest_draw_time:
+                    dt_next = datetime.strptime(latest_draw_time, "%Y-%m-%d %H:%M:%S") + timedelta(seconds=cfg["interval"])
+                    next_draw_time = dt_next.strftime("%Y-%m-%d %H:%M:%S")
+                CACHE_DATA[t_type] = {"data": records[:50], "next_draw_time": next_draw_time}
+    except Exception:
         pass
 
-# ================== 独立抓取与播报线程 ==================
-def worker_for_type(t_type):
-    cfg = TYPE_MAP[t_type]
-    print(f"🚀 电报机器人 [{cfg['name']}] 独立监控线程已启动")
-    
-    last_cd_sec = -1
-    
+def background_worker():
     while True:
-        try:
-            req = urllib.request.Request(cfg["url"], headers=HEADERS)
-            ctx = ssl._create_unverified_context()
-            with urllib.request.urlopen(req, timeout=10, context=ctx) as response:
-                data = response.read()
-                if response.info().get('Content-Encoding') == 'gzip':
-                    data = gzip.decompress(data)
-                html = data.decode('utf-8', errors='ignore')
-                clean_pattern = re.compile(r'<[^>]+>')
-                plain_text = clean_pattern.sub(' ', html)
-                plain_text = re.sub(r'\s+', ' ', plain_text).strip()
-                
-                row_pattern = re.compile(r'(\d{7,}).*?(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}).*?(\d+)\s*\+\s*(\d+)\s*\+\s*(\d+)\s*=\s*(\d+)')
-
-                records = []
-                latest_draw_time = None
-                for match in row_pattern.finditer(plain_text):
-                    period = match.group(1)
-                    draw_time = match.group(2)
-                    n1, n2, n3, total = map(int, match.groups()[2:])
-                    if n1 + n2 + n3 != total: continue
-                    big_small = '小' if total <= 13 else '大'
-                    odd_even = '双' if total % 2 == 0 else '单'
-                    if not latest_draw_time: latest_draw_time = draw_time
-                    records.append({
-                        'period': period, 'draw_time': draw_time,
-                        'num1': n1, 'num2': n2, 'num3': n3, 'total': total,
-                        'big_small': big_small, 'odd_even': odd_even
-                    })
-                
-                if records:
-                    next_draw_time = ""
-                    if latest_draw_time:
-                        dt_next = datetime.strptime(latest_draw_time, "%Y-%m-%d %H:%M:%S") + timedelta(seconds=cfg["interval"])
-                        next_draw_time = dt_next.strftime("%Y-%m-%d %H:%M:%S")
-                    
-                    CACHE_DATA[t_type] = {"data": records[:30], "next_draw_time": next_draw_time}
-                    
-                    latest_period = records[0]['period']
-                    
-                    # 1. 判定是否出了新开奖 (加了文件锁双重校验)
-                    with send_lock:
-                        if BOT_STATE.get(t_type) != latest_period:
-                            BOT_STATE[t_type] = latest_period
-                            # 立即写入文件持久化
-                            with open(STATE_FILE, "w") as f:
-                                json.dump(BOT_STATE, f)
-                            last_cd_sec = -1
-                            
-                            # 组装赛博科技风 30 期记录
-                            history_text = ""
-                            for r in records[:30]: 
-                                history_text += f"│ {r['period']} ▸ {r['num1']}+{r['num2']}+{r['num3']}={r['total']} [{r['big_small']}{r['odd_even']}]\n"
-
-                            top = records[0]
-                            
-                            # 赛博朋克排版
-                            msg = (
-                                f"╔══════════════════════════════╗\n"
-                                f"   📡 智 算 中 枢 · {cfg['name']} 广播\n"
-                                f"╠══════════════════════════════╣\n"
-                                f"  ⚡ 期号: {top['period']}\n"
-                                f"  🎲 结果: {top['num1']} + {top['num2']} + {top['num3']} = {top['total']}\n"
-                                f"  📊 属性: {top['big_small']} {top['odd_even']}\n"
-                                f"╠══════════════════════════════╣\n"
-                                f"  📉 近 30 期数据链:\n"
-                                f"{history_text}"
-                                f"╚══════════════════════════════╝\n"
-                                f"🖥️ SYSTEM: AUTO-DRAW SYNCED"
-                            )
-                            send_telegram_message(TELEGRAM_CONFIG[t_type]["token"], TELEGRAM_CONFIG[t_type]["chat_id"], msg, cfg["name"])
-                    
-                    # 2. 倒计时播报逻辑
-                    else:
-                        if next_draw_time:
-                            now_utc = datetime.now(timezone.utc)
-                            dt_next = datetime.strptime(next_draw_time, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc) - timedelta(hours=8)
-                            diff = int((dt_next - now_utc).total_seconds())
-                            
-                            if diff == 10 and last_cd_sec != 10:
-                                last_cd_sec = 10
-                                cd_msg = (
-                                    f"╔══════════════════════════════╗\n"
-                                    f"  🚨 智算中枢 · 预警广播\n"
-                                    f"╠══════════════════════════════╣\n"
-                                    f"  ⏳ [{cfg['name']}] 距下期仅剩:\n"
-                                    f"  ▶  10 秒 请 注 意 时 间\n"
-                                    f"╚══════════════════════════════╝"
-                                )
-                                send_telegram_message(TELEGRAM_CONFIG[t_type]["token"], TELEGRAM_CONFIG[t_type]["chat_id"], cd_msg, cfg["name"])
-                            
-                            elif 1 <= diff <= 5 and last_cd_sec != diff:
-                                last_cd_sec = diff
-                                cd_msg = (
-                                    f"╔══════════════════════════════╗\n"
-                                    f"  ⚠️ 距离开奖倒计时\n"
-                                    f"╠══════════════════════════════╣\n"
-                                    f"  📡 [{cfg['name']}]\n"
-                                    f"  ⏳ 剩余时间: {diff} 秒\n"
-                                    f"╚══════════════════════════════╝"
-                                )
-                                send_telegram_message(TELEGRAM_CONFIG[t_type]["token"], TELEGRAM_CONFIG[t_type]["chat_id"], cd_msg, cfg["name"])
-
-        except Exception as e:
-            pass
-        
-        time.sleep(1)
+        for t in TYPE_MAP.keys():
+            fetch_single_type(t)
+            time.sleep(0.5)
+        time.sleep(3)
 
 # ================== Web 路由模块 ==================
 class RequestHandler(BaseHTTPRequestHandler):
@@ -194,6 +96,7 @@ class RequestHandler(BaseHTTPRequestHandler):
             path = parsed_url.path
             query = parse_qs(parsed_url.query)
             
+            # 1. 网页免密进入
             if path == '/' or path == '/index.html' or path == '/favicon.ico':
                 self.send_response(200)
                 if path != '/favicon.ico': self.send_header('Content-Type', 'text/html; charset=utf-8')
@@ -201,16 +104,21 @@ class RequestHandler(BaseHTTPRequestHandler):
                 if path != '/favicon.ico': self.wfile.write(HTML_PAGE.encode('utf-8'))
                 return
 
-            if path in ["/vipQQWW9983/8626/0549CASWWW", "/vipQQWW9986/8626/0549CFKFGH", "/vipQQWW9983/8626/0549CCBDR"]:
+            # ================== 2. 站长明文专属通道 (新路径) ==================
+            if path in [VIP_PATH_CA, VIP_PATH_FF, VIP_PATH_BTC]:
                 t_type = query.get('type', ['2'])[0]
+                if t_type not in ["2", "3", "13"]: t_type = "2"
                 payload = CACHE_DATA.get(t_type, {})
+                
                 self.send_response(200)
                 self.send_header('Content-Type', 'text/plain; charset=utf-8')
                 self.send_header('Access-Control-Allow-Origin', '*')
                 self.end_headers()
+                # 直接输出明文 JSON
                 self.wfile.write(json.dumps(payload, ensure_ascii=False, indent=4).encode('utf-8'))
                 return
 
+            # ================== 3. 网页防抓包暗网通道 ==================
             if path == SECURE_API_PATH:
                 referer = self.headers.get('Referer', '')
                 user_agent = self.headers.get('User-Agent', '')
@@ -227,6 +135,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                     except: is_hacker = True
                 
                 if is_hacker:
+                    # 触发红字嘲讽
                     self.send_response(200)
                     self.send_header('Content-Type', 'text/html; charset=utf-8')
                     self.end_headers()
@@ -247,12 +156,15 @@ class RequestHandler(BaseHTTPRequestHandler):
                     self.wfile.write(mock_html.encode('utf-8'))
                     return
                 
+                # 签名校验
                 if req_sign != hashlib.md5(f"{req_time_str}{SIGN_SECRET}".encode('utf-8')).hexdigest():
                     self.send_response(403)
                     self.end_headers()
                     return
 
+                # 正常网页请求，返回 16 进制密文
                 t_type = query.get('type', ['2'])[0]
+                if t_type not in ["2", "3", "13"]: t_type = "2"
                 payload = CACHE_DATA.get(t_type, {})
                 self.send_response(200)
                 self.send_header('Content-Type', 'text/plain; charset=utf-8')
@@ -478,10 +390,8 @@ HTML_PAGE = """
 """
 
 if __name__ == '__main__':
-    for t in TYPE_MAP.keys():
-        threading.Thread(target=worker_for_type, args=(t,), daemon=True).start()
-        time.sleep(0.5)
-
+    # 移除电报线程，恢复纯净的单线程抓取
+    threading.Thread(target=background_worker, daemon=True).start()
     server = HTTPServer(('0.0.0.0', PORT), RequestHandler)
     try:
         server.serve_forever()
