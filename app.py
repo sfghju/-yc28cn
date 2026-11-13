@@ -9,10 +9,11 @@ import os
 import hashlib
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import urlparse, parse_qs
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 PORT = int(os.environ.get("PORT", 8888))
 
+# ================== 【电报机器人配置】 ==================
 TELEGRAM_CONFIG = {
     "2": {"token": "9025598598:AAHYBe8zoph8Caap_QDik1-RDEFQf00Pysg", "chat_id": "8770794344", "name": "加拿大28"},
     "3": {"token": "9059984335:AAHDutIGL7RDXWIPpEJ5Opjhj_Q8fBn-eVI", "chat_id": "8770794344", "name": "分分28"},
@@ -41,22 +42,24 @@ CACHE_DATA = {
     "13": {"data": [], "next_draw_time": ""}
 }
 
-# ================== 电报发送函数（同步顺序发送，防拦截） ==================
-def send_telegram_message(token, chat_id, text):
+# ================== 电报发送函数（同步排队防封） ==================
+def send_telegram_message(token, chat_id, text, bot_name):
     url = f"https://api.telegram.org/bot{token}/sendMessage"
     data = json.dumps({"chat_id": chat_id, "text": text}).encode('utf-8')
     req = urllib.request.Request(url, data=data, headers={'Content-Type': 'application/json'})
     ctx = ssl._create_unverified_context()
     
     try:
+        print(f"📤 正在发送【{bot_name}】电报...")
         with urllib.request.urlopen(req, timeout=15, context=ctx) as resp:
             if resp.status == 200:
-                print(f"✅ {chat_id} 电报播报成功")
+                print(f"✅ 【{bot_name}】电报播报成功！")
     except Exception as e:
-        # 打印具体的失败原因，方便排查
-        print(f"❌ 电报发送失败: {e}")
+        print(f"❌ 【{bot_name}】电报发送失败: {e}")
+    time.sleep(2) # ⚠️ 关键：发完强制休息2秒，防止被电报风控拦截
 
-def fetch_single_type(t_type):
+# ================== 抓取与播报 ==================
+def fetch_single_type(t_type, force_report=False):
     cfg = TYPE_MAP[t_type]
     try:
         req = urllib.request.Request(cfg["url"], headers=HEADERS)
@@ -90,36 +93,35 @@ def fetch_single_type(t_type):
             if records:
                 next_draw_time = ""
                 if latest_draw_time:
-                    # 开奖时间是北京时间，加上周期算出下一期时间
                     dt_next = datetime.strptime(latest_draw_time, "%Y-%m-%d %H:%M:%S") + timedelta(seconds=cfg["interval"])
                     next_draw_time = dt_next.strftime("%Y-%m-%d %H:%M:%S")
                 
-                CACHE_DATA[t_type] = {"data": records[:50], "next_draw_time": next_draw_time}
+                CACHE_DATA[t_type] = {"data": records[:30], "next_draw_time": next_draw_time}
                 
                 latest_period = records[0]['period']
-                if LAST_SENT_PERIOD[t_type] != latest_period:
+                if LAST_SENT_PERIOD[t_type] != latest_period or force_report:
                     LAST_SENT_PERIOD[t_type] = latest_period
                     
                     cd_str = "开奖中..."
                     if next_draw_time:
-                        # ⚠️ 修正时区：Render 是 UTC，北京时间是 UTC+8
-                        now_utc = datetime.utcnow()
-                        now_bj = now_utc + timedelta(hours=8) 
+                        # ⚠️ 关键时区校准：全部转为 UTC+8 北京时间
+                        now_utc = datetime.now(timezone.utc)
+                        now_bj = now_utc + timedelta(hours=8)
+                        dt_next = datetime.strptime(next_draw_time, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc) - timedelta(hours=8)
                         
-                        dt_next = datetime.strptime(next_draw_time, "%Y-%m-%d %H:%M:%S")
-                        diff = int((dt_next - now_bj).total_seconds())
+                        # 算秒数差
+                        diff = int((dt_next - now_utc).total_seconds())
                         
                         if diff > 0:
-                            # 区分：分分和比特只显示秒，加拿大显示分秒
-                            if t_type in ["3", "13"]:
+                            if t_type in ["3", "13"]: # 分分和比特只显秒
                                 cd_str = f"{diff}秒"
-                            else:
+                            else: # 加拿大显分秒
                                 cd_str = f"{diff // 60}分 {diff % 60}秒"
                         else:
                             cd_str = "0秒"
 
                     history_text = ""
-                    for r in records[:50]:
+                    for r in records[:30]: # 只取30期
                         history_text += f"{r['period']}期: {r['num1']}+{r['num2']}+{r['num3']}={r['total']} ({r['big_small']}{r['odd_even']})\n"
 
                     top = records[0]
@@ -129,20 +131,25 @@ def fetch_single_type(t_type):
                         f"开奖：{top['num1']} + {top['num2']} + {top['num3']} = {top['total']}\n"
                         f"属性：{top['big_small']} {top['odd_even']}\n"
                         f"⏳ 距离下一期：{cd_str}\n\n"
-                        f"📊 近期50期开奖记录：\n{history_text}"
+                        f"📊 近期30期开奖记录：\n{history_text}"
                     )
                     
-                    # 不使用多线程，直接顺序发送，防止触发 Telegram 频控
-                    send_telegram_message(TELEGRAM_CONFIG[t_type]["token"], TELEGRAM_CONFIG[t_type]["chat_id"], msg)
+                    send_telegram_message(TELEGRAM_CONFIG[t_type]["token"], TELEGRAM_CONFIG[t_type]["chat_id"], msg, cfg["name"])
 
-    except Exception:
+    except Exception as e:
         pass
 
 def background_worker():
+    # 1. 启动时强制播报一轮，让你马上看到三个机器人都发消息了
+    for t in TYPE_MAP.keys():
+        fetch_single_type(t, force_report=True)
+        time.sleep(1)
+
+    # 2. 进入常规循环
     while True:
         for t in TYPE_MAP.keys():
             fetch_single_type(t)
-            time.sleep(1) # 错开1秒，防并发
+            time.sleep(1)
         time.sleep(3)
 
 class RequestHandler(BaseHTTPRequestHandler):
@@ -227,7 +234,7 @@ class RequestHandler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
         pass
 
-# ================== 网页前端代码 ==================
+# ================== 网页前端代码（网页端的倒计时是完美逐秒跳动的） ==================
 HTML_PAGE = """
 <!DOCTYPE html>
 <html lang="zh-CN">
