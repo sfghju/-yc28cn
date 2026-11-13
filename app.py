@@ -15,12 +15,18 @@ PORT = int(os.environ.get("PORT", 8888))
 
 # ================== 【电报机器人配置】 ==================
 TELEGRAM_CONFIG = {
-    "2": {"token": "9025598598:AAHYBe8zoph8Caap_QDik1-RDEFQf00Pysg", "chat_id": "8770794344", "name": "加拿大28"},
-    "3": {"token": "9059984335:AAHDutIGL7RDXWIPpEJ5Opjhj_Q8fBn-eVI", "chat_id": "8770794344", "name": "分分28"},
-    "13": {"token": "9013441843:AAGdUU5naFcs4K6pdYD4di5D9f7EedU1PoA", "chat_id": "8770794344", "name": "比特28"}
+    "2": {"token": "9025598598:AAG8f9OiSxhHmdzephHub_OpPidk2_mq8ss", "chat_id": "8770794344", "name": "加拿大28"},
+    "3": {"token": "9059984335:AAHDutIGL7RDXWIPpEJ5Opjhj_Q8fBn-eVI", "chat_id": "8770794344", "name": "分分28"}, 
+    "13": {"token": "9013441843:AAHrZhx3yvgwOsHp8k7MrzASaNEcNSgUgK0", "chat_id": "8770794344", "name": "比特28"}
 }
 
-LAST_SENT_PERIOD = {"2": "", "3": "", "13": ""}
+# 状态记录（每个类型独立）
+BOT_STATE = {
+    "2": {"last_period": "", "last_cd_sec": -1},
+    "3": {"last_period": "", "last_cd_sec": -1},
+    "13": {"last_period": "", "last_cd_sec": -1}
+}
+
 SECURE_API_PATH = "/api/v6/core/stream"
 SIGN_SECRET = "yc28_cyber_salt_v6_2026"
 TIME_WINDOW = 2.0 
@@ -42,116 +48,104 @@ CACHE_DATA = {
     "13": {"data": [], "next_draw_time": ""}
 }
 
-# ================== 电报发送函数（同步排队防封） ==================
-def send_telegram_message(token, chat_id, text, bot_name):
+# ================== 电报发送函数 ==================
+def send_telegram_message(token, chat_id, text):
     url = f"https://api.telegram.org/bot{token}/sendMessage"
     data = json.dumps({"chat_id": chat_id, "text": text}).encode('utf-8')
     req = urllib.request.Request(url, data=data, headers={'Content-Type': 'application/json'})
     ctx = ssl._create_unverified_context()
-    
     try:
-        print(f"📤 正在发送【{bot_name}】电报...")
-        with urllib.request.urlopen(req, timeout=15, context=ctx) as resp:
-            if resp.status == 200:
-                print(f"✅ 【{bot_name}】电报播报成功！")
+        with urllib.request.urlopen(req, timeout=10, context=ctx) as resp:
+            pass
     except Exception as e:
-        print(f"❌ 【{bot_name}】电报发送失败: {e}")
-    time.sleep(2) # ⚠️ 关键：发完强制休息2秒，防止被电报风控拦截
+        print(f"❌ 发送失败: {e}")
 
-# ================== 抓取与播报 ==================
-def fetch_single_type(t_type, force_report=False):
+# ================== 独立抓取与播报线程（解决两个不播报的问题） ==================
+def worker_for_type(t_type):
     cfg = TYPE_MAP[t_type]
-    try:
-        req = urllib.request.Request(cfg["url"], headers=HEADERS)
-        ctx = ssl._create_unverified_context()
-        with urllib.request.urlopen(req, timeout=10, context=ctx) as response:
-            data = response.read()
-            if response.info().get('Content-Encoding') == 'gzip':
-                data = gzip.decompress(data)
-            html = data.decode('utf-8', errors='ignore')
-            clean_pattern = re.compile(r'<[^>]+>')
-            plain_text = clean_pattern.sub(' ', html)
-            plain_text = re.sub(r'\s+', ' ', plain_text).strip()
-            row_pattern = re.compile(r'(\d{7,}).*?(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}).*?(\d+)\s*\+\s*(\d+)\s*\+\s*(\d+)\s*=\s*(\d+)')
-
-            records = []
-            latest_draw_time = None
-            for match in row_pattern.finditer(plain_text):
-                period = match.group(1)
-                draw_time = match.group(2)
-                n1, n2, n3, total = map(int, match.groups()[2:])
-                if n1 + n2 + n3 != total: continue
-                big_small = '小' if total <= 13 else '大'
-                odd_even = '双' if total % 2 == 0 else '单'
-                if not latest_draw_time: latest_draw_time = draw_time
-                records.append({
-                    'period': period, 'draw_time': draw_time,
-                    'num1': n1, 'num2': n2, 'num3': n3, 'total': total,
-                    'big_small': big_small, 'odd_even': odd_even
-                })
-            
-            if records:
-                next_draw_time = ""
-                if latest_draw_time:
-                    dt_next = datetime.strptime(latest_draw_time, "%Y-%m-%d %H:%M:%S") + timedelta(seconds=cfg["interval"])
-                    next_draw_time = dt_next.strftime("%Y-%m-%d %H:%M:%S")
-                
-                CACHE_DATA[t_type] = {"data": records[:30], "next_draw_time": next_draw_time}
-                
-                latest_period = records[0]['period']
-                if LAST_SENT_PERIOD[t_type] != latest_period or force_report:
-                    LAST_SENT_PERIOD[t_type] = latest_period
-                    
-                    cd_str = "开奖中..."
-                    if next_draw_time:
-                        # ⚠️ 关键时区校准：全部转为 UTC+8 北京时间
-                        now_utc = datetime.now(timezone.utc)
-                        now_bj = now_utc + timedelta(hours=8)
-                        dt_next = datetime.strptime(next_draw_time, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc) - timedelta(hours=8)
-                        
-                        # 算秒数差
-                        diff = int((dt_next - now_utc).total_seconds())
-                        
-                        if diff > 0:
-                            if t_type in ["3", "13"]: # 分分和比特只显秒
-                                cd_str = f"{diff}秒"
-                            else: # 加拿大显分秒
-                                cd_str = f"{diff // 60}分 {diff % 60}秒"
-                        else:
-                            cd_str = "0秒"
-
-                    history_text = ""
-                    for r in records[:30]: # 只取30期
-                        history_text += f"{r['period']}期: {r['num1']}+{r['num2']}+{r['num3']}={r['total']} ({r['big_small']}{r['odd_even']})\n"
-
-                    top = records[0]
-                    msg = (
-                        f"🔥【{cfg['name']}】最新开奖播报 🔥\n\n"
-                        f"期号：{top['period']}\n"
-                        f"开奖：{top['num1']} + {top['num2']} + {top['num3']} = {top['total']}\n"
-                        f"属性：{top['big_small']} {top['odd_even']}\n"
-                        f"⏳ 距离下一期：{cd_str}\n\n"
-                        f"📊 近期30期开奖记录：\n{history_text}"
-                    )
-                    
-                    send_telegram_message(TELEGRAM_CONFIG[t_type]["token"], TELEGRAM_CONFIG[t_type]["chat_id"], msg, cfg["name"])
-
-    except Exception as e:
-        pass
-
-def background_worker():
-    # 1. 启动时强制播报一轮，让你马上看到三个机器人都发消息了
-    for t in TYPE_MAP.keys():
-        fetch_single_type(t, force_report=True)
-        time.sleep(1)
-
-    # 2. 进入常规循环
+    print(f"🚀 电报机器人 [{cfg['name']}] 独立监控线程已启动")
+    
     while True:
-        for t in TYPE_MAP.keys():
-            fetch_single_type(t)
-            time.sleep(1)
-        time.sleep(3)
+        try:
+            req = urllib.request.Request(cfg["url"], headers=HEADERS)
+            ctx = ssl._create_unverified_context()
+            with urllib.request.urlopen(req, timeout=10, context=ctx) as response:
+                data = response.read()
+                if response.info().get('Content-Encoding') == 'gzip':
+                    data = gzip.decompress(data)
+                html = data.decode('utf-8', errors='ignore')
+                clean_pattern = re.compile(r'<[^>]+>')
+                plain_text = clean_pattern.sub(' ', html)
+                plain_text = re.sub(r'\s+', ' ', plain_text).strip()
+                row_pattern = re.compile(r'(\d{7,}).*?(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}).*?(\d+)\s*\+\s*(\d+)\s*\+\s*(\d+)\s*=\s*(\d+)')
 
+                records = []
+                latest_draw_time = None
+                for match in row_pattern.finditer(plain_text):
+                    period = match.group(1)
+                    draw_time = match.group(2)
+                    n1, n2, n3, total = map(int, match.groups()[2:])
+                    if n1 + n2 + n3 != total: continue
+                    big_small = '小' if total <= 13 else '大'
+                    odd_even = '双' if total % 2 == 0 else '单'
+                    if not latest_draw_time: latest_draw_time = draw_time
+                    records.append({
+                        'period': period, 'draw_time': draw_time,
+                        'num1': n1, 'num2': n2, 'num3': n3, 'total': total,
+                        'big_small': big_small, 'odd_even': odd_even
+                    })
+                
+                if records:
+                    next_draw_time = ""
+                    if latest_draw_time:
+                        dt_next = datetime.strptime(latest_draw_time, "%Y-%m-%d %H:%M:%S") + timedelta(seconds=cfg["interval"])
+                        next_draw_time = dt_next.strftime("%Y-%m-%d %H:%M:%S")
+                    
+                    # 更新缓存
+                    CACHE_DATA[t_type] = {"data": records[:30], "next_draw_time": next_draw_time}
+                    
+                    latest_period = records[0]['period']
+                    
+                    # 1. 判定是否出了新开奖
+                    if BOT_STATE[t_type]["last_period"] != latest_period:
+                        BOT_STATE[t_type]["last_period"] = latest_period
+                        BOT_STATE[t_type]["last_cd_sec"] = -1 # 重置倒计时状态
+                        
+                        # 组装近期30期
+                        history_text = ""
+                        for r in records[:30]: 
+                            history_text += f"{r['period']}期: {r['num1']}+{r['num2']}+{r['num3']}={r['total']} ({r['big_small']}{r['odd_even']})\n"
+
+                        top = records[0]
+                        msg = (
+                            f"🔥【{cfg['name']}】最新开奖结果 🔥\n\n"
+                            f"期号：{top['period']}\n"
+                            f"开奖：{top['num1']} + {top['num2']} + {top['num3']} = {top['total']}\n"
+                            f"属性：{top['big_small']} {top['odd_even']}\n\n"
+                            f"📊 近期30期记录：\n{history_text}"
+                        )
+                        send_telegram_message(TELEGRAM_CONFIG[t_type]["token"], TELEGRAM_CONFIG[t_type]["chat_id"], msg)
+                    
+                    # 2. 独立判定最后5秒倒计时跳动
+                    else:
+                        if next_draw_time:
+                            # 严格按照北京时间校准
+                            now_utc = datetime.now(timezone.utc)
+                            dt_next = datetime.strptime(next_draw_time, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc) - timedelta(hours=8)
+                            diff = int((dt_next - now_utc).total_seconds())
+                            
+                            # 如果在 1~5 秒内，并且和上一次发的秒数不同，才发消息（防刷屏，每秒必达）
+                            if 1 <= diff <= 5 and BOT_STATE[t_type]["last_cd_sec"] != diff:
+                                BOT_STATE[t_type]["last_cd_sec"] = diff
+                                cd_msg = f"⏳【{cfg['name']}】距离下一期开奖，还剩 {diff} 秒！"
+                                send_telegram_message(TELEGRAM_CONFIG[t_type]["token"], TELEGRAM_CONFIG[t_type]["chat_id"], cd_msg)
+
+        except Exception as e:
+            pass
+        
+        time.sleep(1) # 每秒查一次
+
+# ================== Web 路由模块 ==================
 class RequestHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         try:
@@ -166,6 +160,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                 if path != '/favicon.ico': self.wfile.write(HTML_PAGE.encode('utf-8'))
                 return
 
+            # 站长明文专属接口
             if path in ["/vipQQWW9983/8626/0549CASWWW", "/vipQQWW9986/8626/0549CFKFGH", "/vipQQWW9983/8626/0549CCBDR"]:
                 t_type = query.get('type', ['2'])[0]
                 payload = CACHE_DATA.get(t_type, {})
@@ -176,6 +171,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                 self.wfile.write(json.dumps(payload, ensure_ascii=False, indent=4).encode('utf-8'))
                 return
 
+            # 网页防抓包通道
             if path == SECURE_API_PATH:
                 referer = self.headers.get('Referer', '')
                 user_agent = self.headers.get('User-Agent', '')
@@ -234,7 +230,7 @@ class RequestHandler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
         pass
 
-# ================== 网页前端代码（网页端的倒计时是完美逐秒跳动的） ==================
+# ================== 网页前端代码 ==================
 HTML_PAGE = """
 <!DOCTYPE html>
 <html lang="zh-CN">
@@ -443,7 +439,11 @@ HTML_PAGE = """
 """
 
 if __name__ == '__main__':
-    threading.Thread(target=background_worker, daemon=True).start()
+    # 启动三个独立的监控线程（解决加拿大和比特无响应的问题）
+    for t in TYPE_MAP.keys():
+        threading.Thread(target=worker_for_type, args=(t,), daemon=True).start()
+        time.sleep(0.5)
+
     server = HTTPServer(('0.0.0.0', PORT), RequestHandler)
     try:
         server.serve_forever()
