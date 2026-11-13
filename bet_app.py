@@ -37,7 +37,6 @@ REPORTED_PERIODS = {"2": "", "3": "", "13": ""}
 def get_db():
     conn = sqlite3.connect('captain28.db', timeout=30)
     conn.row_factory = sqlite3.Row
-    # 开启 WAL 模式，解决并发死锁问题！
     conn.execute("PRAGMA journal_mode=WAL;")
     return conn
 
@@ -234,13 +233,16 @@ def api_change_pwd():
 # ================== 客服独立 API ==================
 @app.route('/api/cs', methods=['GET', 'POST'])
 def api_cs():
-    if 'user_id' not in session: return jsonify({"success": False})
+    if 'user_id' not in session: return jsonify({"success": False, "msg": "请先登录"})
     uid = session['user_id']
     if request.method == 'POST':
-        with get_db() as conn:
-            conn.execute("INSERT INTO messages (game_type, user_id, role, content) VALUES ('CS', ?, 'user', ?)", (uid, request.json.get('content')))
-            conn.commit()
-        return jsonify({"success": True})
+        try:
+            with get_db() as conn:
+                conn.execute("INSERT INTO messages (game_type, user_id, role, content) VALUES ('CS', ?, 'user', ?)", (uid, request.json.get('content')))
+                conn.commit()
+            return jsonify({"success": True})
+        except Exception as e:
+            return jsonify({"success": False, "msg": str(e)})
     with get_db() as conn:
         msgs = conn.execute("SELECT * FROM messages WHERE game_type='CS' AND user_id=? ORDER BY id DESC LIMIT 20", (uid,)).fetchall()
     return jsonify([dict(m) for m in msgs])
@@ -254,15 +256,30 @@ def api_admin_cs_list():
 
 @app.route('/api/admin/cs_chat/<int:uid>', methods=['GET', 'POST'])
 def api_admin_cs_chat(uid):
-    if session.get('role') != 'admin': return jsonify({"success": False})
+    if session.get('role') != 'admin': return jsonify({"success": False, "msg": "无权限"})
     if request.method == 'POST':
-        with get_db() as conn:
-            conn.execute("INSERT INTO messages (game_type, user_id, role, content) VALUES ('CS', ?, 'admin', ?)", (uid, request.json.get('content')))
-            conn.commit()
-        return jsonify({"success": True})
+        try:
+            with get_db() as conn:
+                conn.execute("INSERT INTO messages (game_type, user_id, role, content) VALUES ('CS', ?, 'admin', ?)", (uid, request.json.get('content')))
+                conn.commit()
+            return jsonify({"success": True})
+        except Exception as e:
+            return jsonify({"success": False, "msg": str(e)})
     with get_db() as conn:
         msgs = conn.execute("SELECT * FROM messages WHERE game_type='CS' AND user_id=? ORDER BY id DESC LIMIT 20", (uid,)).fetchall()
     return jsonify([dict(m) for m in msgs])
+
+# 一键生成假数据
+@app.route('/api/admin/mock_cs')
+def api_admin_mock_cs():
+    if session.get('role') != 'admin': return jsonify({"success": False})
+    with get_db() as conn:
+        if not conn.execute("SELECT id FROM users WHERE username='TEST001'").fetchone():
+            conn.execute("INSERT INTO users (username, nickname, password) VALUES ('TEST001', '测试用户', '123456')")
+            uid = conn.execute("SELECT id FROM users WHERE username='TEST001'").fetchone()['id']
+            conn.execute("INSERT INTO messages (game_type, user_id, role, content) VALUES ('CS', ?, 'user', '你好，我想充值')", (uid,))
+            conn.commit()
+    return jsonify({"success": True})
 
 # ================== 页面路由 ==================
 @app.route('/login', methods=['GET', 'POST'])
@@ -303,10 +320,10 @@ def logout():
     session.clear()
     return redirect('/login')
 
+# 彻底剥离管理员自动跳转，任何人都能看首页
 @app.route('/')
 def index():
     if 'user_id' not in session: return redirect('/login')
-    if session.get('role') == 'admin': return redirect('/admin')
     with get_db() as conn:
         user = conn.execute("SELECT * FROM users WHERE id=?", (session['user_id'],)).fetchone()
     return render_template_string(HTML_HOME, user=user, session=session)
@@ -318,7 +335,6 @@ def game_page(g_type):
         user = conn.execute("SELECT * FROM users WHERE id=?", (session['user_id'],)).fetchone()
     return render_template_string(HTML_GAME, g_type=g_type, game_name=GAMES[g_type]['name'], user=user, session=session)
 
-# 独立的客户端客服页面
 @app.route('/cs')
 def client_cs_page():
     if 'user_id' not in session: return redirect('/login')
@@ -354,7 +370,6 @@ def admin():
         txs = conn.execute('''SELECT t.*, u.nickname FROM transactions t JOIN users u ON t.user_id = u.id WHERE t.status='pending' ORDER BY t.id DESC''').fetchall()
     return render_template_string(HTML_ADMIN, users=users, txs=txs, session=session)
 
-# 独立的客服端聊天页面
 @app.route('/admin/chat/<int:uid>')
 def admin_chat_page(uid):
     if session.get('role') != 'admin': return redirect('/login')
@@ -362,7 +377,6 @@ def admin_chat_page(uid):
         user = conn.execute("SELECT * FROM users WHERE id=?", (uid,)).fetchone()
         if not user: return "用户不存在"
     return render_template_string(HTML_ADMIN_CS, target_uid=uid, target_name=user['nickname'])
-
 
 # ================== 基础 CSS & 页面模板 ==================
 BASE_CSS = """
@@ -383,11 +397,9 @@ BASE_CSS = """
     .text-green { color: #34c759; }
     .text-blue { color: #00a2ff; }
     .text-gray { color: #888; }
-    
     .modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 2000; justify-content: center; align-items: center; }
     .modal-content { background: #fff; width: 90%; max-width: 400px; max-height: 80vh; border-radius: 8px; padding: 20px; overflow-y: auto; position: relative; }
     .close-modal { position: absolute; top: 10px; right: 15px; font-size: 20px; cursor: pointer; color: #888; }
-    
     .tab-bar { position: fixed; bottom: 0; left: 0; width: 100%; height: 60px; background: #fff; border-top: 1px solid #eee; display: flex; z-index: 500; }
     .tab-item { flex: 1; display: flex; flex-direction: column; justify-content: center; align-items: center; font-size: 12px; color: #888; cursor: pointer; text-decoration: none; }
     .tab-item.active { color: #00a2ff; }
@@ -475,6 +487,9 @@ HTML_HOME = BASE_CSS + """
     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
         <div style="font-size: 18px; font-weight: bold; color: #333;">欢迎，{{ user.nickname }}</div>
         <div style="display: flex; gap: 10px;">
+            {% if session.role == 'admin' %}
+            <button onclick="location.href='/admin'" style="background: #ff9500; border: none; padding: 8px 12px; border-radius: 4px; font-size: 12px; color: #fff; font-weight:bold;">去后台</button>
+            {% endif %}
             <button onclick="openModal('modal-pwd')" style="background: #f0f2f5; border: none; padding: 8px 12px; border-radius: 4px; font-size: 12px; color: #555;">修改密码</button>
             <button onclick="location.href='/logout'" style="background: #ffe5e5; border: none; padding: 8px 12px; border-radius: 4px; font-size: 12px; color: #ff3b30;">退出</button>
         </div>
@@ -510,7 +525,6 @@ HTML_HOME = BASE_CSS + """
     </div>
 </div>
 
-<!-- 客户端底部导航 -->
 <div class="tab-bar">
     <a href="/" class="tab-item">🎮 游戏大厅</a>
     <a href="/cs" class="tab-item">💬 联系客服</a>
@@ -815,7 +829,7 @@ HTML_ADMIN = BASE_CSS + """
     .admin-tab-content { display: none; padding: 10px; max-width: 600px; margin: 0 auto; }
     .admin-tab-content.active { display: block; }
     .list-group { background: #fff; border-radius: 8px; overflow: hidden; margin-bottom: 10px; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
-    .list-item { display: flex; justify-content: space-between; align-items: center; padding: 15px; border-bottom: 1px solid #f0f0f0; font-size: 14px; }
+    .list-item { display: flex; justify-content: space-between; align-items: center; padding: 15px; border-bottom: 1px solid #f0f0f0; font-size: 14px; text-decoration: none; color: inherit;}
     .list-item:last-child { border-bottom: none; }
     .list-item .info { flex: 1; }
     .list-item .title { font-weight: bold; color: #333; font-size: 15px; margin-bottom: 4px; }
@@ -888,12 +902,11 @@ HTML_ADMIN = BASE_CSS + """
     </div>
 </div>
 
-<!-- 后台客服列表 -->
 <div id="tab-cs" class="admin-tab-content">
+    <button onclick="mockCS()" style="width:100%; margin-bottom:10px; background:#ff9500; color:#fff; border:none; padding:10px; border-radius:4px; font-weight:bold;">一键生成测试客户消息</button>
     <div class="list-group" id="cs-user-list"></div>
 </div>
 
-<!-- 底部导航 (客服端) -->
 <div class="tab-bar">
     <div class="tab-item active" onclick="switchTab('users', this)">👥 用户管理</div>
     <div class="tab-item" onclick="switchTab('cs', this)">💬 客服消息</div>
@@ -908,12 +921,18 @@ HTML_ADMIN = BASE_CSS + """
         if(tabId === 'cs') fetchCSList();
     }
 
+    function mockCS() {
+        fetch('/api/admin/mock_cs').then(r=>r.json()).then(d=>{
+            if(d.success) { alert('测试消息已生成，请刷新列表'); fetchCSList(); }
+        });
+    }
+
     function fetchCSList() {
         fetch('/api/admin/cs_list').then(r=>r.json()).then(users => {
             let box = document.getElementById('cs-user-list');
-            if(users.length === 0) { box.innerHTML = '<div class="list-item" style="color:#888; justify-content:center;">暂无客户消息</div>'; return; }
+            if(users.length === 0) { box.innerHTML = '<div class="list-item" style="color:#888; justify-content:center;">暂无客户消息，可点击上方按钮测试</div>'; return; }
             box.innerHTML = users.map(u => `
-                <a href="/admin/chat/${u.id}" class="list-item" style="text-decoration:none; color:inherit;">
+                <a href="/admin/chat/${u.id}" class="list-item">
                     <div class="info">
                         <div class="title">${u.nickname}</div>
                         <div class="desc">ID: ${u.id}</div>
@@ -947,9 +966,7 @@ HTML_CLIENT_CS = BASE_CSS + """
         <span>联系在线客服</span>
         <span style="width:20px;"></span>
     </div>
-    <div class="chat-body" id="cs-body">
-        <!-- 消息记录 -->
-    </div>
+    <div class="chat-body" id="cs-body"></div>
     <div class="chat-footer">
         <input type="file" id="cs-img" accept="image/*" style="display:none;" onchange="sendCSImg()">
         <label for="cs-img" style="padding:10px; background:#f0f2f5; border-radius:4px; cursor:pointer; font-size:20px;">📷</label>
@@ -962,6 +979,7 @@ HTML_CLIENT_CS = BASE_CSS + """
     function fetchCS() {
         fetch('/api/cs').then(r => r.json()).then(msgs => {
             let box = document.getElementById('cs-body'); box.innerHTML = '';
+            if(!Array.isArray(msgs)) return;
             msgs.reverse().forEach(m => {
                 let d = document.createElement('div');
                 if(m.role === 'admin') d.className = 'msg-bubble msg-other'; 
@@ -978,12 +996,21 @@ HTML_CLIENT_CS = BASE_CSS + """
 
     function sendCSMsg() {
         let val = document.getElementById('cs-input').value; if(!val) return;
-        fetch('/api/cs', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({content: val}) }).then(()=>{ document.getElementById('cs-input').value=''; fetchCS(); });
+        fetch('/api/cs', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({content: val}) })
+        .then(r=>r.json()).then(d=>{
+            if(d.success) { document.getElementById('cs-input').value=''; fetchCS(); }
+            else { alert("发送失败: " + d.msg); }
+        }).catch(e => alert("网络错误，请重试"));
     }
     function sendCSImg() {
         let file = document.getElementById('cs-img').files[0]; if(!file) return;
         let reader = new FileReader();
-        reader.onload = function(e) { fetch('/api/cs', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({content: e.target.result}) }).then(()=>{ fetchCS(); }); };
+        reader.onload = function(e) { 
+            fetch('/api/cs', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({content: e.target.result}) })
+            .then(r=>r.json()).then(d=>{
+                if(d.success) fetchCS(); else alert("发送失败: " + d.msg);
+            });
+        };
         reader.readAsDataURL(file);
     }
 </script>
@@ -1010,9 +1037,7 @@ HTML_ADMIN_CS = BASE_CSS + """
         <span>正在与 {{ target_name }} 聊天</span>
         <span style="width:20px;"></span>
     </div>
-    <div class="chat-body" id="cs-body">
-        <!-- 消息记录 -->
-    </div>
+    <div class="chat-body" id="cs-body"></div>
     <div class="chat-footer">
         <input type="text" id="cs-input" placeholder="输入回复内容...">
         <button class="btn-send" onclick="sendCSMsg()">发送</button>
@@ -1025,9 +1050,9 @@ HTML_ADMIN_CS = BASE_CSS + """
     function fetchCS() {
         fetch('/api/admin/cs_chat/' + TARGET_UID).then(r => r.json()).then(msgs => {
             let box = document.getElementById('cs-body'); box.innerHTML = '';
+            if(!Array.isArray(msgs)) return;
             msgs.reverse().forEach(m => {
                 let d = document.createElement('div');
-                // 注意角色反转：客服视角下，admin是自己，user是对方
                 if(m.role === 'admin') d.className = 'msg-bubble msg-me'; 
                 else d.className = 'msg-bubble msg-other';
                 
@@ -1042,7 +1067,11 @@ HTML_ADMIN_CS = BASE_CSS + """
 
     function sendCSMsg() {
         let val = document.getElementById('cs-input').value; if(!val) return;
-        fetch('/api/admin/cs_chat/' + TARGET_UID, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({content: val}) }).then(()=>{ document.getElementById('cs-input').value=''; fetchCS(); });
+        fetch('/api/admin/cs_chat/' + TARGET_UID, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({content: val}) })
+        .then(r=>r.json()).then(d=>{
+            if(d.success) { document.getElementById('cs-input').value=''; fetchCS(); }
+            else { alert("发送失败: " + d.msg); }
+        }).catch(e => alert("网络错误，请重试"));
     }
 </script>
 """
