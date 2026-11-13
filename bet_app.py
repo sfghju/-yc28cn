@@ -35,8 +35,10 @@ LIVE_DATA = {
 REPORTED_PERIODS = {"2": "", "3": "", "13": ""}
 
 def get_db():
-    conn = sqlite3.connect('captain28.db', timeout=20)
+    conn = sqlite3.connect('captain28.db', timeout=30)
     conn.row_factory = sqlite3.Row
+    # 开启 WAL 模式，解决并发死锁问题！
+    conn.execute("PRAGMA journal_mode=WAL;")
     return conn
 
 def init_db():
@@ -69,11 +71,7 @@ init_db()
 
 def broadcast_bill(game_type, period):
     with get_db() as conn:
-        bets = conn.execute('''
-            SELECT u.nickname, b.bet_value, b.amount 
-            FROM bets b JOIN users u ON b.user_id = u.id 
-            WHERE b.game_type=? AND b.period=? AND b.status='pending'
-        ''', (game_type, period)).fetchall()
+        bets = conn.execute('''SELECT u.nickname, b.bet_value, b.amount FROM bets b JOIN users u ON b.user_id = u.id WHERE b.game_type=? AND b.period=? AND b.status='pending' ''', (game_type, period)).fetchall()
         if not bets: return
         
         user_bets = {}
@@ -233,6 +231,7 @@ def api_change_pwd():
         conn.commit()
     return jsonify({"success": True, "msg": "密码修改成功，请重新登录"})
 
+# ================== 客服独立 API ==================
 @app.route('/api/cs', methods=['GET', 'POST'])
 def api_cs():
     if 'user_id' not in session: return jsonify({"success": False})
@@ -265,6 +264,7 @@ def api_admin_cs_chat(uid):
         msgs = conn.execute("SELECT * FROM messages WHERE game_type='CS' AND user_id=? ORDER BY id DESC LIMIT 20", (uid,)).fetchall()
     return jsonify([dict(m) for m in msgs])
 
+# ================== 页面路由 ==================
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     if request.method == 'POST':
@@ -318,6 +318,12 @@ def game_page(g_type):
         user = conn.execute("SELECT * FROM users WHERE id=?", (session['user_id'],)).fetchone()
     return render_template_string(HTML_GAME, g_type=g_type, game_name=GAMES[g_type]['name'], user=user, session=session)
 
+# 独立的客户端客服页面
+@app.route('/cs')
+def client_cs_page():
+    if 'user_id' not in session: return redirect('/login')
+    return render_template_string(HTML_CLIENT_CS)
+
 @app.route('/admin', methods=['GET', 'POST'])
 def admin():
     if session.get('role') != 'admin': return render_template_string(HTML_ADMIN_LOGIN)
@@ -348,7 +354,17 @@ def admin():
         txs = conn.execute('''SELECT t.*, u.nickname FROM transactions t JOIN users u ON t.user_id = u.id WHERE t.status='pending' ORDER BY t.id DESC''').fetchall()
     return render_template_string(HTML_ADMIN, users=users, txs=txs, session=session)
 
-# ================== 前端模板 ==================
+# 独立的客服端聊天页面
+@app.route('/admin/chat/<int:uid>')
+def admin_chat_page(uid):
+    if session.get('role') != 'admin': return redirect('/login')
+    with get_db() as conn:
+        user = conn.execute("SELECT * FROM users WHERE id=?", (uid,)).fetchone()
+        if not user: return "用户不存在"
+    return render_template_string(HTML_ADMIN_CS, target_uid=uid, target_name=user['nickname'])
+
+
+# ================== 基础 CSS & 页面模板 ==================
 BASE_CSS = """
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <style>
@@ -373,7 +389,7 @@ BASE_CSS = """
     .close-modal { position: absolute; top: 10px; right: 15px; font-size: 20px; cursor: pointer; color: #888; }
     
     .tab-bar { position: fixed; bottom: 0; left: 0; width: 100%; height: 60px; background: #fff; border-top: 1px solid #eee; display: flex; z-index: 500; }
-    .tab-item { flex: 1; display: flex; flex-direction: column; justify-content: center; align-items: center; font-size: 12px; color: #888; cursor: pointer; }
+    .tab-item { flex: 1; display: flex; flex-direction: column; justify-content: center; align-items: center; font-size: 12px; color: #888; cursor: pointer; text-decoration: none; }
     .tab-item.active { color: #00a2ff; }
 </style>
 """
@@ -494,6 +510,12 @@ HTML_HOME = BASE_CSS + """
     </div>
 </div>
 
+<!-- 客户端底部导航 -->
+<div class="tab-bar">
+    <a href="/" class="tab-item">🎮 游戏大厅</a>
+    <a href="/cs" class="tab-item">💬 联系客服</a>
+</div>
+
 <div id="modal-pwd" class="modal">
     <div class="modal-content">
         <span class="close-modal" onclick="closeModal('modal-pwd')">✖</span>
@@ -517,10 +539,7 @@ function changePwd() {
     let o = document.getElementById('old-pwd').value, n = document.getElementById('new-pwd').value;
     if(!o || !n) return alert("不能为空");
     fetch('/api/change_pwd', { method: 'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({old: o, new: n}) })
-    .then(r=>r.json()).then(d=>{
-        alert(d.msg);
-        if(d.success) location.href='/logout';
-    });
+    .then(r=>r.json()).then(d=>{ alert(d.msg); if(d.success) location.href='/logout'; });
 }
 </script>
 """
@@ -536,31 +555,24 @@ HTML_GAME = BASE_CSS + """
     .trend-ball.red { background: #ff3b30; }
     .trend-ball.blue { background: #5ac8fa; }
     .trend-attr { color: #888; }
-    
     .chat-area { background: #f9f9f9; height: 30vh; overflow-y: auto; padding: 10px; display: flex; flex-direction: column; gap: 10px; }
     .msg { display: flex; gap: 8px; font-size: 14px; }
     .msg.robot { background: #fff; padding: 10px; border-radius: 8px; border: 1px solid #e0e0e0; font-family: monospace; white-space: pre-wrap; color: #333; font-size: 12px;}
     .msg.user { justify-content: flex-end; }
     .msg.user .bubble { background: #00a2ff; color: #fff; padding: 8px 12px; border-radius: 15px; max-width: 80%; font-size: 13px;}
     .msg.admin .bubble { background: #fff; color: #ff9500; border: 1px solid #ff9500; padding: 8px 12px; border-radius: 15px; font-size: 13px;}
-    
     .action-btns { display: flex; justify-content: space-around; background: #fff; padding: 10px 0; border-bottom: 1px solid #eee; }
     .act-btn { font-size: 14px; color: #00a2ff; cursor: pointer; text-decoration: none; }
-    
     .bet-panel { background: #fff; padding: 10px; border-top: 1px solid #ddd; transition: 0.3s; }
     .bet-panel.locked { pointer-events: none; opacity: 0.6; }
-    
     .input-bar { display: flex; gap: 10px; margin-bottom: 10px; }
     .input-bar input { flex: 1; padding: 10px; border: 1px solid #ccc; border-radius: 4px; font-size: 16px; outline: none; }
-    
-    /* 横向滑动的数字和值区 */
     .sum-scroll { display: flex; overflow-x: auto; white-space: nowrap; gap: 5px; margin-bottom: 10px; padding-bottom: 5px; }
     .sum-scroll::-webkit-scrollbar { height: 0; }
     .sum-item { min-width: 60px; background: #fff; border: 1px solid #ddd; border-radius: 4px; padding: 8px 0; text-align: center; cursor: pointer; display: flex; flex-direction: column; align-items: center;}
     .sum-item:active { background: #e6f2ff; border-color: #00a2ff; }
     .sum-t { font-size: 16px; font-weight: bold; color: #333; }
     .sum-o { font-size: 10px; color: #888; }
-
     .kbd { display: flex; flex-direction: column; gap: 4px; }
     .kbd-row { display: flex; gap: 4px; }
     .k-btn { flex: 1; background: #fff; border: 1px solid #ddd; border-radius: 4px; padding: 8px 0; text-align: center; cursor: pointer; user-select: none; display: flex; flex-direction: column; justify-content: center; align-items: center; }
@@ -568,22 +580,10 @@ HTML_GAME = BASE_CSS + """
     .k-t { font-size: 15px; font-weight: bold; color: #333; }
     .k-t.num { color: #00a2ff; font-size: 18px; }
     .k-o { font-size: 10px; color: #888; }
-    
     .k-gray { background: #aeb9c5; color: #fff; border-color: #aeb9c5; }
     .k-gray .k-t { color: #fff; }
     .k-blue { background: #00a2ff; border-color: #00a2ff; }
     .k-blue .k-t { color: #fff; font-size: 18px; }
-    
-    #cs-btn { position: fixed; bottom: 20px; right: 20px; width: 60px; height: 60px; background: #00a2ff; color: #fff; border-radius: 50%; box-shadow: 0 4px 15px rgba(0,162,255,0.4); display: flex; justify-content: center; align-items: center; font-size: 28px; cursor: pointer; z-index: 999; }
-    
-    .cs-panel { display: none; position: fixed; bottom: 0; left: 0; width: 100%; height: 75vh; background: #f0f2f5; z-index: 1000; border-top-left-radius: 12px; border-top-right-radius: 12px; box-shadow: 0 -2px 10px rgba(0,0,0,0.1); flex-direction: column; }
-    .cs-header { padding: 15px; background: #00a2ff; color: #fff; border-top-left-radius: 12px; border-top-right-radius: 12px; display: flex; justify-content: space-between; font-weight: bold; font-size: 16px;}
-    .cs-body { flex: 1; overflow-y: auto; padding: 10px; display: flex; flex-direction: column; gap: 10px; }
-    .cs-footer { padding: 10px; background: #fff; display: flex; gap: 5px; border-bottom-left-radius: 12px; border-bottom-right-radius: 12px; }
-    .cs-msg { max-width: 80%; padding: 10px 14px; border-radius: 8px; font-size: 15px; }
-    .cs-msg.me { background: #00a2ff; color: #fff; align-self: flex-end; border-bottom-right-radius: 0; }
-    .cs-msg.other { background: #fff; color: #333; align-self: flex-start; border-bottom-left-radius: 0; }
-    
     .modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 2000; justify-content: center; align-items: center; }
     .modal-content { background: #fff; width: 90%; max-width: 400px; max-height: 80vh; border-radius: 8px; padding: 20px; overflow-y: auto; position: relative; }
     .close-modal { position: absolute; top: 10px; right: 15px; font-size: 20px; cursor: pointer; color: #888; }
@@ -622,7 +622,6 @@ HTML_GAME = BASE_CSS + """
         <input type="text" id="bet-input" placeholder="可点击下方键盘，也可直接打字输入 (如: 大:100)">
     </div>
     
-    <!-- 横向滑动的购买和值 (图6效果) -->
     <div style="font-size:12px; color:#888; margin-bottom:5px;">购买和值 (左右滑动查看更多)</div>
     <div class="sum-scroll" id="sum-scroll"></div>
 
@@ -668,18 +667,6 @@ HTML_GAME = BASE_CSS + """
     </div>
 </div>
 
-<div id="cs-btn" onclick="toggleCS()">💬</div>
-<div id="cs-panel" class="cs-panel">
-    <div class="cs-header"><span>联系在线客服</span><span onclick="toggleCS()" style="cursor:pointer; padding:0 10px;">✖</span></div>
-    <div class="cs-body" id="cs-body"></div>
-    <div class="cs-footer">
-        <input type="file" id="cs-img" accept="image/*" style="display:none;" onchange="sendCSImg()">
-        <label for="cs-img" style="padding:12px; background:#f0f2f5; border-radius:4px; cursor:pointer; font-size:20px;">📷</label>
-        <input type="text" id="cs-input" style="flex:1; border:1px solid #ddd; padding:10px; border-radius:4px; outline:none; font-size:16px;" placeholder="请描述您的问题...">
-        <button onclick="sendCSMsg()" style="background:#00a2ff; color:#fff; border:none; padding:0 20px; border-radius:4px; font-weight:bold; font-size:16px;">发送</button>
-    </div>
-</div>
-
 <div id="modal-odds" class="modal">
     <div class="modal-content">
         <span class="close-modal" onclick="closeModal('modal-odds')">✖</span>
@@ -715,14 +702,10 @@ HTML_GAME = BASE_CSS + """
 </div>
 
 <script>
-    const G_TYPE = "{{ g_type }}"; let liveData = null; let currentBet = {}; let csOpened = false;
-
-    // 生成和值购买区
+    const G_TYPE = "{{ g_type }}"; let liveData = null; let currentBet = {};
     const ODDS_MAP = {'0':960, '27':960, '1':320, '26':320, '2':160, '25':160, '3':97, '24':97, '4':64.5, '23':64.5, '5':46.5, '22':46.5, '6':35, '21':35, '7':27.2, '20':27.2, '8':22, '19':22, '9':18, '18':18, '10':15.8, '17':15.8, '11':14.4, '16':14.4, '12':13.6, '15':13.6, '13':13.3, '14':13.3};
     let sumHtml = '';
-    for(let i=0; i<=27; i++) {
-        sumHtml += `<div class="sum-item" onclick="addBet('${i}', ${ODDS_MAP[i]})"><span class="sum-t">${i}</span><span class="sum-o">${ODDS_MAP[i]}</span></div>`;
-    }
+    for(let i=0; i<=27; i++) { sumHtml += `<div class="sum-item" onclick="addBet('${i}', ${ODDS_MAP[i]})"><span class="sum-t">${i}</span><span class="sum-o">${ODDS_MAP[i]}</span></div>`; }
     document.getElementById('sum-scroll').innerHTML = sumHtml;
 
     function openModal(id) { document.getElementById(id).style.display = 'flex'; }
@@ -739,7 +722,6 @@ HTML_GAME = BASE_CSS + """
             openModal('modal-bets');
         });
     }
-    
     function fetchLive() {
         fetch('/api/live/' + G_TYPE).then(r => r.json()).then(d => {
             liveData = d;
@@ -768,17 +750,12 @@ HTML_GAME = BASE_CSS + """
         if(!liveData || liveData.left_time === undefined) return;
         liveData.left_time -= 1; if(liveData.left_time < 0) liveData.left_time = 0;
         let leftDraw = liveData.left_time; let closeLimit = G_TYPE === '2' ? 30 : 5; let leftClose = leftDraw - closeLimit;
-        let cdEl = document.getElementById('cd-text');
-        let panel = document.getElementById('bet-panel');
+        let cdEl = document.getElementById('cd-text'); let panel = document.getElementById('bet-panel');
         
         if(leftClose > 0) {
-            cdEl.innerText = leftClose + "秒封盘";
-            cdEl.style.color = "#ff3b30";
-            panel.classList.remove('locked');
+            cdEl.innerText = leftClose + "秒封盘"; cdEl.style.color = "#ff3b30"; panel.classList.remove('locked');
         } else {
-            cdEl.innerText = "已封盘";
-            cdEl.style.color = "#888";
-            panel.classList.add('locked'); // 封盘锁键盘
+            cdEl.innerText = "已封盘"; cdEl.style.color = "#888"; panel.classList.add('locked');
             document.getElementById('bet-input').value = "封盘中禁止下注";
         }
     }, 1000);
@@ -797,37 +774,6 @@ HTML_GAME = BASE_CSS + """
         });
     }
     setInterval(fetchChat, 3000); fetchChat();
-    
-    function toggleCS() {
-        let p = document.getElementById('cs-panel');
-        if(p.style.display === 'flex') { p.style.display = 'none'; csOpened = false; }
-        else { p.style.display = 'flex'; csOpened = true; fetchCS(); }
-    }
-    function fetchCS() {
-        if(!csOpened) return;
-        fetch('/api/cs').then(r => r.json()).then(msgs => {
-            let box = document.getElementById('cs-body'); box.innerHTML = '';
-            msgs.reverse().forEach(m => {
-                let d = document.createElement('div');
-                if(m.role === 'admin') d.className = 'cs-msg other'; else d.className = 'cs-msg me';
-                if(m.content.startsWith('data:image')) d.innerHTML = `<img src="${m.content}" style="max-width:100%; border-radius:4px;">`;
-                else d.innerText = m.content;
-                box.appendChild(d);
-            });
-            box.scrollTop = box.scrollHeight;
-        });
-    }
-    setInterval(fetchCS, 3000);
-    function sendCSMsg() {
-        let val = document.getElementById('cs-input').value; if(!val) return;
-        fetch('/api/cs', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({content: val}) }).then(()=>{ document.getElementById('cs-input').value=''; fetchCS(); });
-    }
-    function sendCSImg() {
-        let file = document.getElementById('cs-img').files[0]; if(!file) return;
-        let reader = new FileReader();
-        reader.onload = function(e) { fetch('/api/cs', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({content: e.target.result}) }).then(()=>{ fetchCS(); }); };
-        reader.readAsDataURL(file);
-    }
     
     function addBet(key, odds) {
         if(liveData && liveData.left_time <= (G_TYPE==='2'?30:5)) return alert("已封盘，停止下注");
@@ -875,11 +821,6 @@ HTML_ADMIN = BASE_CSS + """
     .list-item .title { font-weight: bold; color: #333; font-size: 15px; margin-bottom: 4px; }
     .list-item .desc { color: #888; font-size: 12px; }
     .list-item .action { text-align: right; }
-    
-    .admin-chat-box { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100vh; background: #f0f2f5; z-index: 1000; flex-direction: column; }
-    .admin-chat-header { padding: 15px; background: #00a2ff; color: #fff; display: flex; justify-content: space-between; align-items: center; font-weight: bold; }
-    .admin-chat-body { flex: 1; overflow-y: auto; padding: 10px; display: flex; flex-direction: column; gap: 10px; }
-    .admin-chat-footer { padding: 10px; background: #fff; display: flex; gap: 5px; }
 </style>
 
 <div class="header" style="background:#333;">
@@ -947,27 +888,15 @@ HTML_ADMIN = BASE_CSS + """
     </div>
 </div>
 
+<!-- 后台客服列表 -->
 <div id="tab-cs" class="admin-tab-content">
-    <div class="list-group" id="cs-user-list">
-    </div>
+    <div class="list-group" id="cs-user-list"></div>
 </div>
 
+<!-- 底部导航 (客服端) -->
 <div class="tab-bar">
     <div class="tab-item active" onclick="switchTab('users', this)">👥 用户管理</div>
     <div class="tab-item" onclick="switchTab('cs', this)">💬 客服消息</div>
-</div>
-
-<div id="admin-chat-room" class="admin-chat-box">
-    <div class="admin-chat-header">
-        <span onclick="closeAdminChat()" style="cursor:pointer;">〈 返回</span>
-        <span id="chat-target-name">聊天中...</span>
-        <span style="width:40px;"></span>
-    </div>
-    <div class="admin-chat-body" id="admin-chat-body"></div>
-    <div class="admin-chat-footer">
-        <input type="text" id="admin-chat-input" style="flex:1; border:1px solid #ddd; padding:10px; border-radius:4px; outline:none;" placeholder="输入回复内容...">
-        <button onclick="sendAdminChat()" style="background:#00a2ff; color:#fff; border:none; padding:0 20px; border-radius:4px; font-weight:bold;">发送</button>
-    </div>
 </div>
 
 <script>
@@ -979,42 +908,65 @@ HTML_ADMIN = BASE_CSS + """
         if(tabId === 'cs') fetchCSList();
     }
 
-    let currentChatUid = null;
     function fetchCSList() {
         fetch('/api/admin/cs_list').then(r=>r.json()).then(users => {
             let box = document.getElementById('cs-user-list');
             if(users.length === 0) { box.innerHTML = '<div class="list-item" style="color:#888; justify-content:center;">暂无客户消息</div>'; return; }
             box.innerHTML = users.map(u => `
-                <div class="list-item" onclick="openAdminChat(${u.id}, '${u.nickname}')">
+                <a href="/admin/chat/${u.id}" class="list-item" style="text-decoration:none; color:inherit;">
                     <div class="info">
                         <div class="title">${u.nickname}</div>
                         <div class="desc">ID: ${u.id}</div>
                     </div>
                     <div class="action" style="color:#00a2ff;">进入聊天 ></div>
-                </div>
+                </a>
             `).join('');
         });
     }
+</script>
+"""
 
-    function openAdminChat(uid, name) {
-        currentChatUid = uid;
-        document.getElementById('chat-target-name').innerText = name;
-        document.getElementById('admin-chat-room').style.display = 'flex';
-        fetchAdminChat();
-    }
+# === 客户端独立聊天页面 ===
+HTML_CLIENT_CS = BASE_CSS + """
+<style>
+    .chat-container { display: flex; flex-direction: column; height: 100vh; background: #f0f2f5; }
+    .chat-header { background: #00a2ff; color: #fff; padding: 15px; display: flex; align-items: center; justify-content: space-between; font-size: 16px; font-weight: bold; }
+    .chat-header a { color: #fff; text-decoration: none; font-size: 20px; }
+    .chat-body { flex: 1; overflow-y: auto; padding: 10px; display: flex; flex-direction: column; gap: 10px; }
+    .chat-footer { padding: 10px; background: #fff; display: flex; gap: 8px; align-items: center; border-top: 1px solid #eee; }
+    .chat-footer input[type="text"] { flex: 1; border: 1px solid #ddd; padding: 10px; border-radius: 4px; outline: none; font-size: 15px; }
+    .btn-send { background: #00a2ff; color: #fff; border: none; padding: 10px 20px; border-radius: 4px; font-weight: bold; font-size: 15px; }
+    .msg-bubble { max-width: 80%; padding: 10px 14px; border-radius: 8px; font-size: 15px; word-break: break-all; }
+    .msg-me { background: #00a2ff; color: #fff; align-self: flex-end; border-bottom-right-radius: 0; }
+    .msg-other { background: #fff; color: #333; align-self: flex-start; border-bottom-left-radius: 0; }
+</style>
 
-    function closeAdminChat() {
-        document.getElementById('admin-chat-room').style.display = 'none';
-        currentChatUid = null;
-    }
+<div class="chat-container">
+    <div class="chat-header">
+        <a href="/">〈</a>
+        <span>联系在线客服</span>
+        <span style="width:20px;"></span>
+    </div>
+    <div class="chat-body" id="cs-body">
+        <!-- 消息记录 -->
+    </div>
+    <div class="chat-footer">
+        <input type="file" id="cs-img" accept="image/*" style="display:none;" onchange="sendCSImg()">
+        <label for="cs-img" style="padding:10px; background:#f0f2f5; border-radius:4px; cursor:pointer; font-size:20px;">📷</label>
+        <input type="text" id="cs-input" placeholder="请描述您的问题...">
+        <button class="btn-send" onclick="sendCSMsg()">发送</button>
+    </div>
+</div>
 
-    function fetchAdminChat() {
-        if(!currentChatUid) return;
-        fetch('/api/admin/cs_chat/' + currentChatUid).then(r=>r.json()).then(msgs => {
-            let box = document.getElementById('admin-chat-body'); box.innerHTML = '';
+<script>
+    function fetchCS() {
+        fetch('/api/cs').then(r => r.json()).then(msgs => {
+            let box = document.getElementById('cs-body'); box.innerHTML = '';
             msgs.reverse().forEach(m => {
                 let d = document.createElement('div');
-                if(m.role === 'admin') d.className = 'cs-msg me'; else d.className = 'cs-msg other';
+                if(m.role === 'admin') d.className = 'msg-bubble msg-other'; 
+                else d.className = 'msg-bubble msg-me';
+                
                 if(m.content.startsWith('data:image')) d.innerHTML = `<img src="${m.content}" style="max-width:100%; border-radius:4px;">`;
                 else d.innerText = m.content;
                 box.appendChild(d);
@@ -1022,13 +974,75 @@ HTML_ADMIN = BASE_CSS + """
             box.scrollTop = box.scrollHeight;
         });
     }
-    setInterval(fetchAdminChat, 3000);
+    setInterval(fetchCS, 3000); fetchCS();
 
-    function sendAdminChat() {
-        let val = document.getElementById('admin-chat-input').value;
-        if(!val || !currentChatUid) return;
-        fetch('/api/admin/cs_chat/' + currentChatUid, { method: 'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({content: val}) })
-        .then(()=>{ document.getElementById('admin-chat-input').value = ''; fetchAdminChat(); });
+    function sendCSMsg() {
+        let val = document.getElementById('cs-input').value; if(!val) return;
+        fetch('/api/cs', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({content: val}) }).then(()=>{ document.getElementById('cs-input').value=''; fetchCS(); });
+    }
+    function sendCSImg() {
+        let file = document.getElementById('cs-img').files[0]; if(!file) return;
+        let reader = new FileReader();
+        reader.onload = function(e) { fetch('/api/cs', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({content: e.target.result}) }).then(()=>{ fetchCS(); }); };
+        reader.readAsDataURL(file);
+    }
+</script>
+"""
+
+# === 客服端独立聊天页面 ===
+HTML_ADMIN_CS = BASE_CSS + """
+<style>
+    .chat-container { display: flex; flex-direction: column; height: 100vh; background: #f0f2f5; }
+    .chat-header { background: #00a2ff; color: #fff; padding: 15px; display: flex; align-items: center; justify-content: space-between; font-size: 16px; font-weight: bold; }
+    .chat-header a { color: #fff; text-decoration: none; font-size: 20px; }
+    .chat-body { flex: 1; overflow-y: auto; padding: 10px; display: flex; flex-direction: column; gap: 10px; }
+    .chat-footer { padding: 10px; background: #fff; display: flex; gap: 8px; align-items: center; border-top: 1px solid #eee; }
+    .chat-footer input[type="text"] { flex: 1; border: 1px solid #ddd; padding: 10px; border-radius: 4px; outline: none; font-size: 15px; }
+    .btn-send { background: #00a2ff; color: #fff; border: none; padding: 10px 20px; border-radius: 4px; font-weight: bold; font-size: 15px; }
+    .msg-bubble { max-width: 80%; padding: 10px 14px; border-radius: 8px; font-size: 15px; word-break: break-all; }
+    .msg-me { background: #00a2ff; color: #fff; align-self: flex-end; border-bottom-right-radius: 0; }
+    .msg-other { background: #fff; color: #333; align-self: flex-start; border-bottom-left-radius: 0; }
+</style>
+
+<div class="chat-container">
+    <div class="chat-header">
+        <a href="/admin">〈</a>
+        <span>正在与 {{ target_name }} 聊天</span>
+        <span style="width:20px;"></span>
+    </div>
+    <div class="chat-body" id="cs-body">
+        <!-- 消息记录 -->
+    </div>
+    <div class="chat-footer">
+        <input type="text" id="cs-input" placeholder="输入回复内容...">
+        <button class="btn-send" onclick="sendCSMsg()">发送</button>
+    </div>
+</div>
+
+<script>
+    const TARGET_UID = {{ target_uid }};
+    
+    function fetchCS() {
+        fetch('/api/admin/cs_chat/' + TARGET_UID).then(r => r.json()).then(msgs => {
+            let box = document.getElementById('cs-body'); box.innerHTML = '';
+            msgs.reverse().forEach(m => {
+                let d = document.createElement('div');
+                // 注意角色反转：客服视角下，admin是自己，user是对方
+                if(m.role === 'admin') d.className = 'msg-bubble msg-me'; 
+                else d.className = 'msg-bubble msg-other';
+                
+                if(m.content.startsWith('data:image')) d.innerHTML = `<img src="${m.content}" style="max-width:100%; border-radius:4px;">`;
+                else d.innerText = m.content;
+                box.appendChild(d);
+            });
+            box.scrollTop = box.scrollHeight;
+        });
+    }
+    setInterval(fetchCS, 3000); fetchCS();
+
+    function sendCSMsg() {
+        let val = document.getElementById('cs-input').value; if(!val) return;
+        fetch('/api/admin/cs_chat/' + TARGET_UID, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({content: val}) }).then(()=>{ document.getElementById('cs-input').value=''; fetchCS(); });
     }
 </script>
 """
