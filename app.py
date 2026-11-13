@@ -16,20 +16,26 @@ PORT = int(os.environ.get("PORT", 8888))
 
 # ================== 【电报机器人配置】 ==================
 TELEGRAM_CONFIG = {
-    # 加拿大已替换为你截图里最新申请的 Token
     "2": {"token": "9292163726:AAGwyF3RmZtzsORHpk6kveuFpmmGjSSaRqE", "chat_id": "8770794344", "name": "加拿大28"},
-    # 分分保持不变
     "3": {"token": "9059984335:AAHDutIGL7RDXWIPpEJ5Opjhj_Q8fBn-eVI", "chat_id": "8770794344", "name": "分分28"}, 
-    # 比特保持不变
     "13": {"token": "9013441843:AAHrZhx3yvgwOsHp8k7MrzASaNEcNSgUgK0", "chat_id": "8770794344", "name": "比特28"}
 }
 
-# 状态记录
-BOT_STATE = {
-    "2": {"last_period": "", "last_cd_sec": -1},
-    "3": {"last_period": "", "last_cd_sec": -1},
-    "13": {"last_period": "", "last_cd_sec": -1}
-}
+# 本地持久化文件，记录已发送过的期号（防止服务器重启导致重复发送）
+STATE_FILE = "bot_state.json"
+send_lock = threading.Lock()
+
+# 读取本地状态
+def load_state():
+    if os.path.exists(STATE_FILE):
+        try:
+            with open(STATE_FILE, "r") as f:
+                return json.load(f)
+        except:
+            pass
+    return {"2": "", "3": "", "13": ""}
+
+BOT_STATE = load_state()
 
 SECURE_API_PATH = "/api/v6/core/stream"
 SIGN_SECRET = "yc28_cyber_salt_v6_2026"
@@ -61,16 +67,15 @@ def send_telegram_message(token, chat_id, text, bot_name):
     try:
         with urllib.request.urlopen(req, timeout=10, context=ctx) as resp:
             pass
-    except urllib.error.HTTPError as e:
-        error_msg = e.read().decode('utf-8')
-        print(f"❌【{bot_name}】发送失败！电报报错: {error_msg}")
     except Exception as e:
-        print(f"❌【{bot_name}】发送失败！网络错误: {e}")
+        pass
 
 # ================== 独立抓取与播报线程 ==================
 def worker_for_type(t_type):
     cfg = TYPE_MAP[t_type]
     print(f"🚀 电报机器人 [{cfg['name']}] 独立监控线程已启动")
+    
+    last_cd_sec = -1
     
     while True:
         try:
@@ -113,24 +118,37 @@ def worker_for_type(t_type):
                     
                     latest_period = records[0]['period']
                     
-                    # 1. 判定是否出了新开奖
-                    if BOT_STATE[t_type]["last_period"] != latest_period:
-                        BOT_STATE[t_type]["last_period"] = latest_period
-                        BOT_STATE[t_type]["last_cd_sec"] = -1 
-                        
-                        history_text = ""
-                        for r in records[:30]: 
-                            history_text += f"{r['period']}期: {r['num1']}+{r['num2']}+{r['num3']}={r['total']} ({r['big_small']}{r['odd_even']})\n"
+                    # 1. 判定是否出了新开奖 (加了文件锁双重校验)
+                    with send_lock:
+                        if BOT_STATE.get(t_type) != latest_period:
+                            BOT_STATE[t_type] = latest_period
+                            # 立即写入文件持久化
+                            with open(STATE_FILE, "w") as f:
+                                json.dump(BOT_STATE, f)
+                            last_cd_sec = -1
+                            
+                            # 组装赛博科技风 30 期记录
+                            history_text = ""
+                            for r in records[:30]: 
+                                history_text += f"│ {r['period']} ▸ {r['num1']}+{r['num2']}+{r['num3']}={r['total']} [{r['big_small']}{r['odd_even']}]\n"
 
-                        top = records[0]
-                        msg = (
-                            f"🔥【{cfg['name']}】最新开奖结果 🔥\n\n"
-                            f"期号：{top['period']}\n"
-                            f"开奖：{top['num1']} + {top['num2']} + {top['num3']} = {top['total']}\n"
-                            f"属性：{top['big_small']} {top['odd_even']}\n\n"
-                            f"📊 近期30期记录：\n{history_text}"
-                        )
-                        send_telegram_message(TELEGRAM_CONFIG[t_type]["token"], TELEGRAM_CONFIG[t_type]["chat_id"], msg, cfg["name"])
+                            top = records[0]
+                            
+                            # 赛博朋克排版
+                            msg = (
+                                f"╔══════════════════════════════╗\n"
+                                f"   📡 智 算 中 枢 · {cfg['name']} 广播\n"
+                                f"╠══════════════════════════════╣\n"
+                                f"  ⚡ 期号: {top['period']}\n"
+                                f"  🎲 结果: {top['num1']} + {top['num2']} + {top['num3']} = {top['total']}\n"
+                                f"  📊 属性: {top['big_small']} {top['odd_even']}\n"
+                                f"╠══════════════════════════════╣\n"
+                                f"  📉 近 30 期数据链:\n"
+                                f"{history_text}"
+                                f"╚══════════════════════════════╝\n"
+                                f"🖥️ SYSTEM: AUTO-DRAW SYNCED"
+                            )
+                            send_telegram_message(TELEGRAM_CONFIG[t_type]["token"], TELEGRAM_CONFIG[t_type]["chat_id"], msg, cfg["name"])
                     
                     # 2. 倒计时播报逻辑
                     else:
@@ -139,21 +157,32 @@ def worker_for_type(t_type):
                             dt_next = datetime.strptime(next_draw_time, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc) - timedelta(hours=8)
                             diff = int((dt_next - now_utc).total_seconds())
                             
-                            if diff == 10 and BOT_STATE[t_type]["last_cd_sec"] != 10:
-                                BOT_STATE[t_type]["last_cd_sec"] = 10
-                                cd_msg = f"⏳【{cfg['name']}】距离下一期开奖还有10秒，请注意时间！"
+                            if diff == 10 and last_cd_sec != 10:
+                                last_cd_sec = 10
+                                cd_msg = (
+                                    f"╔══════════════════════════════╗\n"
+                                    f"  🚨 智算中枢 · 预警广播\n"
+                                    f"╠══════════════════════════════╣\n"
+                                    f"  ⏳ [{cfg['name']}] 距下期仅剩:\n"
+                                    f"  ▶  10 秒 请 注 意 时 间\n"
+                                    f"╚══════════════════════════════╝"
+                                )
                                 send_telegram_message(TELEGRAM_CONFIG[t_type]["token"], TELEGRAM_CONFIG[t_type]["chat_id"], cd_msg, cfg["name"])
                             
-                            elif 1 <= diff <= 5 and BOT_STATE[t_type]["last_cd_sec"] != diff:
-                                BOT_STATE[t_type]["last_cd_sec"] = diff
-                                cd_msg = f"⏳【{cfg['name']}】距离下一期开奖，还剩 {diff} 秒！"
+                            elif 1 <= diff <= 5 and last_cd_sec != diff:
+                                last_cd_sec = diff
+                                cd_msg = (
+                                    f"╔══════════════════════════════╗\n"
+                                    f"  ⚠️ 距离开奖倒计时\n"
+                                    f"╠══════════════════════════════╣\n"
+                                    f"  📡 [{cfg['name']}]\n"
+                                    f"  ⏳ 剩余时间: {diff} 秒\n"
+                                    f"╚══════════════════════════════╝"
+                                )
                                 send_telegram_message(TELEGRAM_CONFIG[t_type]["token"], TELEGRAM_CONFIG[t_type]["chat_id"], cd_msg, cfg["name"])
-                else:
-                    if BOT_STATE[t_type]["last_period"] == "":
-                        print(f"⚠️【{cfg['name']}】页面抓取成功，但未解析出数据！")
 
         except Exception as e:
-            print(f"⚠️【{cfg['name']}】网页抓取异常: {e}")
+            pass
         
         time.sleep(1)
 
