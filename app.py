@@ -16,9 +16,11 @@ PORT = int(os.environ.get("PORT", 8888))
 
 # ================== 【电报机器人配置】 ==================
 TELEGRAM_CONFIG = {
-    # 你刚才截图里的最新 Token
-    "2": {"token": "9292163726:AAHCKiTKTfJ55yK0dFqET8vOvSHyp3BYiQq", "chat_id": "8770794344", "name": "加拿大28"},
+    # 加拿大已替换为你截图里最新申请的 Token
+    "2": {"token": "9292163726:AAGwyF3RmZtzsORHpk6kveuFpmmGjSSaRqE", "chat_id": "8770794344", "name": "加拿大28"},
+    # 分分保持不变
     "3": {"token": "9059984335:AAHDutIGL7RDXWIPpEJ5Opjhj_Q8fBn-eVI", "chat_id": "8770794344", "name": "分分28"}, 
+    # 比特保持不变
     "13": {"token": "9013441843:AAHrZhx3yvgwOsHp8k7MrzASaNEcNSgUgK0", "chat_id": "8770794344", "name": "比特28"}
 }
 
@@ -50,7 +52,7 @@ CACHE_DATA = {
     "13": {"data": [], "next_draw_time": ""}
 }
 
-# ================== 电报发送函数（开启错误日志） ==================
+# ================== 电报发送函数 ==================
 def send_telegram_message(token, chat_id, text, bot_name):
     url = f"https://api.telegram.org/bot{token}/sendMessage"
     data = json.dumps({"chat_id": chat_id, "text": text}).encode('utf-8')
@@ -60,7 +62,6 @@ def send_telegram_message(token, chat_id, text, bot_name):
         with urllib.request.urlopen(req, timeout=10, context=ctx) as resp:
             pass
     except urllib.error.HTTPError as e:
-        # 如果发不出去，直接打印电报告诉我们的原因！
         error_msg = e.read().decode('utf-8')
         print(f"❌【{bot_name}】发送失败！电报报错: {error_msg}")
     except Exception as e:
@@ -83,6 +84,7 @@ def worker_for_type(t_type):
                 clean_pattern = re.compile(r'<[^>]+>')
                 plain_text = clean_pattern.sub(' ', html)
                 plain_text = re.sub(r'\s+', ' ', plain_text).strip()
+                
                 row_pattern = re.compile(r'(\d{7,}).*?(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}).*?(\d+)\s*\+\s*(\d+)\s*\+\s*(\d+)\s*=\s*(\d+)')
 
                 records = []
@@ -148,14 +150,14 @@ def worker_for_type(t_type):
                                 send_telegram_message(TELEGRAM_CONFIG[t_type]["token"], TELEGRAM_CONFIG[t_type]["chat_id"], cd_msg, cfg["name"])
                 else:
                     if BOT_STATE[t_type]["last_period"] == "":
-                        print(f"⚠️【{cfg['name']}】抓取成功，但正则未能匹配到数据。网页长度: {len(plain_text)}")
+                        print(f"⚠️【{cfg['name']}】页面抓取成功，但未解析出数据！")
 
         except Exception as e:
             print(f"⚠️【{cfg['name']}】网页抓取异常: {e}")
         
         time.sleep(1)
 
-# ================== Web 路由模块 (网页和接口保持原样) ==================
+# ================== Web 路由模块 ==================
 class RequestHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         try:
@@ -238,6 +240,7 @@ class RequestHandler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
         pass
 
+# ================== 网页前端代码 ==================
 HTML_PAGE = """
 <!DOCTYPE html>
 <html lang="zh-CN">
