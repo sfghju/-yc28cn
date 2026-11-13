@@ -15,8 +15,11 @@ PORT = int(os.environ.get("PORT", 8888))
 
 # ================== 【电报机器人配置】 ==================
 TELEGRAM_CONFIG = {
-    "2": {"token": "9025598598:AAG8f9OiSxhHmdzephHub_OpPidk2_mq8ss", "chat_id": "8770794344", "name": "加拿大28"},
+    # 加拿大换成了你刚申请的最新 Token
+    "2": {"token": "9292163726:AAHCKiTKTfJ55yK0dFqET8vOvSHyp3BYiQq", "chat_id": "8770794344", "name": "加拿大28"},
+    # 分分保持不变
     "3": {"token": "9059984335:AAHDutIGL7RDXWIPpEJ5Opjhj_Q8fBn-eVI", "chat_id": "8770794344", "name": "分分28"}, 
+    # 比特保持不变
     "13": {"token": "9013441843:AAHrZhx3yvgwOsHp8k7MrzASaNEcNSgUgK0", "chat_id": "8770794344", "name": "比特28"}
 }
 
@@ -60,7 +63,7 @@ def send_telegram_message(token, chat_id, text):
     except Exception as e:
         print(f"❌ 发送失败: {e}")
 
-# ================== 独立抓取与播报线程（解决两个不播报的问题） ==================
+# ================== 独立抓取与播报线程 ==================
 def worker_for_type(t_type):
     cfg = TYPE_MAP[t_type]
     print(f"🚀 电报机器人 [{cfg['name']}] 独立监控线程已启动")
@@ -126,16 +129,21 @@ def worker_for_type(t_type):
                         )
                         send_telegram_message(TELEGRAM_CONFIG[t_type]["token"], TELEGRAM_CONFIG[t_type]["chat_id"], msg)
                     
-                    # 2. 独立判定最后5秒倒计时跳动
+                    # 2. 判定倒计时跳动
                     else:
                         if next_draw_time:
-                            # 严格按照北京时间校准
                             now_utc = datetime.now(timezone.utc)
                             dt_next = datetime.strptime(next_draw_time, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc) - timedelta(hours=8)
                             diff = int((dt_next - now_utc).total_seconds())
                             
-                            # 如果在 1~5 秒内，并且和上一次发的秒数不同，才发消息（防刷屏，每秒必达）
-                            if 1 <= diff <= 5 and BOT_STATE[t_type]["last_cd_sec"] != diff:
+                            # 10秒提醒
+                            if diff == 10 and BOT_STATE[t_type]["last_cd_sec"] != 10:
+                                BOT_STATE[t_type]["last_cd_sec"] = 10
+                                cd_msg = f"⏳【{cfg['name']}】距离下一期开奖还有10秒，请注意时间！"
+                                send_telegram_message(TELEGRAM_CONFIG[t_type]["token"], TELEGRAM_CONFIG[t_type]["chat_id"], cd_msg)
+                            
+                            # 最后 5、4、3、2、1 秒播报
+                            elif 1 <= diff <= 5 and BOT_STATE[t_type]["last_cd_sec"] != diff:
                                 BOT_STATE[t_type]["last_cd_sec"] = diff
                                 cd_msg = f"⏳【{cfg['name']}】距离下一期开奖，还剩 {diff} 秒！"
                                 send_telegram_message(TELEGRAM_CONFIG[t_type]["token"], TELEGRAM_CONFIG[t_type]["chat_id"], cd_msg)
@@ -160,7 +168,6 @@ class RequestHandler(BaseHTTPRequestHandler):
                 if path != '/favicon.ico': self.wfile.write(HTML_PAGE.encode('utf-8'))
                 return
 
-            # 站长明文专属接口
             if path in ["/vipQQWW9983/8626/0549CASWWW", "/vipQQWW9986/8626/0549CFKFGH", "/vipQQWW9983/8626/0549CCBDR"]:
                 t_type = query.get('type', ['2'])[0]
                 payload = CACHE_DATA.get(t_type, {})
@@ -171,7 +178,6 @@ class RequestHandler(BaseHTTPRequestHandler):
                 self.wfile.write(json.dumps(payload, ensure_ascii=False, indent=4).encode('utf-8'))
                 return
 
-            # 网页防抓包通道
             if path == SECURE_API_PATH:
                 referer = self.headers.get('Referer', '')
                 user_agent = self.headers.get('User-Agent', '')
@@ -439,7 +445,7 @@ HTML_PAGE = """
 """
 
 if __name__ == '__main__':
-    # 启动三个独立的监控线程（解决加拿大和比特无响应的问题）
+    # 启动三个独立的监控线程
     for t in TYPE_MAP.keys():
         threading.Thread(target=worker_for_type, args=(t,), daemon=True).start()
         time.sleep(0.5)
