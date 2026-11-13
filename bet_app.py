@@ -27,12 +27,12 @@ ODDS = {
     'triple': 88.0, 'extreme': 16.0, 'straight': 16.0, 'pair': 3.6
 }
 
+# 内存状态
 LIVE_DATA = {
-    "2": {"period": "", "next_period": "", "next_time": 0, "nums": [], "total": 0, "status": "loading"},
-    "3": {"period": "", "next_period": "", "next_time": 0, "nums": [], "total": 0, "status": "loading"},
-    "13": {"period": "", "next_period": "", "next_time": 0, "nums": [], "total": 0, "status": "loading"}
+    "2": {"period": "", "next_period": "", "left_time": 0, "nums": [], "total": 0, "status": "loading", "history": []},
+    "3": {"period": "", "next_period": "", "left_time": 0, "nums": [], "total": 0, "status": "loading", "history": []},
+    "13": {"period": "", "next_period": "", "left_time": 0, "nums": [], "total": 0, "status": "loading", "history": []}
 }
-
 REPORTED_PERIODS = {"2": "", "3": "", "13": ""}
 
 # ================== 数据库 ==================
@@ -52,7 +52,6 @@ def init_db():
             bet_type TEXT, bet_value TEXT, amount REAL, odds REAL, status TEXT DEFAULT 'pending',
             win_amount REAL DEFAULT 0.0, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )''')
-        # 消息表 (game_type='CS' 代表客服私聊)
         conn.execute('''CREATE TABLE IF NOT EXISTS messages (
             id INTEGER PRIMARY KEY AUTOINCREMENT, game_type TEXT, user_id INTEGER, role TEXT, 
             content TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -138,32 +137,53 @@ def settle_bets(game_type, period, nums, total):
 def fetch_loop():
     ctx = ssl._create_unverified_context()
     while True:
-        now = time.time()
         for g_type, cfg in GAMES.items():
             try:
                 req = urllib.request.Request(cfg['url'], headers={'User-Agent': 'Mozilla/5.0'})
                 with urllib.request.urlopen(req, timeout=10, context=ctx) as resp:
                     data = json.loads(resp.read().decode('utf-8'))
                     if data.get('data'):
-                        latest = data['data'][0]
+                        latest_data = data['data']
+                        latest = latest_data[0]
                         
+                        # 构建走势图历史
+                        history = []
+                        for item in latest_data[:15]:
+                            history.append({"period": item['period'][-3:], "total": item['total'], "attr": f"{item['big_small']}{item['odd_even']}"})
+                        
+                        # 判断新期
                         if LIVE_DATA[g_type]['period'] != latest['period']:
-                            draw_dt = datetime.strptime(latest['draw_time'], "%Y-%m-%d %H:%M:%S")
-                            next_dt = draw_dt + timedelta(seconds=cfg['interval'])
-                            
+                            # 结算上期
                             if LIVE_DATA[g_type]['period'] != "":
-                                settle_bets(g_type, latest['period'], [latest['num1'], latest['num2'], latest['num3']], latest['total'])
+                                settle_bets(g_type, LIVE_DATA[g_type]['period'], LIVE_DATA[g_type]['nums'], LIVE_DATA[g_type]['total'])
                                 
                             LIVE_DATA[g_type] = {
                                 "period": latest['period'],
                                 "next_period": str(int(latest['period']) + 1),
-                                "next_time": next_dt.timestamp(),
+                                "left_time": cfg['interval'],
                                 "nums": [latest['num1'], latest['num2'], latest['num3']],
-                                "total": latest['total']
+                                "total": latest['total'],
+                                "history": history
                             }
                         
-                        close_time = LIVE_DATA[g_type]['next_time'] - cfg['close_sec']
-                        if now >= close_time:
+                        # 核心：精准计算剩余秒数，按接口给出的时间对齐
+                        # 因为接口有延迟，我们直接按抓取到的瞬间开始倒计时 interval 秒
+                        draw_dt = datetime.strptime(latest['draw_time'], "%Y-%m-%d %H:%M:%S")
+                        # 服务器可能是 UTC，但不管怎样，差值计算是相对的
+                        now_utc = datetime.utcnow()
+                        
+                        # 如果接口刚好发了新的一期，重置倒计时
+                        if LIVE_DATA[g_type]['period'] != latest['period']:
+                             LIVE_DATA[g_type]['left_time'] = cfg['interval']
+                        else:
+                             # 根据时间差动态修正
+                             # 接口时间是北京时间，减去8小时得到 UTC
+                             target_utc = draw_dt - timedelta(hours=8) + timedelta(seconds=cfg['interval'])
+                             diff = (target_utc - now_utc).total_seconds()
+                             LIVE_DATA[g_type]['left_time'] = max(0, int(diff))
+                        
+                        # 封盘逻辑
+                        if LIVE_DATA[g_type]['left_time'] <= cfg['close_sec']:
                             LIVE_DATA[g_type]['status'] = "封盘中"
                             if REPORTED_PERIODS[g_type] != LIVE_DATA[g_type]['next_period']:
                                 REPORTED_PERIODS[g_type] = LIVE_DATA[g_type]['next_period']
@@ -171,9 +191,9 @@ def fetch_loop():
                         else:
                             LIVE_DATA[g_type]['status'] = "下注中"
                             
-            except Exception:
+            except Exception as e:
                 pass
-        time.sleep(2)
+        time.sleep(1.5)
 
 threading.Thread(target=fetch_loop, daemon=True).start()
 
@@ -189,7 +209,7 @@ def api_bet():
     data = request.json
     g_type = data['game_type']
     
-    if time.time() > (LIVE_DATA[g_type]['next_time'] - GAMES[g_type]['close_sec']):
+    if LIVE_DATA[g_type]['left_time'] <= GAMES[g_type]['close_sec']:
         return jsonify({"success": False, "msg": "已封盘，停止下注"})
     
     with get_db() as conn:
@@ -231,6 +251,13 @@ def api_cs():
         msgs = conn.execute("SELECT * FROM messages WHERE game_type='CS' AND user_id=? ORDER BY id DESC LIMIT 20", (uid,)).fetchall()
     return jsonify([dict(m) for m in msgs])
 
+@app.route('/api/my_bets')
+def api_my_bets():
+    if 'user_id' not in session: return jsonify([])
+    with get_db() as conn:
+        bets = conn.execute("SELECT * FROM bets WHERE user_id=? ORDER BY id DESC LIMIT 20", (session['user_id'],)).fetchall()
+    return jsonify([dict(b) for b in bets])
+
 # ================== 页面路由 ==================
 @app.route('/login', methods=['GET', 'POST'])
 def login():
@@ -244,7 +271,6 @@ def login():
                 session['role'] = user['role']
                 session['username'] = user['username']
                 session['nickname'] = user['nickname']
-                # 如果是管理员，登录后直接跳后台
                 return redirect('/admin' if user['role'] == 'admin' else '/')
         return "<script>alert('账号或密码错误');history.back();</script>"
     return render_template_string(HTML_LOGIN)
@@ -294,7 +320,6 @@ def game_page(g_type):
         user = conn.execute("SELECT * FROM users WHERE id=?", (session['user_id'],)).fetchone()
     return render_template_string(HTML_GAME, g_type=g_type, game_name=GAMES[g_type]['name'], user=user, session=session)
 
-# 后台管理路由 (独立网址)
 @app.route('/admin', methods=['GET', 'POST'])
 def admin():
     if session.get('role') != 'admin': return "拒绝访问"
@@ -417,6 +442,15 @@ HTML_GAME = BASE_CSS + """
     .game-header { background: #00a2ff; color: #fff; padding: 10px 15px; display: flex; align-items: center; justify-content: space-between; position: sticky; top: 0; z-index: 10;}
     .game-header a { color: #fff; text-decoration: none; font-size: 20px; }
     .info-bar { background: #fff; padding: 10px; display: flex; justify-content: space-between; border-bottom: 1px solid #eee; }
+    
+    /* 走势图 */
+    .trend-box { background: #fff; padding: 8px 10px; display: flex; gap: 10px; overflow-x: auto; border-bottom: 1px solid #eee; white-space: nowrap; }
+    .trend-item { display: flex; flex-direction: column; align-items: center; font-size: 11px; min-width: 35px; }
+    .trend-ball { width: 24px; height: 24px; border-radius: 50%; background: #00a2ff; color: #fff; line-height: 24px; text-align: center; font-size: 12px; font-weight: bold; margin: 2px 0; }
+    .trend-ball.red { background: #ff3b30; }
+    .trend-ball.blue { background: #5ac8fa; }
+    .trend-attr { color: #888; }
+
     .chat-area { background: #f9f9f9; height: 35vh; overflow-y: auto; padding: 10px; display: flex; flex-direction: column; gap: 10px; }
     .msg { display: flex; gap: 8px; font-size: 14px; }
     .msg.robot { background: #fff; padding: 10px; border-radius: 8px; border: 1px solid #e0e0e0; font-family: monospace; white-space: pre-wrap; color: #333; }
@@ -427,20 +461,27 @@ HTML_GAME = BASE_CSS + """
     .bet-panel { background: #fff; padding: 10px; border-top: 1px solid #ddd; }
     .input-bar { display: flex; gap: 10px; margin-bottom: 10px; }
     .input-bar input { flex: 1; padding: 10px; border: 1px solid #ccc; border-radius: 4px; font-size: 16px; outline: none; }
-    .input-bar button { width: 80px; background: #ddd; border: none; border-radius: 4px; color: #666; font-weight: bold; cursor: pointer; }
     
-    .keyboard { display: grid; grid-template-columns: repeat(5, 1fr); gap: 5px; }
-    .key { background: #fff; border: 1px solid #ddd; border-radius: 4px; padding: 10px 0; text-align: center; cursor: pointer; display: flex; flex-direction: column; justify-content: center; align-items: center; user-select: none; }
-    .key:active { background: #e6f2ff; border-color: #00a2ff; }
-    .key-title { font-size: 16px; font-weight: bold; color: #333; }
-    .key-odds { font-size: 11px; color: #888; margin-top: 2px; }
-    .key-special { background: #f0f0f0; }
-    .key-confirm { background: #00a2ff; color: #fff; grid-column: span 2; border-color: #00a2ff; }
-    .key-confirm .key-title { color: #fff; font-size: 18px; }
-    .key-cancel { background: #ff3b30; color: #fff; border-color: #ff3b30; }
-    .key-cancel .key-title { color: #fff; }
-
-    /* 客服悬浮窗 */
+    /* 还原图6键盘 */
+    .kbd { display: flex; flex-direction: column; gap: 4px; }
+    .kbd-row { display: flex; gap: 4px; }
+    .k-btn { flex: 1; background: #fff; border: 1px solid #ddd; border-radius: 4px; padding: 8px 0; text-align: center; cursor: pointer; user-select: none; display: flex; flex-direction: column; justify-content: center; align-items: center; }
+    .k-btn:active { background: #e6f2ff; border-color: #00a2ff; }
+    .k-t { font-size: 16px; font-weight: bold; color: #333; }
+    .k-t.num { color: #00a2ff; font-size: 20px; }
+    .k-o { font-size: 11px; color: #888; }
+    
+    .k-gray { background: #aeb9c5; color: #fff; border-color: #aeb9c5; }
+    .k-gray .k-t { color: #fff; }
+    .k-blue { background: #00a2ff; border-color: #00a2ff; }
+    .k-blue .k-t { color: #fff; font-size: 18px; }
+    .k-red { background: #ff3b30; border-color: #ff3b30; }
+    .k-red .k-t { color: #fff; }
+    
+    /* 客服与功能按钮 */
+    .action-btns { display: flex; justify-content: space-around; background: #fff; padding: 10px 0; border-bottom: 1px solid #eee; }
+    .act-btn { font-size: 14px; color: #00a2ff; cursor: pointer; text-decoration: none; }
+    
     #cs-btn { position: fixed; bottom: 80px; right: 20px; width: 50px; height: 50px; background: #00a2ff; color: #fff; border-radius: 50%; box-shadow: 0 4px 10px rgba(0,0,0,0.2); display: flex; justify-content: center; align-items: center; font-size: 24px; cursor: pointer; z-index: 999; }
     #cs-panel { display: none; position: fixed; bottom: 0; right: 0; width: 100%; max-width: 400px; height: 60vh; background: #f0f2f5; z-index: 1000; border-top-left-radius: 12px; border-top-right-radius: 12px; box-shadow: 0 -2px 10px rgba(0,0,0,0.1); flex-direction: column; }
     .cs-header { padding: 12px; background: #00a2ff; color: #fff; border-top-left-radius: 12px; border-top-right-radius: 12px; display: flex; justify-content: space-between; font-weight: bold; }
@@ -449,7 +490,11 @@ HTML_GAME = BASE_CSS + """
     .cs-msg { max-width: 80%; padding: 8px 12px; border-radius: 8px; font-size: 14px; }
     .cs-msg.me { background: #00a2ff; color: #fff; align-self: flex-end; border-bottom-right-radius: 0; }
     .cs-msg.other { background: #fff; color: #333; align-self: flex-start; border-bottom-left-radius: 0; }
-    .cs-msg img { max-width: 100%; border-radius: 4px; }
+
+    /* 弹窗遮罩 */
+    .modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 2000; justify-content: center; align-items: center; }
+    .modal-content { background: #fff; width: 90%; max-width: 400px; max-height: 80vh; border-radius: 8px; padding: 20px; overflow-y: auto; position: relative; }
+    .close-modal { position: absolute; top: 10px; right: 15px; font-size: 20px; cursor: pointer; color: #888; }
 </style>
 
 <div class="game-header">
@@ -471,60 +516,69 @@ HTML_GAME = BASE_CSS + """
     </div>
 </div>
 
+<!-- 近期走势 -->
+<div class="trend-box" id="trend-box"></div>
+
+<!-- 功能按钮 -->
+<div class="action-btns">
+    <a href="javascript:void(0)" class="act-btn" onclick="openModal('modal-odds')">📖 赔率说明</a>
+    <a href="javascript:void(0)" class="act-btn" onclick="fetchMyBets()">📋 我的账单</a>
+</div>
+
 <div class="chat-area" id="chat-box"></div>
 
 <div class="bet-panel">
     <div class="input-bar">
-        <input type="text" id="bet-input" placeholder="请编辑下注内容..." readonly>
-        <button onclick="cancelInput()">取消</button>
+        <input type="text" id="bet-input" placeholder="可点击下方键盘，也可直接打字输入 (如: 大:100)">
     </div>
     
-    <div class="keyboard">
-        <div class="key key-special" onclick="addBet('豹子', 88)"><span class="key-title">豹子</span><span class="key-odds">88.00</span></div>
-        <div class="key key-special" onclick="addBet('顺子', 16)"><span class="key-title">顺子</span><span class="key-odds">16.00</span></div>
-        <div class="key key-special" onclick="addBet('对子', 3.6)"><span class="key-title">对子</span><span class="key-odds">3.60</span></div>
-        <div class="key" onclick="addBet('0', 960)"><span class="key-title">0</span><span class="key-odds">960</span></div>
-        <div class="key" onclick="addBet('1', 320)"><span class="key-title">1</span><span class="key-odds">320</span></div>
-        
-        <div class="key" onclick="addBet('大', 2.8)"><span class="key-title">大</span><span class="key-odds">2.80</span></div>
-        <div class="key" onclick="addBet('2', 160)"><span class="key-title">2</span><span class="key-odds">160</span></div>
-        <div class="key" onclick="addBet('3', 97)"><span class="key-title">3</span><span class="key-odds">97</span></div>
-        <div class="key" onclick="addBet('4', 64.5)"><span class="key-title">4</span><span class="key-odds">64.5</span></div>
-        <div class="key" onclick="addBet('大单', 6.3)"><span class="key-title">大单</span><span class="key-odds">6.30</span></div>
-        
-        <div class="key" onclick="addBet('小', 2.8)"><span class="key-title">小</span><span class="key-odds">2.80</span></div>
-        <div class="key" onclick="addBet('5', 46.5)"><span class="key-title">5</span><span class="key-odds">46.5</span></div>
-        <div class="key" onclick="addBet('6', 35)"><span class="key-title">6</span><span class="key-odds">35</span></div>
-        <div class="key" onclick="addBet('7', 27.2)"><span class="key-title">7</span><span class="key-odds">27.2</span></div>
-        <div class="key" onclick="addBet('大双', 6.7)"><span class="key-title">大双</span><span class="key-odds">6.70</span></div>
-        
-        <div class="key" onclick="addBet('单', 2.8)"><span class="key-title">单</span><span class="key-odds">2.80</span></div>
-        <div class="key" onclick="addBet('8', 22)"><span class="key-title">8</span><span class="key-odds">22</span></div>
-        <div class="key" onclick="addBet('9', 18)"><span class="key-title">9</span><span class="key-odds">18</span></div>
-        <div class="key" onclick="addBet('10', 15.8)"><span class="key-title">10</span><span class="key-odds">15.8</span></div>
-        <div class="key" onclick="addBet('小单', 6.3)"><span class="key-title">小单</span><span class="key-odds">6.30</span></div>
-        
-        <div class="key" onclick="addBet('双', 2.8)"><span class="key-title">双</span><span class="key-odds">2.80</span></div>
-        <div class="key" onclick="addBet('11', 14.4)"><span class="key-title">11</span><span class="key-odds">14.4</span></div>
-        <div class="key" onclick="addBet('12', 13.6)"><span class="key-title">12</span><span class="key-odds">13.6</span></div>
-        <div class="key" onclick="addBet('13', 13.3)"><span class="key-title">13</span><span class="key-odds">13.3</span></div>
-        <div class="key" onclick="addBet('小双', 6.7)"><span class="key-title">小双</span><span class="key-odds">6.70</span></div>
-        
-        <div class="key" onclick="addBet('极大', 16)"><span class="key-title">极大</span><span class="key-odds">16.0</span></div>
-        <div class="key key-confirm" onclick="submitBet()"><span class="key-title">确认下注</span></div>
-        <div class="key key-cancel" onclick="cancelAllBet()"><span class="key-title">取消全部</span></div>
-        <div class="key" onclick="addBet('极小', 16)"><span class="key-title">极小</span><span class="key-odds">16.0</span></div>
-        <div class="key" style="visibility: hidden;"></div>
+    <!-- 高仿图6键盘 -->
+    <div class="kbd">
+        <div class="kbd-row">
+            <div class="k-btn k-gray" onclick="cancelInput()"><span class="k-t">取消下注</span></div>
+            <div class="k-btn" onclick="addBet('豹子', 88)"><span class="k-t">豹子</span><span class="k-o">88.00</span></div>
+            <div class="k-btn" onclick="addBet('顺子', 16)"><span class="k-t">顺子</span><span class="k-o">16.00</span></div>
+            <div class="k-btn" onclick="addBet('对子', 3.6)"><span class="k-t">对子</span><span class="k-o">3.60</span></div>
+            <div class="k-btn k-gray" onclick="backspace()"><span class="k-t">⌫</span></div>
+        </div>
+        <div class="kbd-row">
+            <div class="k-btn" onclick="addBet('大', 2.8)"><span class="k-t">大</span><span class="k-o">2.80</span></div>
+            <div class="k-btn" onclick="addBet('1', 320)"><span class="k-t num">1</span><span class="k-o">320</span></div>
+            <div class="k-btn" onclick="addBet('2', 160)"><span class="k-t num">2</span><span class="k-o">160</span></div>
+            <div class="k-btn" onclick="addBet('3', 97)"><span class="k-t num">3</span><span class="k-o">97</span></div>
+            <div class="k-btn" onclick="addBet('大单', 6.3)"><span class="k-t">大单</span><span class="k-o">6.30</span></div>
+        </div>
+        <div class="kbd-row">
+            <div class="k-btn" onclick="addBet('小', 2.8)"><span class="k-t">小</span><span class="k-o">2.80</span></div>
+            <div class="k-btn" onclick="addBet('4', 64.5)"><span class="k-t num">4</span><span class="k-o">64.5</span></div>
+            <div class="k-btn" onclick="addBet('5', 46.5)"><span class="k-t num">5</span><span class="k-o">46.5</span></div>
+            <div class="k-btn" onclick="addBet('6', 35)"><span class="k-t num">6</span><span class="k-o">35</span></div>
+            <div class="k-btn" onclick="addBet('大双', 6.7)"><span class="k-t">大双</span><span class="k-o">6.70</span></div>
+        </div>
+        <div class="kbd-row">
+            <div class="k-btn" onclick="addBet('单', 2.8)"><span class="k-t">单</span><span class="k-o">2.80</span></div>
+            <div class="k-btn" onclick="addBet('7', 27.2)"><span class="k-t num">7</span><span class="k-o">27.2</span></div>
+            <div class="k-btn" onclick="addBet('8', 22)"><span class="k-t num">8</span><span class="k-o">22</span></div>
+            <div class="k-btn" onclick="addBet('9', 18)"><span class="k-t num">9</span><span class="k-o">18</span></div>
+            <div class="k-btn" onclick="addBet('小单', 6.3)"><span class="k-t">小单</span><span class="k-o">6.30</span></div>
+        </div>
+        <div class="kbd-row">
+            <div class="k-btn" onclick="addBet('双', 2.8)"><span class="k-t">双</span><span class="k-o">2.80</span></div>
+            <div class="k-btn" onclick="addBet('极大', 16)"><span class="k-t">极大</span><span class="k-o">16.0</span></div>
+            <div class="k-btn" onclick="addBet('0', 960)"><span class="k-t num">0</span><span class="k-o">960</span></div>
+            <div class="k-btn" onclick="addBet('极小', 16)"><span class="k-t">极小</span><span class="k-o">16.0</span></div>
+            <div class="k-btn" onclick="addBet('小双', 6.7)"><span class="k-t">小双</span><span class="k-o">6.70</span></div>
+        </div>
+        <div class="kbd-row" style="margin-top:4px;">
+            <div class="k-btn k-blue" onclick="submitBet()" style="flex: 3;"><span class="k-t">确认下注</span></div>
+        </div>
     </div>
 </div>
 
-<!-- 客服悬浮按钮与面板 -->
+<!-- 客服悬浮 -->
 <div id="cs-btn" onclick="toggleCS()">💬</div>
 <div id="cs-panel">
-    <div class="cs-header">
-        <span>联系在线客服</span>
-        <span onclick="toggleCS()" style="cursor:pointer;">✖</span>
-    </div>
+    <div class="cs-header"><span>联系在线客服</span><span onclick="toggleCS()" style="cursor:pointer;">✖</span></div>
     <div class="cs-body" id="cs-body"></div>
     <div class="cs-footer">
         <input type="file" id="cs-img" accept="image/*" style="display:none;" onchange="sendCSImg()">
@@ -534,17 +588,72 @@ HTML_GAME = BASE_CSS + """
     </div>
 </div>
 
+<!-- 弹窗：赔率说明 -->
+<div id="modal-odds" class="modal">
+    <div class="modal-content">
+        <span class="close-modal" onclick="closeModal('modal-odds')">✖</span>
+        <h3 style="text-align:center; margin-bottom:15px;">赔率说明</h3>
+        <div style="font-size:13px; line-height:1.8; color:#555;">
+            <p>💵0/27=960倍 | 1/26=320倍</p>
+            <p>💵2/25=160倍 | 3/24=97倍</p>
+            <p>💵4/23=64.5倍 | 5/22=46.5倍</p>
+            <p>💵6/21=35倍 | 7/20=27.2倍</p>
+            <p>💵8/19=22倍 | 9/18=18倍</p>
+            <p>💵10/17=15.8倍 | 11/16=14.4倍</p>
+            <p>💵12/15=13.6倍 | 13/14=13.3倍</p>
+            <p style="margin-top:10px;">🈵大小单双=2.8倍</p>
+            <p>🈵大单/小双 6.30倍</p>
+            <p>🈵大双/小单 6.70倍</p>
+            <p>⚠️遇13/14 对子 顺子 豹子中奖回本金</p>
+            <p>🔶豹子88倍 | 🔷极值16倍</p>
+            <p>🔶顺子16倍 | 🔷对子3.60倍</p>
+            <p style="margin-top:15px; font-weight:bold; color:#ff3b30; text-align:center;">最终解释权归舰长平台所有</p>
+        </div>
+    </div>
+</div>
+
+<!-- 弹窗：我的账单 -->
+<div id="modal-bets" class="modal">
+    <div class="modal-content">
+        <span class="close-modal" onclick="closeModal('modal-bets')">✖</span>
+        <h3 style="text-align:center; margin-bottom:15px;">近期账单</h3>
+        <table style="width:100%; border-collapse:collapse; font-size:12px; text-align:center;">
+            <tr style="background:#f5f5f5;"><th>期号</th><th>内容</th><th>金额</th><th>状态</th></tr>
+            <tbody id="bets-table-body"></tbody>
+        </table>
+    </div>
+</div>
+
 <script>
     const G_TYPE = "{{ g_type }}";
     let liveData = null;
     let currentBet = {};
     let csOpened = false;
-    
+
+    // 弹窗逻辑
+    function openModal(id) { document.getElementById(id).style.display = 'flex'; }
+    function closeModal(id) { document.getElementById(id).style.display = 'none'; }
+    function fetchMyBets() {
+        fetch('/api/my_bets').then(r=>r.json()).then(data => {
+            let tbody = document.getElementById('bets-table-body');
+            tbody.innerHTML = '';
+            if(data.length === 0) { tbody.innerHTML = '<tr><td colspan="4">暂无记录</td></tr>'; }
+            data.forEach(b => {
+                let cls = b.status === 'win' ? 'green' : (b.status === 'lose' ? 'red' : '');
+                let win_amt = b.status === 'win' ? b.win_amount : '-';
+                tbody.innerHTML += `<tr style="border-bottom:1px solid #eee;"><td>${b.period}</td><td>${b.bet_value}</td><td>${b.amount}</td><td class="${cls}">${win_amt}</td></tr>`;
+            });
+            openModal('modal-bets');
+        });
+    }
+
+    // 获取走势与实时数据
     function fetchLive() {
         fetch('/api/live/' + G_TYPE).then(r => r.json()).then(d => {
             liveData = d;
             document.getElementById('next-period').innerText = d.next_period;
             document.getElementById('cur-period').innerText = d.period;
+            
             if(d.nums.length === 3) {
                 document.getElementById('cur-nums').innerHTML = d.nums.map(n => `<span style="display:inline-block; width:24px; height:24px; line-height:24px; border-radius:50%; background:#00a2ff; color:#fff; text-align:center; font-size:14px; margin:0 2px;">${n}</span>`).join(' + ');
                 document.getElementById('cur-total').innerText = d.total;
@@ -552,23 +661,48 @@ HTML_GAME = BASE_CSS + """
                 attr += d.total % 2 === 0 ? '双' : '单';
                 document.getElementById('cur-attr').innerText = attr;
             }
+            
+            // 渲染走势图
+            if(d.history && d.history.length > 0) {
+                let trendHtml = '';
+                d.history.forEach(item => {
+                    let color = item.attr.includes('大') ? 'red' : 'blue';
+                    trendHtml += `<div class="trend-item"><span class="trend-attr">${item.period}</span><div class="trend-ball ${color}">${item.total}</div><span class="trend-attr">${item.attr}</span></div>`;
+                });
+                document.getElementById('trend-box').innerHTML = trendHtml;
+            }
+            
             document.getElementById('status-text').innerText = d.status;
         });
     }
     setInterval(fetchLive, 2000); fetchLive();
-    
+
+    // 精准倒计时（本地递减）
     setInterval(() => {
-        if(!liveData || !liveData.next_time) return;
-        let now = Date.now() / 1000;
-        let leftDraw = Math.max(0, Math.floor(liveData.next_time - now));
+        if(!liveData || liveData.left_time === undefined) return;
+        
+        // 本地时间流逝
+        liveData.left_time -= 1;
+        if(liveData.left_time < 0) liveData.left_time = 0;
+        
+        let leftDraw = liveData.left_time;
         let closeLimit = G_TYPE === '2' ? 30 : 5;
         let leftClose = leftDraw - closeLimit;
         
         let cdEl = document.getElementById('cd-text');
-        if(leftClose > 0) { cdEl.innerText = leftClose + "秒封盘"; }
-        else { cdEl.innerText = "已封盘"; document.getElementById('bet-input').value = "封盘中禁止下注"; }
+        if(leftClose > 0) {
+            cdEl.innerText = leftClose + "秒封盘";
+            cdEl.style.color = "#ff3b30";
+            document.getElementById('bet-input').disabled = false;
+        } else {
+            cdEl.innerText = "已封盘";
+            cdEl.style.color = "#888";
+            document.getElementById('bet-input').disabled = true;
+            document.getElementById('bet-input').value = "封盘中禁止下注";
+        }
     }, 1000);
 
+    // 聊天公屏
     function fetchChat() {
         fetch('/api/chat/' + G_TYPE).then(r => r.json()).then(msgs => {
             let box = document.getElementById('chat-box');
@@ -585,6 +719,7 @@ HTML_GAME = BASE_CSS + """
     }
     setInterval(fetchChat, 3000); fetchChat();
 
+    // 客服功能
     function toggleCS() {
         let p = document.getElementById('cs-panel');
         if(p.style.display === 'flex') { p.style.display = 'none'; csOpened = false; }
@@ -599,7 +734,7 @@ HTML_GAME = BASE_CSS + """
                 let d = document.createElement('div');
                 if(m.role === 'admin') { d.className = 'cs-msg other'; }
                 else { d.className = 'cs-msg me'; }
-                if(m.content.startsWith('data:image')) { d.innerHTML = `<img src="${m.content}">`; }
+                if(m.content.startsWith('data:image')) { d.innerHTML = `<img src="${m.content}" style="max-width:100%; border-radius:4px;">`; }
                 else { d.innerText = m.content; }
                 box.appendChild(d);
             });
@@ -624,39 +759,69 @@ HTML_GAME = BASE_CSS + """
         reader.readAsDataURL(file);
     }
 
+    // ==== 下注逻辑 ====
     function addBet(key, odds) {
-        if(liveData && Date.now()/1000 > liveData.next_time - (G_TYPE==='2'?30:5)) { return alert("已封盘，停止下注"); }
+        if(liveData && liveData.left_time <= (G_TYPE==='2'?30:5)) { return alert("已封盘，停止下注"); }
         let amount = prompt(`请输入下注【${key}】的金额:`, "10");
         if(!amount || isNaN(amount) || Number(amount) <= 0) return;
-        if(!currentBet[key]) currentBet[key] = 0;
-        currentBet[key] += Number(amount);
-        updateInputDisplay();
-    }
-    function updateInputDisplay() {
-        let strArr = [];
-        for(let k in currentBet) { strArr.push(`${k}:${currentBet[k]}`); }
-        document.getElementById('bet-input').value = strArr.join(" ");
-    }
-    function cancelInput() { currentBet = {}; document.getElementById('bet-input').value = ""; }
-    function cancelAllBet() { if(confirm("确定要取消所有尚未开奖的下注吗？")) { alert("请联系客服取消已提交的注单。"); } }
-    
-    function submitBet() {
-        if(Object.keys(currentBet).length === 0) return alert("请先选择下注内容");
-        let promises = [];
-        for(let key in currentBet) {
-            let amt = currentBet[key];
-            let type = 'num'; let odds = 0;
-            if(!isNaN(key)) { odds = ODDS_MAP[key] || 10; }
-            else if(['大','小'].includes(key)) { type='bs'; odds=2.8; }
-            else if(['单','双'].includes(key)) { type='oe'; odds=2.8; }
-            else if(key.length===2) { type='combo'; odds=key==='大单'||key==='小双'?6.3:6.7; }
-            else { type='pattern'; odds= key==='豹子'?88:(key==='顺子'||key==='极大'||key==='极小'?16:3.6); }
-            
-            promises.push(fetch('/api/bet', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({game_type: G_TYPE, bet_type: type, bet_value: key, amount: amt, odds: odds}) }).then(r=>r.json()));
+        
+        // 直接追加到输入框
+        let input = document.getElementById('bet-input');
+        let currentVal = input.value;
+        if(currentVal.includes(key + ":")) {
+             alert("请不要多次下注同一项，可修改金额后确认。");
+             return;
         }
+        
+        if(currentVal) { input.value += " " + key + ":" + amount; }
+        else { input.value = key + ":" + amount; }
+    }
+    
+    function backspace() {
+        let input = document.getElementById('bet-input');
+        input.value = input.value.slice(0, -1);
+    }
+    
+    function cancelInput() {
+        document.getElementById('bet-input').value = "";
+    }
+    
+    // 解析用户输入的下注内容并提交
+    function submitBet() {
+        let inputVal = document.getElementById('bet-input').value.trim();
+        if(!inputVal) return alert("请先输入下注内容");
+        
+        // 拆分格式: "大:100 2:50"
+        let parts = inputVal.split(/\s+/);
+        let promises = [];
+        
+        for(let part of parts) {
+            let match = part.match(/([a-zA-Z\u4e00-\u9fa5]+|\d+)[:：](\d+(\.\d+)?)/);
+            if(match) {
+                let key = match[1];
+                let amt = parseFloat(match[2]);
+                
+                let type = 'num'; let odds = 0;
+                if(!isNaN(key)) { odds = ODDS_MAP[key] || 10; }
+                else if(['大','小'].includes(key)) { type='bs'; odds=2.8; }
+                else if(['单','双'].includes(key)) { type='oe'; odds=2.8; }
+                else if(key.length===2) { type='combo'; odds=key==='大单'||key==='小双'?6.3:6.7; }
+                else { type='pattern'; odds= key==='豹子'?88:(key==='顺子'||key==='极大'||key==='极小'?16:3.6); }
+                
+                promises.push(fetch('/api/bet', {
+                    method:'POST', headers:{'Content-Type':'application/json'},
+                    body: JSON.stringify({game_type: G_TYPE, bet_type: type, bet_value: key, amount: amt, odds: odds})
+                }).then(r=>r.json()));
+            }
+        }
+        
+        if(promises.length === 0) return alert("下注格式错误，请使用如：大:100");
+        
         Promise.all(promises).then(results => {
             if(results.every(r => r.success)) {
-                alert("下注成功！"); currentBet = {}; document.getElementById('bet-input').value = ""; fetchLive(); fetchChat();
+                alert("下注成功！");
+                document.getElementById('bet-input').value = "";
+                fetchLive(); fetchChat();
             } else { alert("部分下注失败，可能余额不足或已封盘"); }
         });
     }
