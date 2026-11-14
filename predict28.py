@@ -11,7 +11,7 @@ from flask import Flask, request, jsonify
 from datetime import datetime, timedelta
 
 app = Flask(__name__)
-SECRET_KEY = "ultimate_ai_flash_v3"
+SECRET_KEY = "ultimate_ai_flash_v4"
 
 # ================== DeepSeek 核心配置 ==================
 DEEPSEEK_API_KEY = "sk-43c18b39aeb346fc841937b30cade25b"
@@ -35,7 +35,7 @@ executor = ThreadPoolExecutor(max_workers=5)
 
 # ================== 数据库 ==================
 def db():
-    conn = sqlite3.connect('predict_ai_flash.db', timeout=30)
+    conn = sqlite3.connect('predict_ai_flash_v4.db', timeout=30)
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -55,12 +55,23 @@ def call_deepseek_ai(game_name, history, next_period):
         history_text += f"期号{next_period}-{i+1}: {h['nums']} = {h['total']} ({h['big_small']}{h['odd_even']})\n"
 
     prompt = f"""
-    【系统指令】
-    你是一个顶级的数字盘口博弈论专家与量化推演模型。当前游戏：【{game_name}】 目标期号：【{next_period}】
+    【最高指令：打破惯性，预判庄家！】
+    你是全球最顶级的博弈论专家与庄家心理侧写师。你的任务是对抗盘口，沉重打击庄家！
+    当前游戏：【{game_name}】 目标期号：【{next_period}】
     近 7 期真实盘面数据如下：
     {history_text}
 
-    【50项极度严苛的推演目标（必须逐一在后台逻辑中计算，并体现在最终分析中）】
+    【警告：严禁思维固化】
+    系统检测到你极有可能陷入固定思维，连续给出相同的预测！这是致命的！
+    你必须对每一期的极细微数据变化保持极度敏锐，严禁敷衍了事。
+
+    【核心思考模型：双向博弈与预判】
+    你必须严格在后台执行以下推演逻辑：
+    1. 【正向诱导】：顺着散户思路看，这7期数据里，庄家故意露出了什么破绽？散户会觉得下一期该出什么？
+    2. 【逆向杀猪】：如果庄家要杀散户，或者要玩“回马枪”，庄家会故意怎么开？
+    3. 【出其不意】：跳出正反局限。你要做出一个让庄家也想不到的决定，沉重打击庄家的资金池。
+
+    【50项极度严苛的推演目标（必须在后台结合正反思维全部考量）】
     1. 频次偏态分析；2. 大小极值判定；3. 单双极值判定；4. 连号断裂概率；5. 交叉共振频率；
     6. 近期形态属性；7. 回马枪战术识别；8. 均值回归引力；9. 散户跟风系数；10. 和值振幅中枢；
     11. 高位逼空陷阱；12. 奇偶失衡修复；13. 同形态回测；14. 虚假繁荣剥离；15. 动能衰减前兆；
@@ -73,19 +84,17 @@ def call_deepseek_ai(game_name, history, next_period):
     46. 认知失调破解；47. 代表性偏差过滤；48. 禀赋效应冲击；49. 多空双杀防范；50. 绝对安全垫构建。
 
     【预测规则】
-    1. 基于上述 50 个目标的极限推演，直接输出最精准的预测结果，不需写出具体计算过程。
-    2. 必须在【大单、大双、小单、小双】四个选项中：
-       - 斩杀 1 个（绝杀）
-       - 推荐 3 个作为防守组合，分别标注为：【主攻】、【防守】、【备选】。
-    3. 必须写一段 150 - 500 字的深度推演分析（不包含标点符号）。字数必须严格控制在这个区间内！分析要犀利，且必须结合近 7 期的具体期号和开奖结果。
-    4. 绝不能包含任何 Markdown 标记，必须返回纯 JSON 格式：
+    1. 必须基于“预判庄家思路”进行深度推演，绝不能敷衍。
+    2. 从【大单、大双、小单、小双】中斩杀 1 个（绝杀），推 3 个防守【主攻、防守、备选】。绝杀项必须出其不意！
+    3. 必须写一段 150 - 500 字的深度推演分析（不包含标点符号）。分析中必须明确体现出“散户正向思维”、“庄家逆向思维”以及“最终出其不意的决策”。字数严格控制在这个区间内！
+    4. 纯JSON格式返回，不带任何 markdown 标记：
 
     {{
         "kill": "大单",
         "main": "大双",
         "defend": "小单",
         "backup": "小双",
-        "analysis": "此处填入150-500字的深度分析..."
+        "analysis": "此处填入150-500字的深度正反博弈分析..."
     }}
     """
 
@@ -94,7 +103,7 @@ def call_deepseek_ai(game_name, history, next_period):
         "Content-Type": "application/json"
     }
     
-    # 开启深度思考模式（deepseek-flash + thinking: enabled + reasoning_effort: high）
+    # 开启深度思考模式，强制输出JSON格式
     data = {
         "model": "deepseek-flash",
         "messages": [
@@ -120,7 +129,7 @@ def call_deepseek_ai(game_name, history, next_period):
             rec_str = f"{parsed['main']}(主攻)、{parsed['defend']}(防守)、{parsed['backup']}(备选)"
             
             AI_STATUS["online"] = True
-            AI_STATUS["msg"] = "DeepSeek-Flash 深度思考完成"
+            AI_STATUS["msg"] = "DeepSeek-Flash 深度思考完成 (已打破惯性)"
             
             return {
                 "kill": parsed['kill'],
@@ -173,7 +182,7 @@ def fetch_loop():
                             AI_STATUS["msg"] = "DeepSeek-Flash 极速思考中..."
                             AI_STATUS["online"] = True
                             
-                            print(f"🚀 请求 DeepSeek-Flash 分析 {cfg['name']} 第 {LIVE_DATA[gt]['next']} 期 (近7期数据)...")
+                            print(f"🚀 请求 DeepSeek-Flash 分析 {cfg['name']} 第 {LIVE_DATA[gt]['next']} 期 (正反博弈模型)...")
                             
                             # 使用线程池非阻塞提交，配合 9.5 秒超时
                             future = executor.submit(call_deepseek_ai, cfg['name'], history, LIVE_DATA[gt]['next'])
@@ -244,7 +253,7 @@ def index():
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-    <title>DeepSeek-Flash 极速纯 AI 预测</title>
+    <title>DeepSeek-Flash 极速博弈预测</title>
     <style>
         * { box-sizing: border-box; }
         body { background: #f4f6f9; margin: 0; font-family: -apple-system, sans-serif; color: #333; }
@@ -291,7 +300,7 @@ def index():
     </style>
 </head>
 <body>
-    <div class="head">DeepSeek-Flash 极速纯 AI 预测</div>
+    <div class="head">DeepSeek-Flash 极速博弈预测</div>
     <div class="status" id="status"><span class="dot off"></span> AI 接口未连接</div>
     
     <div class="tabs">
@@ -331,7 +340,7 @@ def index():
 
 <script>
     let curG = '2', timer = null;
-    const KEY = "ultimate_ai_flash_v3";
+    const KEY = "ultimate_ai_flash_v4";
 
     function switchG(g, el) {
         curG = g;
