@@ -12,7 +12,7 @@ from flask import Flask, request, jsonify
 from datetime import datetime, timedelta
 
 app = Flask(__name__)
-SECRET_KEY = "mean_reversion_v38"
+SECRET_KEY = "mean_reversion_v40"
 
 GAMES = {
     "2": {"name": "加拿大28", "url": "https://yc28cn-ml1l.onrender.com/vipASDFGHJKLQQQWERTYUIOPWW9983/8626/0549CASWWW?type=2", "interval": 210},
@@ -20,11 +20,14 @@ GAMES = {
     "13": {"name": "比特28", "url": "https://yc28cn-ml1l.onrender.com/vipASDFGHJKLQQZXCVBNMWW9983/8626/0549CCBDR?type=13", "interval": 60}
 }
 
-AI_STATUS = {"online": True, "msg": "近4期均值推演中..."}
+AI_STATUS = {"online": True, "msg": "4期推演+均衡防重中..."}
 LIVE_DATA = {gt: {"period": "", "next": "", "left": 0, "history": [], "pred": None, "algo_list": []} for gt in GAMES}
 
+# 记录上期的绝杀项，用于均匀杀组防固定
+LAST_KILL_STR = {"2": "", "3": "", "13": ""}
+
 def db():
-    conn = sqlite3.connect('predict_v38.db', timeout=30)
+    conn = sqlite3.connect('predict_v40.db', timeout=30)
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -54,38 +57,34 @@ def calculate_prediction(gt, history, next_p):
     variance = ((s0 - mean_sum)**2 + (s1 - mean_sum)**2 + (s2 - mean_sum)**2 + (s3 - mean_sum)**2) / 4.0
     std_dev = math.sqrt(variance)
     
-    # 检测连续极端走势 (4连大、4连小等)
+    # 检测连续极端走势
     is_big_streak = all(h['big_small'] == '大' for h in history[:4])
     is_small_streak = all(h['big_small'] == '小' for h in history[:4])
     is_odd_streak = all(h['odd_even'] == '单' for h in history[:4])
     is_even_streak = all(h['odd_even'] == '双' for h in history[:4])
     
-    # 2. 位置极值修正推演 (基于最近两期变化)
-    # 百位
+    # 2. 位置极值修正推演
     if n0[0] - n1[0] <= -4:
         pred_A = random.randint(4, 6) 
     else:
         pred_A = n0[0]
-    # 十位
     if n0[1] - n1[1] >= 3:
         pred_B = random.randint(2, 4)
     else:
         pred_B = n0[1]
-    # 个位
     if n0[2] >= 7:
         pred_C = random.randint(4, 6)
     else:
         pred_C = n0[2]
         
-    # 3. 综合核心和值测算
-    # 利用标准差向中位回补，用4期标准差 * 1.2 作为下跌/反弹预期
-    target_sum = int(round(s0 - (std_dev * 1.2))) 
+    # 3. 综合核心和值测算 (引入四舍五入 round)
+    target_sum = round(s0 - (std_dev * 1.2))
     
     # 极端连开强制反转
     if is_big_streak:
-        target_sum = min(target_sum, 13) # 连续4期大，强制拉回小
+        target_sum = min(target_sum, 13) 
     elif is_small_streak:
-        target_sum = max(target_sum, 14) # 连续4期小，强制拉回大
+        target_sum = max(target_sum, 14) 
         
     target_sum = max(0, min(27, target_sum))
     
@@ -102,26 +101,36 @@ def calculate_prediction(gt, history, next_p):
     
     # 4. 生成杀一推三策略
     if is_big_streak:
-        kill_str = "大单" if is_odd_streak else "大双" # 绝杀连续出现的属性
+        kill_str = "大单" if is_odd_streak else "大双" 
     elif is_small_streak:
         kill_str = "小单" if is_odd_streak else "小双"
     else:
-        kill_str = "大双" if main_vote == "小单" else "小单" 
+        # 如果是震荡期，直接杀与主攻极端相反的
+        kill_str = "大双" if main_vote == "小单" else ("小单" if main_vote == "大双" else "大单" if main_vote == "小双" else "小双")
         
-    # 防守与备选
-    if pred_bs == "小":
-        defend = "大双" if pred_oe == "单" else "大单"
-        backup = "小双" if pred_oe == "单" else "小单"
-    else:
-        defend = "小单" if pred_oe == "双" else "小双"
-        backup = "大单" if pred_oe == "双" else "大双"
+    # 【禁止固定预测机制：均匀杀组】
+    if kill_str == LAST_KILL_STR[gt]:
+        # 如果跟上一期一样，强制剥夺绝杀权，按轮转顺序找下一个
+        all_options = ["大单", "大双", "小单", "小双"]
+        idx = all_options.index(kill_str)
+        kill_str = all_options[(idx + 1) % 4]
+    
+    LAST_KILL_STR[gt] = kill_str
+
+    # 【修复严重Bug：从推荐池中彻底剔除绝杀项】
+    all_options = ["大单", "大双", "小单", "小双"]
+    available_recs = [opt for opt in all_options if opt != kill_str and opt != main_vote]
+    
+    # 防御和备选从剩下的两个里挑
+    defend = available_recs[0]
+    backup = available_recs[1]
 
     # 组装推演明细
     streak_msg = "检测到4连极值，强制反转！" if (is_big_streak or is_small_streak or is_odd_streak or is_even_streak) else "走势处于震荡区间。"
     
     algo_list = [
-        {"name": "4期均值回归模型", "vote": main_vote, "detail": f"近4期均值{mean_sum:.1f}，推演核心和值约 {target_sum}"},
-        {"name": "标准差极值修正", "vote": main_vote, "detail": f"计算4期标准差 {std_dev:.2f}，触发 {streak_msg}"},
+        {"name": "4期均值回归", "vote": main_vote, "detail": f"近4期均值{mean_sum:.2f}，四舍五入推演和值 {target_sum}"},
+        {"name": "标准差极值修正", "vote": main_vote, "detail": f"4期标准差 {std_dev:.2f}，触发 {streak_msg}"},
         {"name": "位置振幅推演", "vote": main_vote, "detail": f"推演下期位置：百位{pred_A}，十位{pred_B}，个位{pred_C}"}
     ]
 
@@ -323,7 +332,7 @@ def index():
     </div>
 <script>
     let curG = '2', timer = null;
-    const KEY = "mean_reversion_v38";
+    const KEY = "mean_reversion_v40";
     
     function switchG(g, el) {
         curG = g;
