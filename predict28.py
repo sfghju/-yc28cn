@@ -11,7 +11,7 @@ from flask import Flask, request, jsonify
 from datetime import datetime, timedelta
 
 app = Flask(__name__)
-SECRET_KEY = "reverse_code_v41"
+SECRET_KEY = "follow_majority_v42"
 
 GAMES = {
     "2": {"name": "加拿大28", "url": "https://yc28cn-ml1l.onrender.com/vipASDFGHJKLQQQWERTYUIOPWW9983/8626/0549CASWWW?type=2", "interval": 210},
@@ -19,13 +19,13 @@ GAMES = {
     "13": {"name": "比特28", "url": "https://yc28cn-ml1l.onrender.com/vipASDFGHJKLQQZXCVBNMWW9983/8626/0549CCBDR?type=13", "interval": 60}
 }
 
-AI_STATUS = {"online": True, "msg": "逆向代码推演中..."}
+AI_STATUS = {"online": True, "msg": "5期跟多反少高强度测算中..."}
 LIVE_DATA = {gt: {"period": "", "next": "", "left": 0, "history": [], "pred": None, "algo_list": []} for gt in GAMES}
 
-LAST_KILL_STR = {"2": "", "3": "", "13": ""}
+LAST_KILL_STR = {"2": "", "3": "13"}
 
 def db():
-    conn = sqlite3.connect('predict_v41.db', timeout=30)
+    conn = sqlite3.connect('predict_v42.db', timeout=30)
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -35,63 +35,69 @@ with db() as conn:
         analysis TEXT, real_result TEXT DEFAULT '', status TEXT DEFAULT 'wait')''')
     conn.commit()
 
-# ================== 纯代码逆向预测引擎 ==================
+# ================== 纯频次高强度预测引擎 ==================
 def calculate_prediction(gt, history, next_p):
-    if len(history) < 4:
+    if len(history) < 5:
         return {"kill": "数据不足", "rec": "数据不足", "analysis": "等待数据...", "algo_list": []}
         
-    h0 = history[0] 
-    h1 = history[1] 
-    h2 = history[2] 
-    h3 = history[3]
+    # 提取近5期数据
+    h5 = history[:5]
+    bs_seq = [h['big_small'] for h in h5]
+    oe_seq = [h['odd_even'] for h in h5]
+
+    # 1. 大小频次统计
+    big_cnt = bs_seq.count('大')
+    small_cnt = bs_seq.count('小')
     
-    # 提取大小单双序列
-    bs_seq = [h0['big_small'], h1['big_small'], h2['big_small'], h3['big_small']]
-    oe_seq = [h0['odd_even'], h1['odd_even'], h2['odd_even'], h3['odd_even']]
-
-    # 1. 逆向思维：大小方向决断
-    if bs_seq[0] == bs_seq[1] == bs_seq[2]: # 连开3期相同
-        main_bs = "小" if bs_seq[0] == "大" else "大"
-        kill_bs = bs_seq[0]
-        reason_bs = f"近3期连开【{bs_seq[0]}】，触发极值反杀，绝杀{bs_seq[0]}，主攻{main_bs}"
-    elif bs_seq[0] == bs_seq[1]: # 连开2期
-        main_bs = "小" if bs_seq[0] == "大" else "大"
-        kill_bs = bs_seq[0]
-        reason_bs = f"近2期连开【{bs_seq[0]}】，防断龙诱盘，绝杀{bs_seq[0]}，主攻{main_bs}"
+    if big_cnt > small_cnt:
+        main_bs = "大"
+        kill_bs = "小"
+        bs_reason = f"近5期大出现{big_cnt}次，小出现{small_cnt}次。跟多反少，主攻大，绝杀小。"
+    elif small_cnt > big_cnt:
+        main_bs = "小"
+        kill_bs = "大"
+        bs_reason = f"近5期小出现{small_cnt}次，大出现{big_cnt}次。跟多反少，主攻小，绝杀大。"
     else:
-        # 跳变或交替
+        # 相同（极端情况）顺跟最新一期
         main_bs = bs_seq[0]
-        kill_bs = "小" if bs_seq[0] == "大" else "大"
-        reason_bs = f"走势呈现交替震荡，顺延上期【{bs_seq[0]}】，绝杀反向"
+        kill_bs = "小" if main_bs == "大" else "大"
+        bs_reason = f"大小频次相同(各{big_cnt}次)。顺跟最新一期方向【{main_bs}】，绝杀反向。"
 
-    # 2. 逆向思维：单双方向决断
-    if oe_seq[0] == oe_seq[1] == oe_seq[2]:
-        main_oe = "双" if oe_seq[0] == "单" else "单"
-        kill_oe = oe_seq[0]
-        reason_oe = f"近3期连开【{oe_seq[0]}】，触极必反，绝杀{oe_seq[0]}，主攻{main_oe}"
-    elif oe_seq[0] == oe_seq[1]:
-        main_oe = "双" if oe_seq[0] == "单" else "单"
-        kill_oe = oe_seq[0]
-        reason_oe = f"近2期连开【{oe_seq[0]}】，高位防范断点，绝杀{oe_seq[0]}"
+    # 2. 单双频次统计
+    odd_cnt = oe_seq.count('单')
+    even_cnt = oe_seq.count('双')
+
+    if odd_cnt > even_cnt:
+        main_oe = "单"
+        kill_oe = "双"
+        oe_reason = f"近5期单出现{odd_cnt}次，双出现{even_cnt}次。跟多反少，主攻单，绝杀双。"
+    elif even_cnt > odd_cnt:
+        main_oe = "双"
+        kill_oe = "单"
+        oe_reason = f"近5期双出现{even_cnt}次，单出现{odd_cnt}次。跟多反少，主攻双，绝杀单。"
     else:
         main_oe = oe_seq[0]
-        kill_oe = "双" if oe_seq[0] == "单" else "单"
-        reason_oe = f"单双高频震荡，顺延上期【{oe_seq[0]}】"
+        kill_oe = "双" if main_oe == "单" else "单"
+        oe_reason = f"单双频次相同(各{odd_cnt}次)。顺跟最新一期方向【{main_oe}】，绝杀反向。"
 
     # 3. 组合出主攻与绝杀
     main_vote = main_bs + main_oe
     kill_str = kill_bs + kill_oe
     
-    # 安全校验：如果因为特殊逻辑导致主攻和绝杀撞车，强行错开
+    # 防止极少数逻辑冲突导致主攻=绝杀
     if main_vote == kill_str:
         kill_str = "大单" if main_vote != "大单" else "小双"
     
-    # 防重机制：如果这期绝杀跟上期一样，强行轮换
-    if kill_str == LAST_KILL_STR[gt]:
+    # 强制轮换（防止连续多期死磕同一个绝杀）
+    if kill_str == LAST_KILL_STR.get(gt, ""):
         all_opts = ["大单", "大双", "小单", "小双"]
         current_idx = all_opts.index(kill_str)
         kill_str = all_opts[(current_idx + 1) % 4]
-    
+        
+        # 如果轮换后撞车主攻，再换一次
+        if kill_str == main_vote:
+            kill_str = all_opts[(current_idx + 2) % 4]
+            
     LAST_KILL_STR[gt] = kill_str
 
     # 4. 绝对互斥分配（修复 BUG 的核心代码）
@@ -104,15 +110,15 @@ def calculate_prediction(gt, history, next_p):
 
     # 5. 组装推演明细
     algo_list = [
-        {"name": "大小逆向推演", "vote": main_vote[0], "detail": reason_bs},
-        {"name": "单双逆向推演", "vote": main_vote[1], "detail": reason_oe},
-        {"name": "绝对互斥防线", "vote": main_vote, "detail": f"已强制剔除绝杀项，防守备选与绝杀零重合"}
+        {"name": "大小跟多反少", "vote": main_bs, "detail": bs_reason},
+        {"name": "单双跟多反少", "vote": main_oe, "detail": oe_reason},
+        {"name": "防死磕轮换机制", "vote": kill_str, "detail": "强制校验并分配互斥推荐"}
     ]
 
-    analysis = f"【纯代码逆向推演】摒弃一切虚假算法，纯逻辑杀盘。\n"
-    analysis += f"- 大小防线：{reason_bs}。\n"
-    analysis += f"- 单双防线：{reason_oe}。\n"
-    analysis += f"\n🔥 终极结论：坚决主攻【{main_vote}】，绝杀高危项【{kill_str}】！"
+    analysis = f"【5期跟多反少推演】\n"
+    analysis += f"- 大小维度：{bs_reason}\n"
+    analysis += f"- 单双维度：{oe_reason}\n"
+    analysis += f"\n🔥 综合决断：核心主攻【{main_vote}】，坚决绝杀【{kill_str}】！"
 
     return {
         "kill": kill_str, 
@@ -219,7 +225,7 @@ def index():
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-    <title>纯代码逆向推演</title>
+    <title>5期跟多反少推演</title>
     <style>
         * { box-sizing: border-box; }
         body { background: #f4f6f9; margin: 0; font-family: -apple-system, sans-serif; color: #333; }
@@ -266,7 +272,7 @@ def index():
     </style>
 </head>
 <body>
-    <div class="head">纯代码逆向推演</div>
+    <div class="head">5期跟多反少推演</div>
     <div class="status" id="status"><span class="dot"></span> 系统运转正常</div>
     <div class="tabs">
         <div class="tab on" onclick="switchG('2', this)">加拿大28</div>
@@ -282,7 +288,7 @@ def index():
     </div>
 
     <div class="api-list" id="api-box">
-        <div class="api-title" id="api-title">📡 逆向推演逻辑明细</div>
+        <div class="api-title" id="api-title">📡 频次推演逻辑明细</div>
         <div id="api-content"></div>
     </div>
 
@@ -307,7 +313,7 @@ def index():
     </div>
 <script>
     let curG = '2', timer = null;
-    const KEY = "reverse_code_v41";
+    const KEY = "follow_majority_v42";
     
     function switchG(g, el) {
         curG = g;
