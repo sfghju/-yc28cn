@@ -11,7 +11,7 @@ from flask import Flask, request, jsonify
 from datetime import datetime, timedelta
 
 app = Flask(__name__)
-SECRET_KEY = "ultimate_strict10_v26"
+SECRET_KEY = "ultimate_absolute_v27"
 
 GAMES = {
     "2": {"name": "加拿大28", "url": "https://yc28cn-ml1l.onrender.com/vipASDFGHJKLQQQWERTYUIOPWW9983/8626/0549CASWWW?type=2", "interval": 210},
@@ -19,13 +19,11 @@ GAMES = {
     "13": {"name": "比特28", "url": "https://yc28cn-ml1l.onrender.com/vipASDFGHJKLQQZXCVBNMWW9983/8626/0549CCBDR?type=13", "interval": 60}
 }
 
-AI_STATUS = {"online": True, "msg": "极速监控中..."}
+AI_STATUS = {"online": True, "msg": "顺势极速监控中..."}
 LIVE_DATA = {gt: {"period": "", "next": "", "left": 0, "history": [], "pred": None, "algo_list": []} for gt in GAMES}
 
-LAST_KILL_STR = {"2": "", "3": "", "13": ""}
-
 def db():
-    conn = sqlite3.connect('predict_strict10_v26.db', timeout=30)
+    conn = sqlite3.connect('predict_absolute_v27.db', timeout=30)
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -37,7 +35,7 @@ with db() as conn:
 
 ALGO_NAMES = {i: f"策略算法{i:03d}" for i in range(1, 101)}
 
-# ================== 算法计算库 ==================
+# ================== 核心算法库 ==================
 def run_single_algo(algo_id, h7, period, game_type):
     bs = [1 if h['big_small'] == '大' else 0 for h in h7]
     oe = [1 if h['odd_even'] == '单' else 0 for h in h7]
@@ -61,11 +59,12 @@ def run_single_algo(algo_id, h7, period, game_type):
         if algo_id in [86, 98]: score_bs = -score_bs; score_oe = -score_oe
     return ("大" if score_bs >= 0 else "小") + ("单" if score_oe >= 0 else "双")
 
-# ================== 核心预测与防重逻辑 ==================
-def calculate_dynamic_prediction(gt, history, next_p):
+# ================== 严格考核 + 顺势预测逻辑 ==================
+def calculate_prediction(gt, history, next_p):
     h20 = history[:20]
     scores = {i: 0.0 for i in range(1, 101)}
     
+    # 1. 真实回测近5期
     for i in range(5):
         test_h = h20[i : i+7]
         if len(test_h) < 7: continue
@@ -75,15 +74,16 @@ def calculate_dynamic_prediction(gt, history, next_p):
             if pred == real_res: scores[aid] += 1
             else: scores[aid] -= 1
 
+    # 2. 严格选拔出战算法
     sorted_algos = sorted(scores.items(), key=lambda x: x[1], reverse=True)
     offset = {"2": 0, "3": 20, "13": 40}[gt]
     
-    core_10 = [aid for aid, sc in sorted_algos[offset : offset+10]]
-    pool_strict = [aid for aid, sc in sorted_algos[offset+10 : offset+30]]
+    core_10 = [aid for aid, sc in sorted_algos[offset : offset+10]] # 10名主力
+    pool_strict = [aid for aid, sc in sorted_algos[offset+10 : offset+30]] # 10名新秀
     strict_10 = pool_strict[:10]
-    
     selected_algos = core_10 + strict_10
 
+    # 3. 投票统合
     votes = {"大单": 0, "大双": 0, "小单": 0, "小双": 0}
     algo_records = []
     for aid in selected_algos:
@@ -93,30 +93,23 @@ def calculate_dynamic_prediction(gt, history, next_p):
 
     sorted_v = sorted(votes.items(), key=lambda x: x[1], reverse=True)
     
-    main_atk = sorted_v[0][0] 
-    defend = sorted_v[1][0]   
-    kill_str = sorted_v[2][0] 
-    backup = sorted_v[3][0]   
-    
-    if kill_str == LAST_KILL_STR[gt]:
-        kill_str = backup  
-        backup = sorted_v[2][0]
-        if kill_str == LAST_KILL_STR[gt]:
-            kill_str = defend
-            defend = sorted_v[2][0]
-            
-    LAST_KILL_STR[gt] = kill_str
+    # 4. 纯粹信任算法：不搞防重，不搞强制干预
+    # 如果盘面没变，算法会继续给出同样的绝杀；如果盘面变了，算法自然会换。
+    main_atk = sorted_v[0][0] # 主攻最高票
+    defend = sorted_v[1][0]   # 防守次高票
+    kill_str = sorted_v[2][0] # 绝杀中等票
+    backup = sorted_v[3][0]   # 备选最低票
 
-    analysis = f"【严格考核模型】本期由 10 名连任主力 + 10 名严格考核的新锐算法出战。\n主攻指向【{main_atk}】({votes[main_atk]}票)；\n防守布置于【{defend}】({votes[defend]}票)；\n【防重机制启动】坚决规避，本期绝杀【{kill_str}】！"
+    analysis = f"【顺势预测模型】本期由 10 名主力 + 10 名严选新锐算法出战。\n主攻趋势锁定【{main_atk}】({votes[main_atk]}票)；\n防守阵型布置于【{defend}】({votes[defend]}票)；\n结合走势精准测算，本期坚决绝杀【{kill_str}】！(注：如走势未变，不排除连续绝杀)"
     return {"kill": kill_str, "rec": f"{main_atk}(主攻)、{defend}(防守)、{backup}(备选)", "analysis": analysis, "algo_list": algo_records}
 
-# ================== 抓取主循环 ==================
+# ================== 极速抓取主循环 ==================
 def fetch_loop():
     ctx = ssl._create_unverified_context()
     while True:
         for gt, cfg in GAMES.items():
             try:
-                # 加毫秒级时间戳，彻底粉碎缓存
+                # 毫秒级时间戳，杜绝缓存
                 req_url = f"{cfg['url']}&_={int(time.time()*1000)}"
                 req = urllib.request.Request(req_url, headers={'User-Agent': 'Mozilla/5.0'})
                 with urllib.request.urlopen(req, timeout=5, context=ctx) as resp:
@@ -142,7 +135,7 @@ def fetch_loop():
                                 "history": history
                             })
 
-                            pred = calculate_dynamic_prediction(gt, history, next_p)
+                            pred = calculate_prediction(gt, history, next_p)
                             LIVE_DATA[gt]['pred'] = pred
                             LIVE_DATA[gt]['algo_list'] = pred['algo_list']
                             
@@ -156,7 +149,7 @@ def fetch_loop():
                                 
             except Exception as e:
                 pass
-        time.sleep(0.1) # 极端提速：0.1 秒扫描一次接口
+        time.sleep(0.1) # 0.1 秒扫盘，开奖瞬间拉取
 
 threading.Thread(target=fetch_loop, daemon=True).start()
 
@@ -203,7 +196,7 @@ def index():
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-    <title>极速同步实战预测</title>
+    <title>顺势连杀实战预测</title>
     <style>
         * { box-sizing: border-box; }
         body { background: #f4f6f9; margin: 0; font-family: -apple-system, sans-serif; color: #333; }
@@ -231,7 +224,6 @@ def index():
         .rec-def { flex: 1; color: #0984e3; background: #e8f4f8; font-size: 16px; font-weight: bold; text-align: center; padding: 12px; border-radius: 8px;}
         .rec-bak { flex: 1; color: #636e72; background: #f1f2f6; font-size: 16px; font-weight: bold; text-align: center; padding: 12px; border-radius: 8px;}
         
-        /* 优化倒计时体验 */
         .cd-box { text-align: center; font-size: 14px; color: #636e72; margin-bottom: 10px; display: flex; align-items: center; justify-content: center;}
         .cd { font-size: 22px; color: #0984e3; font-weight: bold; margin-left: 5px;}
         .cd.danger { color: #d63031; animation: flash 0.5s infinite alternate;}
@@ -251,7 +243,7 @@ def index():
     </style>
 </head>
 <body>
-    <div class="head">极速同步实战预测</div>
+    <div class="head">顺势连杀实战预测</div>
     <div class="status" id="status"><span class="dot"></span> 系统运转正常</div>
     <div class="tabs">
         <div class="tab on" onclick="switchG('2', this)">加拿大28</div>
@@ -292,7 +284,7 @@ def index():
     </div>
 <script>
     let curG = '2', timer = null;
-    const KEY = "ultimate_strict10_v26";
+    const KEY = "ultimate_absolute_v27";
     
     function switchG(g, el) {
         curG = g;
@@ -346,11 +338,10 @@ def index():
             let left = d.left || 0;
             let cdEl = document.getElementById('cd');
             
-            // 核心修改：倒计时归零，强制展示红色高亮拉取状态！
+            // 倒计时归零，强制展示红色拉取状态，100毫秒轰炸后端拿新数据
             if(left <= 0) {
                 cdEl.innerText = "极速拉取官方开奖中...";
                 cdEl.classList.add('danger');
-                // 倒计时结束，强制高频刷新数据（100毫秒一次），轰炸后端拿新结果
                 setTimeout(fetchData, 100); 
                 return;
             }
