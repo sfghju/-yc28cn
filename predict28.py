@@ -11,7 +11,7 @@ from datetime import datetime, timedelta
 app = Flask(__name__)
 
 # ================== 核心配置 ==================
-SECRET_KEY = "deepseek_ai_pro_v7"
+SECRET_KEY = "deepseek_ai_pro_v8"
 DEEPSEEK_API_KEY = "sk-43c18b39aeb346fc841937b30cade25b"
 DEEPSEEK_API_URL = "https://api.deepseek.com/chat/completions"
 
@@ -31,7 +31,7 @@ LIVE_DATA = {
 
 # ================== 数据库 ==================
 def db():
-    conn = sqlite3.connect('predict_v7.db', timeout=30)
+    conn = sqlite3.connect('predict_v8.db', timeout=30)
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -43,62 +43,109 @@ with db() as conn:
     )''')
     conn.commit()
 
-# ================== 赋予 AI 顶级精算师灵魂 ==================
+# ================== AI 核心推演引擎 (50项深度任务) ==================
 def call_ai(gtype, game_name, history, next_period, last_status):
-    # 构建真实数据矩阵
+    # 提取近7期数据
     history_str = "".join([f"第{7-i}期:{h['nums']}={h['total']}({h['big_small']}{h['odd_even']})\n" for i, h in enumerate(history[:7])])
     
-    # 加入防连杀机制提示
+    # 计算基础连号特征 (辅助AI)
+    bs_seq = [h['big_small'] for h in history[:7]]
+    oe_seq = [h['odd_even'] for h in history[:7]]
+    bs_streak = 1
+    for i in range(1, len(bs_seq)):
+        if bs_seq[i] == bs_seq[0]: bs_streak += 1
+        else: break
+    oe_streak = 1
+    for i in range(1, len(oe_seq)):
+        if oe_seq[i] == oe_seq[0]: oe_streak += 1
+        else: break
+
+    streak_info = f"当前【大小】连开{bs_streak}期，【单双】连开{oe_streak}期。"
+    rule_hint = ""
+    if bs_streak >= 5 or oe_streak >= 5:
+        rule_hint = "【铁律】连开5期以上，极易走长龙，必须顺势跟，切莫无脑反杀，防回马枪诱空！"
+    else:
+        rule_hint = "【铁律】未达5连，重点关注冷热回补，反向杀掉热号，防庄家虚假繁荣回马枪。"
+
     warning = ""
     if last_status == 'lose':
-        warning = "【系统最高警报】：上一期我们预测失败（被庄家诱杀）。本期必须立刻切换策略，抛弃惯性思维，深度排查是否存在长龙诱多或极值反转！"
+        warning = "【最高警报】：上期预测失败，本期必须立刻变阵，打破惯性思维，深度排查长龙诱多！"
     elif last_status == 'win':
-        warning = "【系统提示】：上期精准命中。请继续保持当前敏锐度，但切忌骄傲，重新审视当前走势。"
+        warning = "【状态提示】：上期精准命中，保持状态，稳扎稳打。"
 
-    # 核心系统级 Prompt (包含你要求的 20 大深度思考维度)
+    # 严格遵循 50 个深度任务
     prompt = f"""
     【身份设定】
-    你现在是全球最顶尖的逆向博弈精算师、概率论大师。你绝不依赖运气，只相信深度博弈与反人性逻辑。
-    
-    【当前任务】
-    游戏专区：{game_name}（注意：此游戏的走势逻辑完全独立，严禁套用其他游戏的数据！）
-    预测目标：第 {next_period} 期
+    你是全球最顶尖的逆向博弈精算师。你的胜率极高，因为你不仅懂数学，更懂人性的弱点与庄家的底牌。现在，只为你提供绝对独立、没有其他游戏干扰的盘口数据。
+
+    【当前盘口】
+    游戏专区：{game_name} (与其他游戏毫无关联)
+    目标期号：{next_period}
     {warning}
     
-    【近7期实盘数据】
+    【近期实盘走势】
     {history_str}
-    
-    【核心指令】
-    在给出最终预测前，你的底层逻辑必须进行以下 20 项深度思考推演（请在分析中体现出这些维度的博弈）：
-    1. 连号惯性分析：大小或单双是否存在长龙？长龙是在延续还是在筑顶？
-    2. 单跳双跳规律：是否出现大小交替或单双交替的固定节拍？
-    3. 均值回归偏离：当前的冷热属性距离历史均值偏离了多少？
-    4. 赌徒谬误陷阱：当前大众情绪是否在无脑追热或死磕冷门？
-    5. 庄家诱盘逻辑：如果我是庄家，这一期怎么开最能收割市场？
-    6. 资金筹码分布：大单/大双/小单/小双，哪一边的筹码最重、最危险？
-    7. 极值反转信号：是否已经触发了物极必反的数学阈值？
-    8. 波动率异动：近期和值波动是收敛还是发散？
-    9. 形态对称性：当前走势图是否存在黄金分割或对称结构？
-    10. 顺逆势取舍：这一期究竟该顺势跟随（骑龙），还是该果断反杀（屠龙）？
-    11. 冷门补涨概率：连续未出的冷门属性是否积蓄了爆发力？
-    12. 盘口情绪指数：通过当前走势，洞穿散户的恐慌与贪婪区间。
-    13. 斐波那契周期：是否抵达了时间窗口的变盘节点？
-    14. 暗盘防守真空：哪个选项目前被市场完全忽略，最容易爆冷？
-    15. 阻力位与支撑位：历史开奖周期中的天然阻力区间在哪？
-    16. 异常值偏离过滤：上一期的开奖是常态还是极端异常？
-    17. 资金诱多洗盘：如果是你，如何利用惯性思维布局陷阱？
-    18. 概率重置法则：独立随机事件在连续发生后，下一期的真实数学期望。
-    19. 杀号容错率：挑选出的绝杀项，如果在极端情况下爆出，系统该如何防守？
-    20. 三维交叉验证：大小、单双、和值，三个维度是否产生同向共振？
-    
-    【输出要求】
-    1. 彻底摒弃套路化废话，必须像一个真正的人类精算师一样进行深度、硬核的逻辑推断。
-    2. 从【大单、大双、小单、小双】中，果断绝杀掉 1 个（最不可能出的），并推荐防守另外 3 个。
-    3. 生成 80 到 500 字的深度解析。分析中必须明确指出本期是采取“顺势”还是“反杀”，并引用近期的真实走势作为论据。
-    4. 绝对禁止带有任何 markdown 格式，直接返回纯 JSON 字符串。
-    
-    返回格式：
-    {{"kill":"大单", "rec":"大双、小单、小双", "analysis":"【AI核心博弈推演】...（这里写分析）"}}
+    {streak_info}
+    {rule_hint}
+
+    【50项核心深度推演任务】
+    在给出结论前，你必须在内部完成以下50项高维思考：
+    1. 连号极值与断裂点：大小或单双是否存在连号？连几期了？
+    2. 长龙跟随与回马枪：大于等于5连时，庄家是否在诱空？我们能否安全骑龙？
+    3. 单跳双跳节拍：是否出现规律性的单跳或双跳？
+    4. 均值回归与极值：当前冷热属性偏离历史均值多少？
+    5. 赌徒谬误陷阱：大众是否在死磕冷门？
+    6. 诱多与诱空：庄家当前的开奖在引诱买大还是买小？
+    7. 筹码分布：大单、大双、小单、小双，哪边筹码最重（最危险）？
+    8. 虚假繁荣：近期的热度是否是刻意营造的假象？
+    9. 时间窗口共振：当前期号是否在江恩或斐波那契变盘节点？
+    10. 顺逆势抉择：本轮究竟该跟还是反？
+    11. 振幅收敛：近期和值波动是变大还是变小？
+    12. 极端变异阈值：是否触及了物极必反的临界点？
+    13. 静默冷门：哪个选项很久没出，已积蓄爆发力？
+    14. 散户口袋：散户最习惯追什么号？我们要避开。
+    15. 大小单双的撕裂感：大小与单双是否产生矛盾？
+    16. 庄家洗盘周期：最近是否有洗盘动作？
+    17. 回马枪概率：如果杀掉热门，冷门接棒的概率有多高？
+    18. 独立随机期望：纯数学角度，下一期的最大概率项。
+    19. 容错率评估：如果绝杀项爆冷，系统能否兜底？
+    20. 三维共振验证：大小、单双、和值，是否指向同一方向？
+    21. 盘口情绪指数：贪婪还是恐慌？
+    22. 惯性陷阱：由于惯性，大众会怎么买？
+    23. 破位风险：热号是否会在此刻破位？
+    24. 区间震荡率：是否还在此前的震荡区间内？
+    25. 诱盘深度：庄家为了收割，会怎么走？
+    26. 下探支撑位：热号如果下跌，底在哪？
+    27. 上攻阻力位：冷号如果反弹，顶在哪？
+    28. 异动信号：突然的连号是否意味着趋势反转？
+    29. 死亡螺旋：如果继续反杀，会不会连败？
+    30. 连胜保护：上期赢了，这期是否该保守？
+    31. 形态学分析：K线形态是否出现吞没或反转信号？
+    32. 资金流向模拟：哪边有大资金默默入场？
+    33. 散户跟风系数：散户最爱跟哪边？
+    34. 极限施压：如果连开6期，还敢不敢反？
+    35. 周期共振：是否与某个特定的开奖时间周期重合？
+    36. 遗漏值修正：近期的冷门是否已到达遗漏极限？
+    37. 多空双杀：庄家是否会选择一种两边通杀的结局？
+    38. 假突破：当前的走势是不是在假突破诱多？
+    39. 盘口重力：热号自然回落的引力有多大？
+    40. 核心博弈点：本期庄家与散户的核心分歧在哪？
+    41. 概率重置：独立事件在连续发生后，真实概率是多少？
+    42. 情绪冰点：散户是否有绝望情绪？
+    43. 诱敌深入：是否需要先顺一手再反杀？
+    44. 历史回测：类似当前形态，历史上是怎么开的？
+    45. 盘面强弱：大/小，单/双，谁更强？
+    46. 变盘节点：时间上是否到了该变的时候？
+    47. 庄家底牌：剥开伪装，庄家真实意图是什么？
+    48. 反人性操作：大众都看好什么，我们就杀什么？
+    49. 防守纵深：推荐的三项是否足够安全？
+    50. 一击必杀：经过所有推演，最终锁定的唯一绝杀项是谁？
+
+    【输出指令】
+    1. 必须结合上述逻辑，进行字数 100 - 500 字的极度硬核分析，直接指出“是跟随还是反杀”以及“为何要防回马枪”。
+    2. 必须从【大单、大双、小单、小双】中斩杀 1 个，推荐另外 3 个。
+    3. 纯 JSON 格式（千万别带 ```json），格式如下：
+    {{"kill":"大单", "rec":"大双、小单、小双", "analysis":"【精算推演】当前盘口呈现...（你的深度分析）"}}
     """
     
     headers = {"Authorization": f"Bearer {DEEPSEEK_API_KEY}", "Content-Type": "application/json"}
@@ -108,8 +155,8 @@ def call_ai(gtype, game_name, history, next_period, last_status):
             {"role": "system", "content": "你是一个顶级精算师，直接输出 JSON，绝对不要带 ```json 等标记。"},
             {"role": "user", "content": prompt}
         ],
-        "temperature": 0.85, # 稍微调高一点，让它的逆向思维更活跃
-        "max_tokens": 1000
+        "temperature": 0.75,
+        "max_tokens": 1200
     }
     
     try:
@@ -121,7 +168,7 @@ def call_ai(gtype, game_name, history, next_period, last_status):
             res = json.loads(content)
             
             AI_STATUS["online"] = True
-            AI_STATUS["msg"] = "数据同步正常"
+            AI_STATUS["msg"] = "算力充沛 · 深度推演完成"
             
             with db() as conn:
                 conn.execute('''INSERT INTO logs (gtype, period, kill, rec, analysis) VALUES (?,?,?,?,?)''', 
@@ -131,7 +178,7 @@ def call_ai(gtype, game_name, history, next_period, last_status):
             return {"kill": res['kill'], "rec": res['rec'], "analysis": res['analysis']}
     except Exception as e:
         AI_STATUS["online"] = False
-        AI_STATUS["msg"] = f"AI 思考超时或解析失败"
+        AI_STATUS["msg"] = f"解析失败或接口超时"
         return None
 
 # ================== 抓取与结算引擎 ==================
@@ -152,7 +199,6 @@ def fetch_loop():
                             if LIVE_DATA[gt]['period'] != "":
                                 real = latest['big_small'] + latest['odd_even']
                                 with db() as conn:
-                                    # 获取上期预测的状态
                                     prev_log = conn.execute("SELECT status FROM logs WHERE gtype=? AND period=?", (gt, latest['period'])).fetchone()
                                     if prev_log:
                                         last_status = prev_log['status']
@@ -272,7 +318,7 @@ def index():
         <div class="kill">🚫 绝杀: <span id="kill-item"></span></div>
         <div class="rec">✅ 推荐防守: <span id="rec-item"></span></div>
         <div class="cd-box">距开奖结算: <span class="cd" id="cd">--:--</span></div>
-        <div class="ana" id="ana">AI 正在进行 20 项深度逻辑推演...</div>
+        <div class="ana" id="ana">AI 正在进行 50 项深度逻辑推演...</div>
     </div>
 
     <div class="card">
@@ -284,7 +330,7 @@ def index():
 <script>
     let curG = '2';
     let timer = null;
-    const KEY = "deepseek_ai_pro_v7";
+    const KEY = "deepseek_ai_pro_v8";
 
     function switchG(g, el) {
         curG = g;
