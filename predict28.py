@@ -12,7 +12,7 @@ from flask import Flask, request, jsonify
 from datetime import datetime, timedelta
 
 app = Flask(__name__)
-SECRET_KEY = "ultimate_200_algo_v12"
+SECRET_KEY = "ultimate_200_algo_v15"
 
 GAMES = {
     "2": {"name": "加拿大28", "url": "https://yc28cn-ml1l.onrender.com/vipASDFGHJKLQQQWERTYUIOPWW9983/8626/0549CASWWW?type=2", "interval": 210},
@@ -20,12 +20,12 @@ GAMES = {
     "13": {"name": "比特28", "url": "https://yc28cn-ml1l.onrender.com/vipASDFGHJKLQQZXCVBNMWW9983/8626/0549CCBDR?type=13", "interval": 60}
 }
 
-AI_STATUS = {"online": True, "msg": "200套算法实时统票中"}
+AI_STATUS = {"online": True, "msg": "极速统票中"}
 LIVE_DATA = {gt: {"period": "", "next": "", "left": 0, "history": [], "pred": None, "algo_list": [], "raw_hash_pool": "", "fetch_time": ""} for gt in GAMES}
 
 # ================== 数据库 ==================
 def db():
-    conn = sqlite3.connect('predict_algo200_v12.db', timeout=30)
+    conn = sqlite3.connect('predict_algo200_v15.db', timeout=30)
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -35,27 +35,55 @@ with db() as conn:
         analysis TEXT, real_result TEXT DEFAULT '', status TEXT DEFAULT 'wait')''')
     conn.commit()
 
-# ================== 真实哈希抓取 (加入隔离逻辑) ==================
-def fetch_btc_hash_pool(game_type):
+# ================== 极速公平抓取 (强制2秒超时) ==================
+def fetch_btc_hash_pool():
     ctx = ssl._create_unverified_context()
     try:
-        # 增加时间戳防缓存
         url = f"https://mempool.space/api/mempool/recent?_={int(time.time())}"
         req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-        # 极限压缩网络延迟，超时设置极短
+        # 【核心修改】超时严格限制为 2 秒，拿不到直接用兜底数据算，绝不拖延！
         with urllib.request.urlopen(req, timeout=2, context=ctx) as resp:
             data = json.loads(resp.read().decode('utf-8'))
-            
-            # 【核心隔离】：如果是分分28，取前100笔；如果是比特28，取前200笔。
-            # 强行制造数据差，因为平台开奖时间不同，抓的池子肯定不同。
-            limit = 100 if game_type == "3" else 200
-            
-            hash_str = "".join([tx['txid'] for tx in data[:limit]])
+            hash_list = [tx['txid'] for tx in data[:200]]
             fetch_time = datetime.now().strftime("%H:%M:%S")
-            return hash_str, fetch_time
-    except Exception as e:
-        print("抓取失败:", e)
+            return "".join(hash_list), fetch_time
+    except Exception:
+        # 如果网络卡了，直接返回 None，主程序会瞬间启动兜底
         return None, None
+
+# ================== 200套算法引擎 ==================
+def run_algo_1_to_100(algo_id, h7, period):
+    bs = [1 if h['big_small'] == '大' else 0 for h in h7]
+    oe = [1 if h['odd_even'] == '单' else 0 for h in h7]
+    sums = [h['total'] for h in h7]
+    
+    big_cnt = sum(bs)
+    odd_cnt = sum(oe)
+    
+    random.seed(algo_id + sums[0] + int(period))
+    score_bs = big_cnt - 3.5 + random.uniform(-1.5, 1.5)
+    score_oe = odd_cnt - 3.5 + random.uniform(-1.5, 1.5)
+    
+    if algo_id in [26, 27, 30, 98]: score_bs = -score_bs; score_oe = -score_oe
+    if algo_id in [33, 34, 36, 37]: score_bs *= 2; score_oe *= 2
+    if algo_id == 86: score_bs = -score_bs; score_oe = -score_oe
+
+    return ("大" if score_bs >= 0 else "小") + ("单" if score_oe >= 0 else "双")
+
+def run_algo_101_to_200(algo_id, hash_pool, game_type, period):
+    if not hash_pool: return "小双"
+    seed_str = f"{hash_pool}_{game_type}_{period}"
+    offset = (algo_id - 101) * 10
+    if offset + 500 > len(seed_str):
+        offset = offset % (len(seed_str) - 500)
+        
+    seed = seed_str[offset : offset+500]
+    h = hashlib.sha256(seed.encode('utf-8')).hexdigest()
+    dec = int(h[:16], 16) / (2**64)
+    nums = f"{dec:.10f}".split('.')[1][:3]
+    
+    total = int(nums[0]) + int(nums[1]) + int(nums[2])
+    return ("大" if total >= 14 else "小") + ("单" if total % 2 != 0 else "双")
 
 # ================== 加拿大28本地算法 ==================
 def run_canada_algo(history):
@@ -113,53 +141,8 @@ def run_canada_algo(history):
     return {
         "kill": kill_str,
         "rec": f"{rem[0]}(主攻)、{rem[1]}(防守)、{rem[2]}(备选)",
-        "analysis": f"【本地6算法共识】综合投票，绝杀【{kill_str}】，重点防守【{rem[0]}】。"
+        "analysis": f"【本地6算法共识】绝杀【{kill_str}】。"
     }
-
-# ================== 200套算法矩阵引擎 ==================
-def run_algo_1_to_100(algo_id, h7):
-    bs = [1 if h['big_small'] == '大' else 0 for h in h7]
-    oe = [1 if h['odd_even'] == '单' else 0 for h in h7]
-    sums = [h['total'] for h in h7]
-    
-    big_cnt = sum(bs)
-    odd_cnt = sum(oe)
-    
-    random.seed(algo_id + sums[0])
-    
-    score_bs = big_cnt - 3.5 + random.uniform(-1.5, 1.5)
-    score_oe = odd_cnt - 3.5 + random.uniform(-1.5, 1.5)
-    
-    if algo_id in [26, 27, 30, 98]:
-        score_bs = -score_bs
-        score_oe = -score_oe
-    if algo_id in [33, 34, 36, 37]:
-        score_bs *= 2
-        score_oe *= 2
-    if algo_id == 86:
-        score_bs = -score_bs
-        score_oe = -score_oe
-
-    res_bs = "大" if score_bs >= 0 else "小"
-    res_oe = "单" if score_oe >= 0 else "双"
-    return res_bs + res_oe
-
-def run_algo_101_to_200(algo_id, hash_pool, game_type):
-    if not hash_pool: return "小双"
-    
-    # 隔离：分分和比特对同样的哈希采用不同的偏移量
-    offset = (algo_id - 101) * 5 + (50 if game_type == "13" else 0)
-    seed = hash_pool[offset : offset+500]
-    
-    h = hashlib.sha256(seed.encode('utf-8')).hexdigest()
-    dec = int(h[:16], 16) / (2**64)
-    str_val = f"{dec:.10f}"
-    nums = str_val.split('.')[1][:3]
-    
-    total = int(nums[0]) + int(nums[1]) + int(nums[2])
-    bs = "大" if total >= 14 else "小"
-    oe = "单" if total % 2 != 0 else "双"
-    return bs + oe
 
 # ================== 抓取与结算主循环 ==================
 def fetch_loop():
@@ -184,34 +167,38 @@ def fetch_loop():
                                     conn.execute("UPDATE logs SET real_result=?, status=? WHERE gtype=? AND period=?", (real, status, gt, latest['period']))
                                     conn.commit()
 
-                            # 2. 更新数据
                             dt = datetime.strptime(latest['draw_time'], "%Y-%m-%d %H:%M:%S")
+                            next_p = str(int(latest['period'])+1)
                             LIVE_DATA[gt].update({
-                                "period": latest['period'], "next": str(int(latest['period'])+1),
+                                "period": latest['period'], "next": next_p,
                                 "target_time": (dt - timedelta(hours=8) + timedelta(seconds=cfg['interval'])).timestamp(), 
                                 "history": history, "algo_list": [], "raw_hash_pool": "", "fetch_time": ""
                             })
 
-                            # 3. 开奖即刻计算
+                            # 2. 极速运算
                             if gt == "2":
                                 pred = run_canada_algo(history)
                             else:
-                                AI_STATUS["msg"] = "开奖即刻运算：拉取真实哈希并启动200套算法..."
-                                hash_pool, fetch_time = fetch_btc_hash_pool(gt)
-                                LIVE_DATA[gt]['raw_hash_pool'] = hash_pool if hash_pool else "抓取失败，已启用兜底。"
-                                LIVE_DATA[gt]['fetch_time'] = fetch_time if fetch_time else "--:--:--"
+                                AI_STATUS["msg"] = "开奖极速运算中..."
+                                hash_pool, fetch_time = fetch_btc_hash_pool()
                                 
-                                if not hash_pool: hash_pool = "0000000000000000000000000000000000000000"
+                                # 强制兜底，保证 5 秒必出结果
+                                if not hash_pool:
+                                    hash_pool = "".join([hashlib.md5(str(time.time()).encode()).hexdigest() for _ in range(100)])
+                                    fetch_time = "网络超时兜底计算"
+                                    
+                                LIVE_DATA[gt]['raw_hash_pool'] = hash_pool
+                                LIVE_DATA[gt]['fetch_time'] = fetch_time
                                 
                                 votes = {"大单": 0, "大双": 0, "小单": 0, "小双": 0}
                                 algo_records = []
                                 
                                 for i in range(1, 201):
                                     if i <= 100:
-                                        res = run_algo_1_to_100(i, history[:7])
+                                        res = run_algo_1_to_100(i, history[:7], next_p)
                                         algo_name = f"趋势/统计/智能·算法{i:03d}"
                                     else:
-                                        res = run_algo_101_to_200(i, hash_pool, gt)
+                                        res = run_algo_101_to_200(i, hash_pool, gt, next_p)
                                         algo_name = f"链哈希·TX规则{i-100:02d}"
                                         
                                     votes[res] += 1
@@ -221,7 +208,7 @@ def fetch_loop():
                                 kill_str = sorted_v[0][0]
                                 rem = [x[0] for x in sorted_v[1:]]
                                 
-                                analysis = f"【200套算法全息统票】开奖即刻抓取真实哈希并启动运算。\n抓取时间：{LIVE_DATA[gt]['fetch_time']}\n得票结果：\n"
+                                analysis = f"【200套公平统票】抓取时间：{fetch_time}。\n得票结果：\n"
                                 for k, v in sorted_v:
                                     analysis += f" - {k}: {v} 票\n"
                                 analysis += f"\n票数最高者【{kill_str}】成为绝杀！"
@@ -232,7 +219,7 @@ def fetch_loop():
                                     "analysis": analysis
                                 }
                                 LIVE_DATA[gt]['algo_list'] = algo_records
-                                AI_STATUS["msg"] = "200套算法推演完毕，等待开奖"
+                                AI_STATUS["msg"] = "统票完毕"
 
                             LIVE_DATA[gt]['pred'] = pred
                             with db() as conn:
@@ -243,9 +230,9 @@ def fetch_loop():
                         diff = LIVE_DATA[gt]['target_time'] - datetime.utcnow().timestamp()
                         LIVE_DATA[gt]['left'] = max(0, int(diff))
                                 
-            except Exception as e:
+            except Exception:
                 pass
-        time.sleep(0.5)
+        time.sleep(0.2) # 【核心修改】极速轮询，0.2秒检测一次新开奖
 
 threading.Thread(target=fetch_loop, daemon=True).start()
 
@@ -292,7 +279,7 @@ def index():
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-    <title>200套全息算法统票推演</title>
+    <title>200套极速算法统票</title>
     <style>
         * { box-sizing: border-box; }
         body { background: #f4f6f9; margin: 0; font-family: -apple-system, sans-serif; color: #333; }
@@ -339,7 +326,7 @@ def index():
     </style>
 </head>
 <body>
-    <div class="head">200套全息算法统票</div>
+    <div class="head">200套极速算法统票</div>
     <div class="status" id="status"><span class="dot"></span> 系统运转正常</div>
     <div class="tabs">
         <div class="tab on" onclick="switchG('2', this)">加拿大28</div>
@@ -356,7 +343,7 @@ def index():
 
     <div class="hash-box" id="hash-box">
         <div style="color:#feca57; font-weight:bold; margin-bottom:5px;">
-            🔗 真实区块链哈希 (抓取时间: <span id="fetch-time">--:--:--</span>)
+            🔗 抓取时间: <span id="fetch-time">--:--:--</span>
         </div>
         <div id="hash-content">--</div>
     </div>
@@ -387,7 +374,7 @@ def index():
     </div>
 <script>
     let curG = '2', timer = null;
-    const KEY = "ultimate_200_algo_v12";
+    const KEY = "ultimate_200_algo_v15";
     function switchG(g, el) {
         curG = g;
         document.querySelectorAll('.tab').forEach(t => t.classList.remove('on'));
