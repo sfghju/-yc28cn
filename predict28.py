@@ -11,7 +11,7 @@ from datetime import datetime, timedelta
 app = Flask(__name__)
 
 # ================== 核心配置 ==================
-SECRET_KEY = "deepseek_ai_ultimate_v11"
+SECRET_KEY = "deepseek_ai_ultimate_v12"
 DEEPSEEK_API_KEY = "sk-43c18b39aeb346fc841937b30cade25b"
 DEEPSEEK_API_URL = "https://api.deepseek.com/chat/completions"
 
@@ -31,7 +31,7 @@ LIVE_DATA = {
 
 # ================== 数据库 ==================
 def db():
-    conn = sqlite3.connect('predict_v11.db', timeout=30)
+    conn = sqlite3.connect('predict_v12.db', timeout=30)
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -43,7 +43,7 @@ with db() as conn:
     )''')
     conn.commit()
 
-# ================== 150项极度硬核推演引擎 ==================
+# ================== 100项极度超负荷推演引擎 ==================
 def call_ai(gtype, game_name, history, next_period, last_status):
     history_str = "".join([f"第{7-i}期:{h['nums']}={h['total']}({h['big_small']}{h['odd_even']})\n" for i, h in enumerate(history[:7])])
     
@@ -59,62 +59,49 @@ def call_ai(gtype, game_name, history, next_period, last_status):
 
     streak_info = f"当前【大小】连开 {bs_streak} 期，【单双】连开 {oe_streak} 期。"
     
-    # 深度优化：跟反机制与回马枪防范
+    # 核心铁律：防止无脑跟或无脑反，防回马枪
     if bs_streak >= 5 or oe_streak >= 5:
-        rule_hint = "【核心铁律】：当前长龙已连开5期以上！必须顺势骑龙跟随，严禁盲目反杀，高度防范庄家回马枪诱空！"
+        rule_hint = "【核心铁律】：出现5连以上长龙！必须顺应趋势骑龙，严禁反杀，高度防范庄家回马枪诱空！"
     else:
-        rule_hint = "【核心铁律】：当前未达5连！严格执行冷热交替，反向猎杀近期高频选项，重点防回马枪。"
+        rule_hint = "【核心铁律】：未达5连！严格执行冷热交替反杀，猎杀近期高频选项，防范虚假繁荣回马枪。"
 
-    warning = "【极度危险】：上期预测失败，必须立刻变阵反杀！" if last_status == 'lose' else ("【状态良好】：上期命中，继续保持。" if last_status == 'win' else "")
+    warning = "【极度危险】：上期预测失败，必须立刻切换思维！" if last_status == 'lose' else ("【状态良好】：上期命中，继续保持。" if last_status == 'win' else "")
 
-    # 硬编码 150 项具体任务（绝不简化）
-    tasks_150 = """
-    1. 连号极值断裂点测算；2. 长龙跟随与回马枪防范；3. 单双跳节拍识别；4. 均值回归幅度评估；
-    5. 赌徒谬误陷阱排查；6. 庄家诱多诱空逻辑反推；7. 筹码分布密集区探测；8. 虚假繁荣假象剥离；
-    9. 时间窗口共振检测；10. 顺逆势核心抉择；11. 振幅收敛发散分析；12. 极端变异阈值监测；
-    13. 静默冷门爆发概率；14. 散户口袋定向追踪；15. 大小单双撕裂感评估；16. 庄家洗盘周期定位；
-    17. 回马枪连杀概率；18. 独立随机数学期望；19. 系统容错率底线；20. 三维共振同向验证；
-    21. 盘口情绪贪婪恐慌指数；22. 散户惯性陷阱预判；23. 高位破位风险测算；24. 震荡区间下沿支撑；
-    25. 诱盘深度还原；26. 下探支撑位与阻力位；27. 上攻破位动能；28. 异动反转信号识别；
-    29. 死亡螺旋连败阻断；30. 连胜保护策略；31. K线吞没形态确认；32. 大资金暗盘流向模拟；
-    33. 散户跟风系数；34. 极限施压测试；35. 多周期时间共振；36. 遗漏值极限修正；
-    37. 多空双杀防范；38. 假突破诱多识别；39. 热号重力回撤测算；40. 核心博弈点定位；
-    41. 概率重置法则应用；42. 散户绝望情绪冰点；43. 诱敌深入战术；44. 历史同形态回测；
-    45. 大小单双强弱对比；46. 变盘时间节点；47. 庄家底牌深度推演；48. 反人性操作定调；
-    49. 防守纵深构建；50. 一击必杀锁定；51. 布林带开口挤压；52. 随机指标KDJ钝化；
-    53. 相对强弱RSI超买超卖；54. 乖离率BIAS修正；55. 顺势指标CCI追踪；56. 动量指标MTM背离；
-    57. 抛物线SAR反转；58. 唐奇安通道突破；59. 斐波那契时间窗；60. 江恩时间法则；
-    61. 艾略特波浪三段式；62. 干支历法阴阳；63. 星相天体共振；64. 季节性周期回归；
-    65. 高频变盘雷达；66. 黄金分割时间轴；67. 快慢周期嵌套；68. 滑动窗口动量；
-    69. 历史波动率衰减；70. 真实波幅ATR通道；71. 动态方差ANOVA；72. 协整均值回归；
-    73. 跳跃扩散模型；74. 波动率微笑曲线；75. 极值理论尾部风险；76. 赫斯特指数长程相关；
-    77. 分形维数混沌；78. 李雅普诺夫指数异动；79. 马尔可夫转移矩阵；80. 泊松分布衰减率；
-    81. 贝叶斯后验概率；82. 卡方分布拟合度；83. 蒙特卡洛树推演；84. 高斯正态极值点；
-    85. 偏度与峰度异动；86. 协方差矩阵特征；87. 曼-惠特尼U检验；88. 威尔科克森符号；
-    89. 羊群效应风控；90. 锚定效应预期；91. 损失厌恶偏差；92. 赌徒谬误利用；
-    93. 冷热手效应；94. 心理支撑阻力；95. 过度反应纠错；96. 认知失调盘面；
-    97. 代表性偏差过滤；98. 禀赋效应持仓；99. 遗传算法变异；100. 随机森林投票；
-    101. 支持向量机分类；102. LSTM神经网络推演；103. GRU门控循环；104. 卷积网络特征提取；
-    105. 孤立森林异常检测；106. XGBoost提升树；107. 隐马尔可夫模型；108. 深度Q网络强化；
-    109. 盘口大单托盘；110. 盘口大单压盘；111. 游资扫货痕迹；112. 散户割肉抛压；
-    113. 资金对倒假象；114. 尾盘突袭概率；115. 早盘急跌修复；116. 中盘僵持破局；
-    117. 均线多头排列；118. 均线空头排列；119. MACD金叉死叉；120. 顶背离与底背离；
-    121. 缺口回补引力；122. 密集成交区阻力；123. 恐慌性抛售极值；124. 盲目追高陷阱；
-    125. 老鼠仓异动；126. 机构调仓换股；127. 跨市场联动性；128. 宏观消息面冲击；
-    129. 盘感与直觉校验；130. 微操骗线识别；131. 假阴假阳真伪；132. 长上影线试盘；
-    133. 长下影线探底；134. 十字星变盘节点；135. 早晨之星黄昏之星；136. 红三兵与黑三鸦；
-    137. 穿头破脚形态；138. 孕线孕育新机；139. 搓揉线洗盘；140. 圆底与圆顶构筑；
-    141. V型反转概率；142. 倒V型见顶；143. 头肩顶底预测；144. 多重顶底共振；
-    145. 趋势线破位确认；146. 通道上下轨修正；147. 黄金分割回撤位；148. 百分比线压力位；
-    149. 江恩角度线支撑；150. 终极杀招确认执行。
+    # 100 项极度强化的核心任务（超负荷运算）
+    tasks_100 = """
+    1. 极值连号断裂点测算；2. 长龙跟随与回马枪绝对防范；3. 单双跳节拍深度识别；4. 均值回归极限幅度评估；
+    5. 赌徒谬误与羊群效应陷阱排查；6. 庄家诱多诱空心理反推；7. 筹码分布密集区精准探测；8. 虚假繁荣假象剥离；
+    9. 时间窗口与江恩共振检测；10. 顺逆势绝杀抉择；11. 振幅收敛发散剧烈度分析；12. 极端变异阈值红线监测；
+    13. 静默冷门爆发概率测算；14. 散户口袋资金定向追踪；15. 大小单双撕裂感对冲评估；16. 庄家洗盘周期精准定位；
+    17. 回马枪连杀真实概率；18. 独立随机事件数学期望；19. 系统容错率与后手底线；20. 大小单双三维同向共振验证；
+    21. 盘口情绪贪婪恐慌指数衡量；22. 散户惯性追涨杀跌陷阱预判；23. 高位破位大爆仓风险测算；24. 震荡区间下沿支撑测试；
+    25. 诱盘深度全息还原；26. 下探支撑位与上攻阻力位；27. 上攻破位动能衰竭识别；28. 异动反转高频信号识别；
+    29. 死亡螺旋连败阻断机制；30. 连胜保护防守策略；31. K线吞没与反转形态确认；32. 大资金暗盘流向深度模拟；
+    33. 散户跟风系数极值；34. 极限施压抗压测试；35. 多周期时间共振击穿；36. 遗漏值极限修正法则；
+    37. 多空双杀防范机制；38. 假突破与假摔诱多识别；39. 热号重力回撤测算；40. 核心博弈点死穴定位；
+    41. 概率重置与独立法则应用；42. 散户绝望情绪冰点探测；43. 诱敌深入与包饺子战术；44. 历史同形态极致回测；
+    45. 大小单双强弱天平对比；46. 变盘时间节点预测；47. 庄家底牌终极推演；48. 反人性逆向操作定调；
+    49. 防守纵深与安全垫构建；50. 一击必杀绝杀锁定；51. 布林带开口极致挤压；52. 随机指标KDJ极端钝化；
+    53. 相对强弱RSI超买超卖极值；54. 乖离率BIAS极限修正；55. 顺势指标CCI极值追踪；56. 动量指标MTM严重背离；
+    57. 抛物线SAR反转信号；58. 唐奇安通道极限突破；59. 斐波那契时间窗共振；60. 江恩时间法则极点；
+    61. 艾略特波浪主升浪确认；62. 干支历法阴阳周期；63. 星相天体共振效应；64. 季节性周期极端回归；
+    65. 高频变盘雷达扫描；66. 黄金分割时间轴切割；67. 快慢周期嵌套共振；68. 滑动窗口动量极值；
+    69. 历史波动率极致衰减；70. 真实波幅ATR通道极限；71. 动态方差ANOVA检验；72. 协整均值极限回归；
+    73. 跳跃扩散模型预测；74. 波动率微笑曲线极值；75. 极值理论尾部风险规避；76. 赫斯特指数长程相关性；
+    77. 分形维数混沌计算；78. 李雅普诺夫指数异动；79. 马尔可夫转移矩阵迭代；80. 泊松分布衰减极值；
+    81. 贝叶斯后验概率更新；82. 卡方分布拟合度检测；83. 蒙特卡洛树搜索推演；84. 高斯正态极值点测算；
+    85. 偏度与峰度剧烈异动；86. 协方差矩阵特征提取；87. 曼-惠特尼U检验极值；88. 威尔科克森符号检验；
+    89. 羊群效应风控极限；90. 锚定效应预期打破；91. 损失厌恶偏差修正；92. 赌徒谬误反向利用；
+    93. 冷热手效应极值；94. 心理支撑阻力破位；95. 过度反应与纠错；96. 认知失调盘面解析；
+    97. 代表性偏差过滤；98. 禀赋效应持仓极限；99. 遗传算法变异寻优；100. 深度Q网络强化学习决断。
     """
 
     prompt = f"""
     【最高身份设定】
-    你是全球排名第一的逆向博弈论专家、顶级精算师。你的每一个决策必须极度严谨。你只相信数据、心理学和庄家博弈论。
+    你是全球排名第一的逆向博弈论专家、顶级精算师。你的每一个决策必须极度严谨，必须对以下 100 项任务进行超负荷推演。
 
     【盘口独立数据】
-    专属游戏：{game_name} (独立计算，严禁参考其他游戏)
+    专属游戏：{game_name} (严禁参考其他游戏)
     目标期号：{next_period}
     {warning}
 
@@ -123,14 +110,14 @@ def call_ai(gtype, game_name, history, next_period, last_status):
     {streak_info}
     {rule_hint}
 
-    【150项极度严苛的推演任务（需逐一思考，严禁跳过）】
-    {tasks_150}
+    【100项极度严苛推演任务（必须全部运算）】
+    {tasks_100}
 
-    【严格执行指令】
-    1. 必须给出 100 到 500 字的深度硬核分析。分析中必须结合盘面数据，明确指出“顺势还是反杀”，并体现出对“回马枪”的防范。
-    2. 从【大单、大双、小单、小双】中，精准斩首 1 个选项，推荐防守 3 个。
-    3. 必须返回纯 JSON 字符串，绝对禁止使用 ```json 标记。格式：
-    {{"kill":"大单", "rec":"大双、小单、小双", "analysis":"【精算推演】基于严格的数据与心理博弈...（分析内容）"}}
+    【输出指令】
+    1. 必须给出 100 到 500 字的深度硬核分析，体现“跟或反”以及“防回马枪”。
+    2. 从【大单、大双、小单、小双】中斩杀 1 个，推荐 3 个。
+    3. 必须返回纯 JSON 字符串，严禁使用 markdown 标记。
+    {{"kill":"大单", "rec":"大双、小单、小双", "analysis":"【推演结论】..."}}
     """
     
     headers = {"Authorization": f"Bearer {DEEPSEEK_API_KEY}", "Content-Type": "application/json"}
@@ -140,8 +127,8 @@ def call_ai(gtype, game_name, history, next_period, last_status):
             {"role": "system", "content": "你是顶级精算师，直接输出 JSON，绝对不要带 ```json 标记。"},
             {"role": "user", "content": prompt}
         ],
-        "temperature": 0.8,
-        "max_tokens": 2000
+        "temperature": 0.85,
+        "max_tokens": 1500
     }
     
     try:
@@ -153,7 +140,7 @@ def call_ai(gtype, game_name, history, next_period, last_status):
             res = json.loads(content)
             
             AI_STATUS["online"] = True
-            AI_STATUS["msg"] = "算力拉满 · 150项推演已完成"
+            AI_STATUS["msg"] = "算力拉满 · 100项推演已完成"
             
             with db() as conn:
                 conn.execute('''INSERT INTO logs (gtype, period, kill, rec, analysis) VALUES (?,?,?,?,?)''', 
@@ -177,7 +164,7 @@ def fetch_loop():
                     data = json.loads(resp.read().decode('utf-8'))
                     if data.get('data'):
                         latest = data['data'][0]
-                        history = [{"nums": f"{i['num1']}+{i['num2']}+{i['num3']}", "total": i['total'], "big_small": i['big_small'], "odd_even": i['odd_even']} for i in data['data'][:20]]
+                        history = [{"period": i['period'], "nums": f"{i['num1']}+{i['num2']}+{i['num3']}", "total": i['total'], "big_small": i['big_small'], "odd_even": i['odd_even']} for i in data['data'][:20]]
                         
                         if LIVE_DATA[gt]['period'] != latest['period']:
                             last_status = None
@@ -188,7 +175,7 @@ def fetch_loop():
                                     if prev_log:
                                         last_status = prev_log['status']
                                     
-                                    # 绝对真实的结算，无任何篡改
+                                    # 绝对真实的结算
                                     if real != LIVE_DATA[gt]['pred']['kill']:
                                         conn.execute("UPDATE logs SET real_result=?, status='win' WHERE gtype=? AND period=? AND status='wait'", (real, gt, latest['period']))
                                     else:
@@ -204,8 +191,8 @@ def fetch_loop():
                             })
                             
                             AI_STATUS["online"] = True
-                            AI_STATUS["msg"] = "AI 正在进行 150 项深度推演..."
-                            print(f"🚀 正在请求 {cfg['name']} 精算分析...")
+                            AI_STATUS["msg"] = "AI 正在进行超负荷推演..."
+                            print(f"🚀 正在请求 {cfg['name']} 100项精算分析...")
                             pred = call_ai(gt, cfg['name'], history, LIVE_DATA[gt]['next'], last_status)
                             if pred:
                                 LIVE_DATA[gt]['pred'] = pred
@@ -243,7 +230,7 @@ def api_logs(gt):
             if l['status'] == 'win': stats['total_win'] += 1
             elif l['status'] == 'lose': stats['total_lose'] += 1
             
-        # 计算当前连对/连错 (从最新记录往前推)
+        # 计算当前连对/连错
         for st in calc_status:
             if st == 'win': 
                 if stats['current_lose'] > 0: break
@@ -272,7 +259,7 @@ def index():
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-    <title>AI 终极预测终端</title>
+    <title>AI 100项终极预测</title>
     <style>
         body { background: #f4f6f9; margin: 0; font-family: -apple-system, sans-serif; color: #333; }
         .head { background: #111; color: #fff; padding: 16px; text-align: center; font-size: 20px; font-weight: bold; letter-spacing: 1px;}
@@ -294,7 +281,8 @@ def index():
         .title::before { content: ''; display: inline-block; width: 4px; height: 14px; background: #0984e3; border-radius: 2px; margin-right: 8px;}
         
         .history { display: flex; overflow-x: auto; gap: 10px; font-size: 12px; text-align: center; padding-bottom: 5px; }
-        .h-item { background: #f8f9fa; padding: 8px; border-radius: 8px; min-width: 65px; border: 1px solid #eee; }
+        .h-item { background: #f8f9fa; padding: 8px; border-radius: 8px; min-width: 75px; border: 1px solid #eee; }
+        .h-period { color: #636e72; font-weight: bold; margin-bottom: 4px; }
         
         .kill { color: #d63031; font-size: 26px; font-weight: bold; text-align: center; margin: 15px 0; background: #fff5f5; padding: 10px; border-radius: 8px;}
         .rec { color: #00b894; font-size: 22px; font-weight: bold; text-align: center; margin-bottom: 15px; background: #f0fff4; padding: 10px; border-radius: 8px;}
@@ -313,7 +301,7 @@ def index():
     </style>
 </head>
 <body>
-    <div class="head">AI 顶级精算预测中枢</div>
+    <div class="head">AI 100项终极预测</div>
     <div class="status" id="status"><span class="dot off"></span> 连接数据中枢中...</div>
     
     <div class="tabs">
@@ -330,7 +318,7 @@ def index():
     </div>
 
     <div class="card">
-        <div class="title">近 20 期 独立盘面</div>
+        <div class="title">近 20 期 独立盘面 (带期号)</div>
         <div class="history" id="history"></div>
     </div>
 
@@ -339,7 +327,7 @@ def index():
         <div class="kill">🚫 绝杀: <span id="kill-item"></span></div>
         <div class="rec">✅ 推荐防守: <span id="rec-item"></span></div>
         <div class="cd-box">距开奖结算: <span class="cd" id="cd">--:--</span></div>
-        <div class="ana" id="ana">AI 正在进行 150 项深度推演...</div>
+        <div class="ana" id="ana">AI 正在进行 100 项深度推演...</div>
     </div>
 
     <div class="card">
@@ -351,7 +339,7 @@ def index():
 <script>
     let curG = '2';
     let timer = null;
-    const KEY = "deepseek_ai_ultimate_v11";
+    const KEY = "deepseek_ai_ultimate_v12";
 
     function switchG(g, el) {
         curG = g;
@@ -377,7 +365,13 @@ def index():
 
             let hHtml = '';
             d.history.slice(0, 10).forEach(h => {
-                hHtml += `<div class="h-item"><div style="color:#999; font-size:11px;">${h.nums.slice(0,5)}..</div><div style="color:#d63031; font-weight:bold; margin:3px 0;">${h.total}</div><div>${h.big_small}${h.odd_even}</div></div>`;
+                // 截取期号后4位展示，清晰明了
+                let shortPeriod = h.period.slice(-4); 
+                hHtml += `<div class="h-item">
+                    <div class="h-period">${shortPeriod}期</div>
+                    <div style="color:#d63031; font-weight:bold; margin:3px 0;">${h.total}</div>
+                    <div>${h.big_small}${h.odd_even}</div>
+                </div>`;
             });
             document.getElementById('history').innerHTML = hHtml;
 
@@ -410,7 +404,6 @@ def index():
     function fetchLogs() {
         fetch(`/api/logs/${curG}`, { headers: {'X-Token': KEY} })
         .then(r => r.json()).then(res => {
-            // 填充真实统计
             let st = res.stats;
             document.getElementById('st-cw').innerText = st.current_win;
             document.getElementById('st-cl').innerText = st.current_lose;
