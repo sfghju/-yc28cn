@@ -11,7 +11,7 @@ from flask import Flask, request, jsonify
 from datetime import datetime, timedelta
 
 app = Flask(__name__)
-SECRET_KEY = "ultimate_strict10_v25"
+SECRET_KEY = "ultimate_strict10_v26"
 
 GAMES = {
     "2": {"name": "加拿大28", "url": "https://yc28cn-ml1l.onrender.com/vipASDFGHJKLQQQWERTYUIOPWW9983/8626/0549CASWWW?type=2", "interval": 210},
@@ -19,14 +19,13 @@ GAMES = {
     "13": {"name": "比特28", "url": "https://yc28cn-ml1l.onrender.com/vipASDFGHJKLQQZXCVBNMWW9983/8626/0549CCBDR?type=13", "interval": 60}
 }
 
-AI_STATUS = {"online": True, "msg": "10名将+10新秀考核中..."}
+AI_STATUS = {"online": True, "msg": "极速监控中..."}
 LIVE_DATA = {gt: {"period": "", "next": "", "left": 0, "history": [], "pred": None, "algo_list": []} for gt in GAMES}
 
-# 记录上期的绝杀项，用于防重
 LAST_KILL_STR = {"2": "", "3": "", "13": ""}
 
 def db():
-    conn = sqlite3.connect('predict_strict10.db', timeout=30)
+    conn = sqlite3.connect('predict_strict10_v26.db', timeout=30)
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -62,12 +61,11 @@ def run_single_algo(algo_id, h7, period, game_type):
         if algo_id in [86, 98]: score_bs = -score_bs; score_oe = -score_oe
     return ("大" if score_bs >= 0 else "小") + ("单" if score_oe >= 0 else "双")
 
-# ================== 严格考核：10主力 + 10新秀 ==================
+# ================== 核心预测与防重逻辑 ==================
 def calculate_dynamic_prediction(gt, history, next_p):
     h20 = history[:20]
     scores = {i: 0.0 for i in range(1, 101)}
     
-    # 1. 真实回测近5期，极其严苛（错一次扣1分）
     for i in range(5):
         test_h = h20[i : i+7]
         if len(test_h) < 7: continue
@@ -77,25 +75,15 @@ def calculate_dynamic_prediction(gt, history, next_p):
             if pred == real_res: scores[aid] += 1
             else: scores[aid] -= 1
 
-    # 2. 纯按得分排序
     sorted_algos = sorted(scores.items(), key=lambda x: x[1], reverse=True)
-    
-    # 3. 三端绝对隔离的分数段
-    # 加拿大用 Top1-10 + Top11-30中最优10个
-    # 分分用 Top21-30 + Top31-50中最优10个
-    # 比特用 Top41-50 + Top51-70中最优10个
     offset = {"2": 0, "3": 20, "13": 40}[gt]
     
-    # 提取10个核心主力（一直连任的最强算法）
     core_10 = [aid for aid, sc in sorted_algos[offset : offset+10]]
-    
-    # 提取10个严格考核的新秀（在次一级的梯队里按高分严格录用）
     pool_strict = [aid for aid, sc in sorted_algos[offset+10 : offset+30]]
     strict_10 = pool_strict[:10]
     
     selected_algos = core_10 + strict_10
 
-    # 4. 投票
     votes = {"大单": 0, "大双": 0, "小单": 0, "小双": 0}
     algo_records = []
     for aid in selected_algos:
@@ -103,15 +91,13 @@ def calculate_dynamic_prediction(gt, history, next_p):
         votes[res] += 1
         algo_records.append({"id": aid, "name": ALGO_NAMES[aid], "vote": res, "score": scores[aid]})
 
-    # 5. 动态排序
     sorted_v = sorted(votes.items(), key=lambda x: x[1], reverse=True)
     
-    main_atk = sorted_v[0][0] # 主攻最高
-    defend = sorted_v[1][0]   # 防守次高
-    kill_str = sorted_v[2][0] # 默认杀中等
-    backup = sorted_v[3][0]   # 备选最低
+    main_atk = sorted_v[0][0] 
+    defend = sorted_v[1][0]   
+    kill_str = sorted_v[2][0] 
+    backup = sorted_v[3][0]   
     
-    # 6. 防连续绝杀机制
     if kill_str == LAST_KILL_STR[gt]:
         kill_str = backup  
         backup = sorted_v[2][0]
@@ -121,15 +107,16 @@ def calculate_dynamic_prediction(gt, history, next_p):
             
     LAST_KILL_STR[gt] = kill_str
 
-    analysis = f"【严格考核模型】已回测近5期盘面。本期由 10 名连任主力 + 10 名严格考核的新锐算法出战。\n主攻指向【{main_atk}】({votes[main_atk]}票)；\n防守布置于【{defend}】({votes[defend]}票)；\n【防重机制启动】坚决规避，本期绝杀【{kill_str}】！"
+    analysis = f"【严格考核模型】本期由 10 名连任主力 + 10 名严格考核的新锐算法出战。\n主攻指向【{main_atk}】({votes[main_atk]}票)；\n防守布置于【{defend}】({votes[defend]}票)；\n【防重机制启动】坚决规避，本期绝杀【{kill_str}】！"
     return {"kill": kill_str, "rec": f"{main_atk}(主攻)、{defend}(防守)、{backup}(备选)", "analysis": analysis, "algo_list": algo_records}
 
-# ================== 极速抓取主循环 ==================
+# ================== 抓取主循环 ==================
 def fetch_loop():
     ctx = ssl._create_unverified_context()
     while True:
         for gt, cfg in GAMES.items():
             try:
+                # 加毫秒级时间戳，彻底粉碎缓存
                 req_url = f"{cfg['url']}&_={int(time.time()*1000)}"
                 req = urllib.request.Request(req_url, headers={'User-Agent': 'Mozilla/5.0'})
                 with urllib.request.urlopen(req, timeout=5, context=ctx) as resp:
@@ -169,7 +156,7 @@ def fetch_loop():
                                 
             except Exception as e:
                 pass
-        time.sleep(0.2)
+        time.sleep(0.1) # 极端提速：0.1 秒扫描一次接口
 
 threading.Thread(target=fetch_loop, daemon=True).start()
 
@@ -216,7 +203,7 @@ def index():
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-    <title>严格考核实战预测</title>
+    <title>极速同步实战预测</title>
     <style>
         * { box-sizing: border-box; }
         body { background: #f4f6f9; margin: 0; font-family: -apple-system, sans-serif; color: #333; }
@@ -243,10 +230,13 @@ def index():
         .rec-other { display: flex; gap: 10px; margin-bottom: 15px;}
         .rec-def { flex: 1; color: #0984e3; background: #e8f4f8; font-size: 16px; font-weight: bold; text-align: center; padding: 12px; border-radius: 8px;}
         .rec-bak { flex: 1; color: #636e72; background: #f1f2f6; font-size: 16px; font-weight: bold; text-align: center; padding: 12px; border-radius: 8px;}
-        .cd-box { text-align: center; font-size: 14px; color: #636e72; margin-bottom: 10px;}
-        .cd { font-size: 22px; color: #0984e3; font-weight: bold; }
+        
+        /* 优化倒计时体验 */
+        .cd-box { text-align: center; font-size: 14px; color: #636e72; margin-bottom: 10px; display: flex; align-items: center; justify-content: center;}
+        .cd { font-size: 22px; color: #0984e3; font-weight: bold; margin-left: 5px;}
         .cd.danger { color: #d63031; animation: flash 0.5s infinite alternate;}
         @keyframes flash { 0% { opacity: 0.4; } 100% { opacity: 1; } }
+        
         .ana { background: #fdfaf6; padding: 15px; border-left: 4px solid #e17055; font-size: 14px; line-height: 1.7; color: #2d3436; white-space: pre-wrap; }
         
         .api-list { display: none; background: #222f3e; color: #c8d6e5; margin: 12px; padding: 15px; border-radius: 12px; font-family: monospace; font-size: 12px; max-height: 400px; overflow-y: auto; }
@@ -261,7 +251,7 @@ def index():
     </style>
 </head>
 <body>
-    <div class="head">严格考核实战预测</div>
+    <div class="head">极速同步实战预测</div>
     <div class="status" id="status"><span class="dot"></span> 系统运转正常</div>
     <div class="tabs">
         <div class="tab on" onclick="switchG('2', this)">加拿大28</div>
@@ -293,7 +283,7 @@ def index():
             <div class="rec-def">🛡️ 重点防守: <span id="def-item"></span></div>
             <div class="rec-bak">🎯 战术备选: <span id="bak-item"></span></div>
         </div>
-        <div class="cd-box">距开奖: <span class="cd" id="cd">--:--</span></div>
+        <div class="cd-box">状态: <span class="cd" id="cd">--:--</span></div>
         <div class="ana" id="ana"></div>
     </div>
     <div class="card">
@@ -302,7 +292,8 @@ def index():
     </div>
 <script>
     let curG = '2', timer = null;
-    const KEY = "ultimate_strict10_v25";
+    const KEY = "ultimate_strict10_v26";
+    
     function switchG(g, el) {
         curG = g;
         document.querySelectorAll('.tab').forEach(t => t.classList.remove('on'));
@@ -310,10 +301,12 @@ def index():
         document.getElementById('pred-box').style.display = 'none';
         fetchData(); fetchLogs();
     }
+
     function fetchData() {
         fetch(`/api/data/${curG}`, { headers: {'X-Token': KEY} }).then(r => r.json()).then(res => {
             let d = res.data;
             if(!d.period) return;
+            
             document.getElementById('history').innerHTML = d.history.slice(0, 10).map(h => `
                 <div class="h-item">
                     <div class="h-period">${h.period.slice(-4)}期</div>
@@ -348,15 +341,31 @@ def index():
                     document.getElementById('bak-item').innerText = parts[2].replace('(备选)', '');
                 } catch(e) {}
             }
+            
             if(timer) clearInterval(timer);
             let left = d.left || 0;
             let cdEl = document.getElementById('cd');
+            
+            // 核心修改：倒计时归零，强制展示红色高亮拉取状态！
+            if(left <= 0) {
+                cdEl.innerText = "极速拉取官方开奖中...";
+                cdEl.classList.add('danger');
+                // 倒计时结束，强制高频刷新数据（100毫秒一次），轰炸后端拿新结果
+                setTimeout(fetchData, 100); 
+                return;
+            }
+            
             timer = setInterval(() => {
-                if(left <= 0) { cdEl.innerText = "开奖中..."; cdEl.classList.add('danger'); return; }
+                if(left <= 0) { 
+                    clearInterval(timer); 
+                    fetchData(); 
+                    return; 
+                }
                 left--;
                 cdEl.innerText = `${Math.floor(left/60).toString().padStart(2,'0')}:${(left%60).toString().padStart(2,'0')}`;
                 if (left <= 3) cdEl.classList.add('danger'); else cdEl.classList.remove('danger');
             }, 1000);
+            
         });
     }
     
@@ -382,13 +391,14 @@ def index():
                 </div>`).join('') || '<div style="text-align:center; padding:20px;">暂无记录</div>';
         });
     }
+    
     function clearLogs() {
         if(!confirm("清空所有记录？")) return;
         fetch(`/api/clear/${curG}`, { method: 'POST', headers: {'X-Token': KEY} }).then(() => fetchLogs());
     }
+    
     fetchData(); fetchLogs();
-    setInterval(fetchData, 500);
-    setInterval(fetchLogs, 2000);
+    setInterval(fetchLogs, 3000);
 </script>
 </body>
 </html>
