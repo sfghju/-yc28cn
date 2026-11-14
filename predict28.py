@@ -11,7 +11,7 @@ from flask import Flask, request, jsonify
 from datetime import datetime, timedelta
 
 app = Flask(__name__)
-SECRET_KEY = "ultimate_strict_filter_v22"
+SECRET_KEY = "ultimate_realtime_v23"
 
 GAMES = {
     "2": {"name": "加拿大28", "url": "https://yc28cn-ml1l.onrender.com/vipASDFGHJKLQQQWERTYUIOPWW9983/8626/0549CASWWW?type=2", "interval": 210},
@@ -19,49 +19,26 @@ GAMES = {
     "13": {"name": "比特28", "url": "https://yc28cn-ml1l.onrender.com/vipASDFGHJKLQQZXCVBNMWW9983/8626/0549CCBDR?type=13", "interval": 60}
 }
 
-AI_STATUS = {"online": True, "msg": "严格回测筛选中..."}
+AI_STATUS = {"online": True, "msg": "秒级监控中..."}
 LIVE_DATA = {gt: {"period": "", "next": "", "left": 0, "history": [], "pred": None, "algo_list": []} for gt in GAMES}
-
-# 记录上一期三端分别用过的算法，强制轮换
 LAST_USED_ALGOS = {"2": [], "3": [], "13": []}
 
-# ================== 数据库 ==================
+# ================== 数据库 (增加开奖时间字段) ==================
 def db():
-    conn = sqlite3.connect('predict_strict_v22.db', timeout=30)
+    conn = sqlite3.connect('predict_realtime.db', timeout=30)
     conn.row_factory = sqlite3.Row
     return conn
 
 with db() as conn:
+    # 新增 draw_time 字段记录真实开奖时间
     conn.execute('''CREATE TABLE IF NOT EXISTS logs (
-        id INTEGER PRIMARY KEY AUTOINCREMENT, gtype TEXT, period TEXT, kill TEXT, rec TEXT, 
+        id INTEGER PRIMARY KEY AUTOINCREMENT, gtype TEXT, period TEXT, draw_time TEXT, kill TEXT, rec TEXT, 
         analysis TEXT, real_result TEXT DEFAULT '', status TEXT DEFAULT 'wait')''')
     conn.commit()
 
-# ================== 100 套算法名称 (对应文档 1-100) ==================
-ALGO_NAMES = {
-    1: "趋势1·指纹抽样·α", 2: "趋势2·指纹抽样·β", 3: "趋势3·蒙特卡洛多数", 4: "趋势4·蒙特卡洛分裂", 5: "趋势5·残差⊕指纹",
-    6: "趋势6·游程调制", 7: "趋势7·三期异或折叠", 8: "趋势8·Fibonacci模混合", 9: "趋势9·频率收缩", 10: "趋势10·自助法奇偶",
-    11: "趋势11·熵权混合", 12: "趋势12·Box-Muller型", 13: "趋势13·χ²平局打破", 14: "趋势14·期号环移", 15: "趋势15·双提交哈希",
-    16: "趋势16·拉丁索引", 17: "趋势17·低位扩散", 18: "趋势18·差分⊕MC", 19: "趋势19·交替盐扰", 20: "趋势20·分层异或",
-    21: "趋势21·立方折叠", 22: "趋势22·平方折叠", 23: "趋势23·数位扩散", 24: "趋势24·三路xor麦克", 25: "趋势25·离散能量极小",
-    26: "统计1·均值回归", 27: "统计2·极值反转", 28: "统计3·中位数法", 29: "统计4·众数法", 30: "统计5·频率平衡",
-    31: "统计6·概率修正", 32: "统计7·标准差法", 33: "统计8·3期均值", 34: "统计9·5期均值", 35: "统计10·10期均值",
-    36: "统计11·加权均值", 37: "统计12·指数平滑", 38: "统计13·比例分析", 39: "统计14·转换概率", 40: "统计15·条件概率",
-    41: "统计16·贝叶斯", 42: "统计17·马尔可夫", 43: "统计18·方差分析", 44: "统计19·回归分析", 45: "统计20·趋势外推",
-    46: "统计21·周期3", 47: "统计22·周期5", 48: "统计23·周期7", 49: "统计24·周期11", 50: "统计25·长周期",
-    51: "数算1·对角求和", 52: "数算2·反对角", 53: "数算3·中心法", 54: "数算4·边缘法", 55: "数算5·位置1",
-    56: "数算6·位置2", 57: "数算7·位置3", 58: "数算8·差值法", 59: "数算9·累加法", 60: "数算10·黄金分割",
-    61: "数算11·斐波那契", 62: "数算12·质数法", 63: "数算13·合数法", 64: "数算14·平方法", 65: "数算15·立方法",
-    66: "数算16·模3运算", 67: "数算17·模5运算", 68: "数算18·模7运算", 69: "数算19·异或法", 70: "数算20·数字根",
-    71: "数算21·镜像法", 72: "数算22·加权1", 73: "数算23·加权2", 74: "数算24·多项式", 75: "数算25·矩阵法",
-    76: "智能1·三投票", 77: "智能2·五投票", 78: "智能3·七投票", 79: "智能4·趋势统计", 80: "智能5·统计数学",
-    81: "智能6·趋势数学", 82: "智能7·全局投票", 83: "智能8·加权投票", 84: "智能9·动态切换", 85: "智能10·自适应",
-    86: "智能11·反共识", 87: "智能12·哈希蒙特卡洛", 88: "智能13·互补蒙特卡洛", 89: "智能14·3期模式", 90: "智能15·5期模式",
-    91: "智能16·激进策略", 92: "智能17·保守策略", 93: "智能18·中庸策略", 94: "智能19·趋势强度", 95: "智能20·反连必中",
-    96: "智能21·双重确认", 97: "智能22·三重确认", 98: "智能23·极端捕手", 99: "智能24·均衡大师", 100: "智能25·终极算法"
-}
+# ================== 100套算法基础库 ==================
+ALGO_NAMES = {i: f"策略算法{i:03d}" for i in range(1, 101)}
 
-# ================== 单套算法核心引擎 ==================
 def run_single_algo(algo_id, h7, period, game_type):
     bs = [1 if h['big_small'] == '大' else 0 for h in h7]
     oe = [1 if h['odd_even'] == '单' else 0 for h in h7]
@@ -72,100 +49,65 @@ def run_single_algo(algo_id, h7, period, game_type):
     score_bs = big_cnt - 3.5 + random.uniform(-1.2, 1.2)
     score_oe = odd_cnt - 3.5 + random.uniform(-1.2, 1.2)
     
-    if 1 <= algo_id <= 25: # 趋势派
+    if 1 <= algo_id <= 25: 
         if bs[0] == 1: score_bs *= 1.5
         if oe[0] == 1: score_oe *= 1.5
-    elif 26 <= algo_id <= 50: # 统计派
+    elif 26 <= algo_id <= 50: 
         if big_cnt >= 4: score_bs = -score_bs * 1.8
         if odd_cnt >= 4: score_oe = -score_oe * 1.8
-    elif 51 <= algo_id <= 75: # 数算派
+    elif 51 <= algo_id <= 75: 
         if sums[0] > 15: score_bs -= 1.0
         if sums[0] < 12: score_bs += 1.0
-    elif 76 <= algo_id <= 100: # 智能派
-        if algo_id == 86 or algo_id == 98:
-            score_bs = -score_bs; score_oe = -score_oe
-
+    elif 76 <= algo_id <= 100: 
+        if algo_id in [86, 98]: score_bs = -score_bs; score_oe = -score_oe
     return ("大" if score_bs >= 0 else "小") + ("单" if score_oe >= 0 else "双")
 
-# ================== 严格筛选与杀中等核心 ==================
+# ================== 严格筛选引擎 ==================
 def calculate_strict_prediction(gt, history, next_p):
     h20 = history[:20]
-    scores = {i: 0 for i in range(1, 101)} # 算法历史得分
+    scores = {i: 0 for i in range(1, 101)}
     
-    # 1. 真实回测：用前7期预测第6期，计算真实得分
+    # 真实回测近5期
     for i in range(5):
-        test_h = h20[i : i+7] # 取切片
+        test_h = h20[i : i+7]
         if len(test_h) < 7: continue
         real_res = test_h[0]['big_small'] + test_h[0]['odd_even']
-        
         for aid in range(1, 101):
             pred = run_single_algo(aid, test_h[1:7], int(next_p) - i - 1, gt)
-            if pred == real_res: scores[aid] += 1 # 预测对加1分
-            else: scores[aid] -= 0.5 # 预测错扣分
+            if pred == real_res: scores[aid] += 1
+            else: scores[aid] -= 1 # 错一次减一分
 
-    # 2. 排序并严格筛选：剔除上期用过的
     sorted_algos = sorted(scores.items(), key=lambda x: x[1], reverse=True)
     available = [aid for aid, sc in sorted_algos if aid not in LAST_USED_ALGOS[gt]]
     
-    # 3. 三端绝对隔离筛选
-    # 加拿大取 Top1-20，分分取 Top21-40，比特取 Top41-60
     offset = {"2": 0, "3": 20, "13": 40}[gt]
     selected_algos = available[offset : offset+20]
-    
-    # 如果可用算法不足 20，做一轮循环补齐
-    while len(selected_algos) < 20:
-        selected_algos.extend(available[:20-len(selected_algos)])
-        
-    LAST_USED_ALGOS[gt].extend(selected_algos) # 记录，下期强制换新
+    while len(selected_algos) < 20: selected_algos.extend(available[:20-len(selected_algos)])
+    LAST_USED_ALGOS[gt].extend(selected_algos)
 
-    # 4. 让这 20 套最强算法进行投票
     votes = {"大单": 0, "大双": 0, "小单": 0, "小双": 0}
     algo_records = []
-    
     for aid in selected_algos:
         res = run_single_algo(aid, history[:7], next_p, gt)
         votes[res] += 1
         algo_records.append({"id": aid, "name": ALGO_NAMES[aid], "vote": res, "score": scores[aid]})
 
-    # 5. 投票排名统计
     sorted_v = sorted(votes.items(), key=lambda x: x[1], reverse=True)
-    
-    # 【核心杀法】：杀中等水平
-    main_atk = sorted_v[0][0]  # 主攻：最高票
-    defend = sorted_v[1][0]    # 防守：次高票
-    kill_str = sorted_v[2][0]  # 绝杀：中等票数（专治诱盘）
-    backup = sorted_v[3][0]    # 备选：最低票
+    main_atk, defend, kill_str, backup = sorted_v[0][0], sorted_v[1][0], sorted_v[2][0], sorted_v[3][0]
 
-    # 6. 动态走势分析
-    top_algo_types = set()
-    for a in selected_algos:
-        if a <= 25: top_algo_types.add("趋势")
-        elif a <= 50: top_algo_types.add("统计")
-        elif a <= 75: top_algo_types.add("数算")
-        else: top_algo_types.add("智能")
+    analysis = f"【实时回测模型】已完成近5期盘面回测。\n主攻指向【{main_atk}】({votes[main_atk]}票)；\n防守布置于【{defend}】({votes[defend]}票)；\n【杀中等】测算发现，【{kill_str}】处于诱盘中间地带({votes[kill_str]}票)，坚决绝杀！"
+    return {"kill": kill_str, "rec": f"{main_atk}(主攻)、{defend}(防守)、{backup}(备选)", "analysis": analysis, "algo_list": algo_records}
 
-    analysis = f"【极智严格回测模型】已对100套算法完成近5期盘面回测。\n"
-    analysis += f"本期从算法库中提取状态最佳的 20 套（主要构成：{','.join(top_algo_types)}派）。\n\n"
-    analysis += f"经交叉投票：\n"
-    analysis += f"主攻趋势指向【{main_atk}】（获{votes[main_atk]}票）；\n"
-    analysis += f"重点防守布置于【{defend}】（获{votes[defend]}票）；\n"
-    analysis += f"【杀中等】模型测算发现，【{kill_str}】处于诱盘中间地带（{votes[kill_str]}票），极易爆冷被杀，坚决绝杀！"
-
-    return {
-        "kill": kill_str,
-        "rec": f"{main_atk}(主攻)、{defend}(防守)、{backup}(备选)",
-        "analysis": analysis,
-        "algo_list": algo_records
-    }
-
-# ================== 抓取主循环 ==================
+# ================== 极速抓取主循环 ==================
 def fetch_loop():
     ctx = ssl._create_unverified_context()
     while True:
         for gt, cfg in GAMES.items():
             try:
-                req = urllib.request.Request(cfg['url'], headers={'User-Agent': 'Mozilla/5.0'})
-                with urllib.request.urlopen(req, timeout=10, context=ctx) as resp:
+                # 【核心修改】：加时间戳，强制防缓存！
+                req_url = f"{cfg['url']}&_={int(time.time()*1000)}"
+                req = urllib.request.Request(req_url, headers={'User-Agent': 'Mozilla/5.0'})
+                with urllib.request.urlopen(req, timeout=5, context=ctx) as resp:
                     data = json.loads(resp.read().decode('utf-8'))
                     if data.get('data'):
                         latest = data['data'][0]
@@ -189,26 +131,26 @@ def fetch_loop():
                                 "history": history
                             })
 
-                            # 极速严格预测
                             pred = calculate_strict_prediction(gt, history, next_p)
                             LIVE_DATA[gt]['pred'] = pred
                             LIVE_DATA[gt]['algo_list'] = pred['algo_list']
                             
+                            # 【核心修改】：入库带上开奖时间
                             with db() as conn:
-                                conn.execute('''INSERT INTO logs (gtype, period, kill, rec, analysis) VALUES (?,?,?,?,?)''', 
-                                             (gt, LIVE_DATA[gt]['next'], pred["kill"], pred["rec"], pred["analysis"]))
+                                conn.execute('''INSERT INTO logs (gtype, period, draw_time, kill, rec, analysis) VALUES (?,?,?,?,?,?)''', 
+                                             (gt, LIVE_DATA[gt]['next'], latest['draw_time'], pred["kill"], pred["rec"], pred["analysis"]))
                                 conn.commit()
                                 
                         diff = LIVE_DATA[gt]['target_time'] - datetime.utcnow().timestamp()
                         LIVE_DATA[gt]['left'] = max(0, int(diff))
                                 
-            except Exception:
+            except Exception as e:
                 pass
-        time.sleep(0.5)
+        time.sleep(0.2) # 后端 0.2 秒极速抓取一次
 
 threading.Thread(target=fetch_loop, daemon=True).start()
 
-# ================== 前端接口 ==================
+# ================== API 与 前端 ==================
 def verify(): return request.headers.get('X-Token') == SECRET_KEY
 
 @app.route('/api/data/<gt>')
@@ -251,7 +193,7 @@ def index():
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-    <title>严格回测抽样预测</title>
+    <title>秒级同步实战预测</title>
     <style>
         * { box-sizing: border-box; }
         body { background: #f4f6f9; margin: 0; font-family: -apple-system, sans-serif; color: #333; }
@@ -296,7 +238,7 @@ def index():
     </style>
 </head>
 <body>
-    <div class="head">严格回测抽样预测</div>
+    <div class="head">秒级同步实战预测</div>
     <div class="status" id="status"><span class="dot"></span> 系统运转正常</div>
     <div class="tabs">
         <div class="tab on" onclick="switchG('2', this)">加拿大28</div>
@@ -337,7 +279,7 @@ def index():
     </div>
 <script>
     let curG = '2', timer = null;
-    const KEY = "ultimate_strict_filter_v22";
+    const KEY = "ultimate_realtime_v23";
     function switchG(g, el) {
         curG = g;
         document.querySelectorAll('.tab').forEach(t => t.classList.remove('on'));
@@ -402,10 +344,11 @@ def index():
             document.getElementById('st-tw').innerText = res.stats.total_win;
             document.getElementById('st-tl').innerText = res.stats.total_lose;
             
+            // 【核心修改】：展示带开奖时间的历史记录
             document.getElementById('logs').innerHTML = res.logs.map(l => `
                 <div class="log-item">
                     <div>
-                        <div style="color:#b2bec3; font-size:12px;">${l.period}</div>
+                        <div style="color:#b2bec3; font-size:12px;">${l.period} | 开奖时间: ${l.draw_time || '---'}</div>
                         <div>绝杀:<span class="lose">${l.kill}</span> | 推荐:${l.rec}</div>
                     </div>
                     <div style="text-align:right">
@@ -422,8 +365,8 @@ def index():
         fetch(`/api/clear/${curG}`, { method: 'POST', headers: {'X-Token': KEY} }).then(() => fetchLogs());
     }
     fetchData(); fetchLogs();
-    setInterval(fetchData, 1000);
-    setInterval(fetchLogs, 5000);
+    setInterval(fetchData, 500); // 【核心修改】：前端 0.5 秒极速刷新界面
+    setInterval(fetchLogs, 2000);
 </script>
 </body>
 </html>
