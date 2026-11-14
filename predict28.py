@@ -7,12 +7,11 @@ import os
 import sqlite3
 import re
 import random
-import math
 from flask import Flask, request, jsonify
 from datetime import datetime, timedelta
 
 app = Flask(__name__)
-SECRET_KEY = "mean_reversion_v40"
+SECRET_KEY = "reverse_code_v41"
 
 GAMES = {
     "2": {"name": "加拿大28", "url": "https://yc28cn-ml1l.onrender.com/vipASDFGHJKLQQQWERTYUIOPWW9983/8626/0549CASWWW?type=2", "interval": 210},
@@ -20,14 +19,13 @@ GAMES = {
     "13": {"name": "比特28", "url": "https://yc28cn-ml1l.onrender.com/vipASDFGHJKLQQZXCVBNMWW9983/8626/0549CCBDR?type=13", "interval": 60}
 }
 
-AI_STATUS = {"online": True, "msg": "4期推演+均衡防重中..."}
+AI_STATUS = {"online": True, "msg": "逆向代码推演中..."}
 LIVE_DATA = {gt: {"period": "", "next": "", "left": 0, "history": [], "pred": None, "algo_list": []} for gt in GAMES}
 
-# 记录上期的绝杀项，用于均匀杀组防固定
 LAST_KILL_STR = {"2": "", "3": "", "13": ""}
 
 def db():
-    conn = sqlite3.connect('predict_v40.db', timeout=30)
+    conn = sqlite3.connect('predict_v41.db', timeout=30)
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -37,107 +35,84 @@ with db() as conn:
         analysis TEXT, real_result TEXT DEFAULT '', status TEXT DEFAULT 'wait')''')
     conn.commit()
 
-# ================== 核心统计学推演引擎 (近4期) ==================
+# ================== 纯代码逆向预测引擎 ==================
 def calculate_prediction(gt, history, next_p):
     if len(history) < 4:
         return {"kill": "数据不足", "rec": "数据不足", "analysis": "等待数据...", "algo_list": []}
         
-    h0 = history[0] # 最新
-    h1 = history[1] # 上1
-    h2 = history[2] # 上2
-    h3 = history[3] # 上3
+    h0 = history[0] 
+    h1 = history[1] 
+    h2 = history[2] 
+    h3 = history[3]
     
-    n0 = [int(x) for x in h0['nums'].split(' + ')]
-    n1 = [int(x) for x in h1['nums'].split(' + ')]
-    
-    s0, s1, s2, s3 = h0['total'], h1['total'], h2['total'], h3['total']
-    
-    # 1. 均值回归与标准差推演 (基于4期)
-    mean_sum = (s0 + s1 + s2 + s3) / 4.0
-    variance = ((s0 - mean_sum)**2 + (s1 - mean_sum)**2 + (s2 - mean_sum)**2 + (s3 - mean_sum)**2) / 4.0
-    std_dev = math.sqrt(variance)
-    
-    # 检测连续极端走势
-    is_big_streak = all(h['big_small'] == '大' for h in history[:4])
-    is_small_streak = all(h['big_small'] == '小' for h in history[:4])
-    is_odd_streak = all(h['odd_even'] == '单' for h in history[:4])
-    is_even_streak = all(h['odd_even'] == '双' for h in history[:4])
-    
-    # 2. 位置极值修正推演
-    if n0[0] - n1[0] <= -4:
-        pred_A = random.randint(4, 6) 
-    else:
-        pred_A = n0[0]
-    if n0[1] - n1[1] >= 3:
-        pred_B = random.randint(2, 4)
-    else:
-        pred_B = n0[1]
-    if n0[2] >= 7:
-        pred_C = random.randint(4, 6)
-    else:
-        pred_C = n0[2]
-        
-    # 3. 综合核心和值测算 (引入四舍五入 round)
-    target_sum = round(s0 - (std_dev * 1.2))
-    
-    # 极端连开强制反转
-    if is_big_streak:
-        target_sum = min(target_sum, 13) 
-    elif is_small_streak:
-        target_sum = max(target_sum, 14) 
-        
-    target_sum = max(0, min(27, target_sum))
-    
-    # 单双极端连开强制反转
-    if is_odd_streak and target_sum % 2 != 0:
-        target_sum = target_sum - 1 if target_sum > 0 else target_sum + 1
-    elif is_even_streak and target_sum % 2 == 0:
-        target_sum = target_sum - 1 if target_sum > 0 else target_sum + 1
+    # 提取大小单双序列
+    bs_seq = [h0['big_small'], h1['big_small'], h2['big_small'], h3['big_small']]
+    oe_seq = [h0['odd_even'], h1['odd_even'], h2['odd_even'], h3['odd_even']]
 
-    # 判定最终主攻方向
-    pred_bs = "大" if target_sum >= 14 else "小"
-    pred_oe = "单" if target_sum % 2 != 0 else "双"
-    main_vote = pred_bs + pred_oe
-    
-    # 4. 生成杀一推三策略
-    if is_big_streak:
-        kill_str = "大单" if is_odd_streak else "大双" 
-    elif is_small_streak:
-        kill_str = "小单" if is_odd_streak else "小双"
+    # 1. 逆向思维：大小方向决断
+    if bs_seq[0] == bs_seq[1] == bs_seq[2]: # 连开3期相同
+        main_bs = "小" if bs_seq[0] == "大" else "大"
+        kill_bs = bs_seq[0]
+        reason_bs = f"近3期连开【{bs_seq[0]}】，触发极值反杀，绝杀{bs_seq[0]}，主攻{main_bs}"
+    elif bs_seq[0] == bs_seq[1]: # 连开2期
+        main_bs = "小" if bs_seq[0] == "大" else "大"
+        kill_bs = bs_seq[0]
+        reason_bs = f"近2期连开【{bs_seq[0]}】，防断龙诱盘，绝杀{bs_seq[0]}，主攻{main_bs}"
     else:
-        # 如果是震荡期，直接杀与主攻极端相反的
-        kill_str = "大双" if main_vote == "小单" else ("小单" if main_vote == "大双" else "大单" if main_vote == "小双" else "小双")
-        
-    # 【禁止固定预测机制：均匀杀组】
+        # 跳变或交替
+        main_bs = bs_seq[0]
+        kill_bs = "小" if bs_seq[0] == "大" else "大"
+        reason_bs = f"走势呈现交替震荡，顺延上期【{bs_seq[0]}】，绝杀反向"
+
+    # 2. 逆向思维：单双方向决断
+    if oe_seq[0] == oe_seq[1] == oe_seq[2]:
+        main_oe = "双" if oe_seq[0] == "单" else "单"
+        kill_oe = oe_seq[0]
+        reason_oe = f"近3期连开【{oe_seq[0]}】，触极必反，绝杀{oe_seq[0]}，主攻{main_oe}"
+    elif oe_seq[0] == oe_seq[1]:
+        main_oe = "双" if oe_seq[0] == "单" else "单"
+        kill_oe = oe_seq[0]
+        reason_oe = f"近2期连开【{oe_seq[0]}】，高位防范断点，绝杀{oe_seq[0]}"
+    else:
+        main_oe = oe_seq[0]
+        kill_oe = "双" if oe_seq[0] == "单" else "单"
+        reason_oe = f"单双高频震荡，顺延上期【{oe_seq[0]}】"
+
+    # 3. 组合出主攻与绝杀
+    main_vote = main_bs + main_oe
+    kill_str = kill_bs + kill_oe
+    
+    # 安全校验：如果因为特殊逻辑导致主攻和绝杀撞车，强行错开
+    if main_vote == kill_str:
+        kill_str = "大单" if main_vote != "大单" else "小双"
+    
+    # 防重机制：如果这期绝杀跟上期一样，强行轮换
     if kill_str == LAST_KILL_STR[gt]:
-        # 如果跟上一期一样，强制剥夺绝杀权，按轮转顺序找下一个
-        all_options = ["大单", "大双", "小单", "小双"]
-        idx = all_options.index(kill_str)
-        kill_str = all_options[(idx + 1) % 4]
+        all_opts = ["大单", "大双", "小单", "小双"]
+        current_idx = all_opts.index(kill_str)
+        kill_str = all_opts[(current_idx + 1) % 4]
     
     LAST_KILL_STR[gt] = kill_str
 
-    # 【修复严重Bug：从推荐池中彻底剔除绝杀项】
+    # 4. 绝对互斥分配（修复 BUG 的核心代码）
     all_options = ["大单", "大双", "小单", "小双"]
+    # 从池子里彻底踢出主攻和绝杀
     available_recs = [opt for opt in all_options if opt != kill_str and opt != main_vote]
     
-    # 防御和备选从剩下的两个里挑
     defend = available_recs[0]
     backup = available_recs[1]
 
-    # 组装推演明细
-    streak_msg = "检测到4连极值，强制反转！" if (is_big_streak or is_small_streak or is_odd_streak or is_even_streak) else "走势处于震荡区间。"
-    
+    # 5. 组装推演明细
     algo_list = [
-        {"name": "4期均值回归", "vote": main_vote, "detail": f"近4期均值{mean_sum:.2f}，四舍五入推演和值 {target_sum}"},
-        {"name": "标准差极值修正", "vote": main_vote, "detail": f"4期标准差 {std_dev:.2f}，触发 {streak_msg}"},
-        {"name": "位置振幅推演", "vote": main_vote, "detail": f"推演下期位置：百位{pred_A}，十位{pred_B}，个位{pred_C}"}
+        {"name": "大小逆向推演", "vote": main_vote[0], "detail": reason_bs},
+        {"name": "单双逆向推演", "vote": main_vote[1], "detail": reason_oe},
+        {"name": "绝对互斥防线", "vote": main_vote, "detail": f"已强制剔除绝杀项，防守备选与绝杀零重合"}
     ]
 
-    analysis = f"【深度统计推演(4期版)】数据回归分析。\n"
-    analysis += f"- 近4期均值：{mean_sum:.2f}，当前标准差：{std_dev:.2f}。\n"
-    analysis += f"- 极值状态：{streak_msg}\n"
-    analysis += f"\n🔥 综合结论：主攻【{main_vote}】，坚决绝杀危险项【{kill_str}】！"
+    analysis = f"【纯代码逆向推演】摒弃一切虚假算法，纯逻辑杀盘。\n"
+    analysis += f"- 大小防线：{reason_bs}。\n"
+    analysis += f"- 单双防线：{reason_oe}。\n"
+    analysis += f"\n🔥 终极结论：坚决主攻【{main_vote}】，绝杀高危项【{kill_str}】！"
 
     return {
         "kill": kill_str, 
@@ -244,7 +219,7 @@ def index():
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-    <title>4期深度推演引擎</title>
+    <title>纯代码逆向推演</title>
     <style>
         * { box-sizing: border-box; }
         body { background: #f4f6f9; margin: 0; font-family: -apple-system, sans-serif; color: #333; }
@@ -291,7 +266,7 @@ def index():
     </style>
 </head>
 <body>
-    <div class="head">4期深度推演引擎</div>
+    <div class="head">纯代码逆向推演</div>
     <div class="status" id="status"><span class="dot"></span> 系统运转正常</div>
     <div class="tabs">
         <div class="tab on" onclick="switchG('2', this)">加拿大28</div>
@@ -307,7 +282,7 @@ def index():
     </div>
 
     <div class="api-list" id="api-box">
-        <div class="api-title" id="api-title">📡 核心推演逻辑明细</div>
+        <div class="api-title" id="api-title">📡 逆向推演逻辑明细</div>
         <div id="api-content"></div>
     </div>
 
@@ -332,7 +307,7 @@ def index():
     </div>
 <script>
     let curG = '2', timer = null;
-    const KEY = "mean_reversion_v40";
+    const KEY = "reverse_code_v41";
     
     function switchG(g, el) {
         curG = g;
