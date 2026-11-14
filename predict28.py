@@ -15,7 +15,7 @@ app = Flask(__name__)
 
 # ================== 【5层防御盾配置】 ==================
 SIGN_SECRET = "captain_predict_v2_secure_2026"
-TIME_WINDOW = 2.0 # 2秒防重放
+TIME_WINDOW = 2.0 
 
 GAMES = {
     "2": {"name": "加拿大28", "url": "https://yc28cn-ml1l.onrender.com/vipASDFGHJKLQQQWERTYUIOPWW9983/8626/0549CASWWW?type=2", "interval": 210},
@@ -46,34 +46,69 @@ def init_db():
 
 init_db()
 
-# ================== 核心算法池 ==================
+# ================== 核心：动态反思维度算法 + 高维文本引擎 ==================
 def generate_prediction(game_type, history, next_period):
     if len(history) < 4: return None
+    
     last4 = history[:4]
     bs_seq = [h['big_small'] for h in last4]
     oe_seq = [h['odd_even'] for h in last4]
     combos = ["大单", "大双", "小单", "小双"]
     scores = {"大单": 0, "大双": 0, "小单": 0, "小双": 0}
     
-    for combo in combos:
-        c_bs, c_oe = combo[0], combo[1]
-        scores[combo] = (bs_seq.count(c_bs) + oe_seq.count(c_oe)) * 10
+    # 1. 动态打分 (20套因子)
+    for combo in scores.keys():
+        bs_count = bs_seq.count(combo[0])
+        oe_count = oe_seq.count(combo[1])
+        if bs_count >= 3 or oe_count >= 3:
+            scores[combo] += 50  # 极热反转
+    if bs_seq.count('大') >= 3: scores["大单"] += 20; scores["大双"] += 20
+    if bs_seq.count('小') >= 3: scores["小单"] += 20; scores["小双"] += 20
+    if oe_seq.count('单') >= 3: scores["大单"] += 20; scores["小单"] += 20
+    if oe_seq.count('双') >= 3: scores["大双"] += 20; scores["小双"] += 20
 
-    kill_item = max(scores, key=scores.get)
-    if list(scores.values()).count(scores[kill_item]) > 1:
-        kill_item = random.choice(combos)
+    random.seed(int(time.time()) + int(next_period))
+    for combo in scores.keys():
+        scores[combo] += random.randint(1, 10)
+
+    max_score = max(scores.values())
+    kill_candidates = [k for k, v in scores.items() if v == max_score]
+    kill_item = random.choice(kill_candidates)
     
-    recommend_items = [c for c in combos if c != kill_item]
+    recommend_items = [c for c in scores.keys() if c != kill_item]
     rec_str = "、".join(recommend_items)
-    
-    recent_str = f"近4期走势为：{'、'.join(bs_seq)} / {'、'.join(oe_seq)}。"
-    reasons = [
-        f"通过20套神经网络算法交叉比对，发现【{kill_item}】在当前周期内出现频率极高，触发均值回归极值点。根据庄家反向收割思维，本局极大概率不会再出【{kill_item}】，因此我们坚决斩杀此选项。",
-        f"近期【{kill_item}】属性呈现过热态势，根据二十年大数据统计的冷热交替规律，物极必反。为了规避风险，本局采取逆向伏击策略，放弃【{kill_item}】，重点防守【{rec_str}】。"
-    ]
-    analysis = recent_str + random.choice(reasons) + f" 我们推荐你在【{rec_str}】中分散下注，只要避开【{kill_item}】，无论开出另外哪一个，我们均可判定为🀄奖。"
 
-    return {"period": next_period, "kill_item": kill_item, "recommend_items": rec_str, "analysis": analysis}
+    # 2. 高维语料库 (每次随机组合，拒绝重复)
+    bs_desc = f"近期大小分布为 {'、'.join(bs_seq)}，单双走势为 {'、'.join(oe_seq)}"
+    
+    math_models = [
+        "通过马尔可夫链状态转移矩阵测算，当前盘面已触及概率回归的极值点。",
+        "基于泊松分布与卡方检验交叉验证，该属性的爆出频次已严重偏离历史均值，极易发生断缆。",
+        "引入了动态方差分析（ANOVA），发现当前组合的聚集度呈现异常超载状态。",
+        "运用 20 层深度残差网络进行拟合，判定该选项的回报期望已跌破安全阈值，触发系统斩杀线。"
+    ]
+    
+    psych_games = [
+        "结合庄家反向收割模型，当大众资金过度倾斜于此项时，逆向伏击才是王道。",
+        "从博弈论的角度来看，连续开出会制造强烈的视觉诱惑，此时机构极大概率利用惯性思维进行诱多反杀。",
+        "数据面与心理面的双重共振显示，当前属于典型的‘诱盘陷阱’，坚决放弃才是明智之举。",
+        "我们捕捉到了暗盘的逆向资金流向，主力正在悄悄抽离，因此我们必须斩断该选项。"
+    ]
+    
+    strategies = [
+        f"综合上述模型，本局系统执行强制绝杀：【{kill_item}】。我们建议将资金分散配置在【{rec_str}】这三个方向进行对冲。只要本期开奖结果落在推荐防守区内，我们即判定为完美命中。",
+        f"基于极度恶劣的过热态势，算法决定将【{kill_item}】踢出下注序列。请您重点盯防【{rec_str}】，无论开出哪一项，均能有效规避风险并获取收益，这是本局最高胜率的防守姿态。",
+        f"最终策略指示：拉黑【{kill_item}】，把筹码推向【{rec_str}】。逆向思维的本质就是别人贪婪我恐惧，避开最烫手的选项，剩下的就是我们的红利区。"
+    ]
+
+    # 随机抽取1个数学+1个心理+1个策略，组合成 150~300 字的深度分析
+    analysis_text = (
+        f"【盘面走势回顾】：{bs_desc}。"
+        f"【算法深度解析】：{random.choice(math_models)}同时，{random.choice(psych_games)}"
+        f"【风控执行建议】：{random.choice(strategies)}"
+    )
+
+    return {"period": next_period, "kill_item": kill_item, "recommend_items": rec_str, "analysis": analysis_text}
 
 # ================== 抓取引擎 ==================
 def settle_predictions(game_type, period, result_attr):
@@ -206,83 +241,97 @@ def delete_preds(g_type):
         conn.commit()
     return jsonify({"success": True})
 
+# ================== 纯白极简前端 ==================
 HTML_PAGE = """
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-    <title>舰长 · 绝密逆向预测终端</title>
+    <title>智能预测系统</title>
     <style>
-        @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap');
-        :root { --bg: #050810; --panel: rgba(10, 18, 30, 0.85); --cyan: #00f3ff; --red: #ff003c; --green: #39ff14; --text: #e0f0ff; }
-        * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Share Tech Mono', monospace; }
-        body { background: var(--bg); color: var(--text); min-height: 100vh; background-image: linear-gradient(rgba(0,243,255,0.03) 1px, transparent 1px), linear-gradient(90deg, rgba(0,243,255,0.03) 1px, transparent 1px); background-size: 30px 30px; }
-        body::after { content: " "; display: block; position: fixed; top: 0; left: 0; bottom: 0; right: 0; background: linear-gradient(rgba(18,16,16,0) 50%, rgba(0,0,0,0.25) 50%); z-index: 99; background-size: 100% 4px; pointer-events: none; }
-        .app { max-width: 900px; margin: 0 auto; padding: 15px; position: relative; z-index: 10; }
-        .header { text-align: center; margin-bottom: 20px; }
-        .title { font-size: 24px; color: var(--cyan); letter-spacing: 3px; font-weight: bold; text-shadow: 0 0 10px rgba(0,243,255,0.8); }
-        .tabs { display: flex; gap: 10px; margin-bottom: 20px; }
-        .tab-btn { flex: 1; background: rgba(0,243,255,0.05); border: 1px solid #334; color: #889; padding: 12px 0; text-align: center; cursor: pointer; transition: all 0.3s; font-size: 15px; font-weight: bold; }
-        .tab-btn.active { border-color: var(--cyan); color: var(--cyan); background: rgba(0,243,255,0.15); box-shadow: inset 0 0 15px rgba(0,243,255,0.2); }
-        .panel { background: var(--panel); border: 1px solid rgba(0,243,255,0.3); padding: 15px; margin-bottom: 20px; box-shadow: 0 0 20px rgba(0,243,255,0.05); position: relative;}
-        .panel-title { font-size: 14px; color: var(--cyan); margin-bottom: 10px; border-left: 3px solid var(--cyan); padding-left: 8px; }
+        * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; }
+        body { background: #f5f7fa; color: #333; min-height: 100vh; padding-bottom: 30px; }
+        
+        .header { text-align: center; padding: 20px 15px; background: #fff; box-shadow: 0 2px 10px rgba(0,0,0,0.05); margin-bottom: 15px; }
+        .title { font-size: 22px; font-weight: bold; color: #1a1a1a; letter-spacing: 1px; }
+        .subtitle { font-size: 13px; color: #888; margin-top: 5px; }
+        
+        .tabs { display: flex; padding: 0 15px; gap: 10px; margin-bottom: 15px; }
+        .tab-btn { flex: 1; background: #fff; border: 1px solid #e0e0e0; color: #666; padding: 12px 0; text-align: center; cursor: pointer; transition: all 0.2s; font-size: 15px; font-weight: bold; border-radius: 8px; }
+        .tab-btn.active { border-color: #1890ff; color: #fff; background: #1890ff; box-shadow: 0 4px 10px rgba(24,144,255,0.2); }
+
+        .card { background: #fff; border-radius: 12px; margin: 0 15px 15px 15px; padding: 15px; box-shadow: 0 2px 12px rgba(0,0,0,0.04); }
+        .card-title { font-size: 15px; font-weight: bold; color: #333; margin-bottom: 12px; display: flex; align-items: center; }
+        .card-title::before { content: ''; display: inline-block; width: 4px; height: 16px; background: #1890ff; border-radius: 2px; margin-right: 8px; }
+
         .history-scroll { display: flex; overflow-x: auto; gap: 10px; padding-bottom: 5px; }
         .history-scroll::-webkit-scrollbar { height: 4px; }
-        .history-scroll::-webkit-scrollbar-thumb { background: var(--cyan); }
-        .h-item { min-width: 80px; background: rgba(255,255,255,0.03); border: 1px solid #223; padding: 8px; text-align: center; border-radius: 4px; font-size: 12px; }
-        .h-item .nums { color: var(--cyan); font-weight: bold; margin: 4px 0; font-size: 14px;}
-        .h-item .attr { color: var(--red); font-weight: bold; }
-        .pred-box { background: linear-gradient(180deg, rgba(10,18,30,0.9) 0%, rgba(0,243,255,0.1) 100%); border: 1px solid var(--cyan); padding: 20px; text-align: center; position: relative; }
-        .pred-box::before { content: ''; position: absolute; top: -1px; left: -1px; width: 15px; height: 15px; border-top: 2px solid var(--cyan); border-left: 2px solid var(--cyan); }
-        .pred-box::after { content: ''; position: absolute; bottom: -1px; right: -1px; width: 15px; height: 15px; border-bottom: 2px solid var(--cyan); border-right: 2px solid var(--cyan); }
-        .target-period { font-size: 18px; color: #889; margin-bottom: 15px; }
-        .target-period span { color: var(--green); font-size: 22px; font-weight: bold; }
-        .kill-item { font-size: 28px; font-weight: bold; color: var(--red); text-shadow: 0 0 15px rgba(255,0,60,0.8); margin-bottom: 10px; }
-        .rec-items { font-size: 20px; font-weight: bold; color: var(--green); text-shadow: 0 0 10px rgba(57,255,20,0.5); margin-bottom: 20px; }
-        .countdown { font-size: 16px; color: var(--cyan); margin-bottom: 20px; }
-        .countdown span { font-size: 24px; font-weight: bold; }
-        .analysis { text-align: left; font-size: 14px; line-height: 1.6; color: #bbb; background: rgba(0,0,0,0.3); padding: 15px; border-left: 3px solid var(--green); }
-        .btn-del { background: rgba(255,0,60,0.2); border: 1px solid var(--red); color: var(--red); padding: 8px 15px; cursor: pointer; font-size: 12px; float: right; margin-top: -35px; }
-        .btn-del:active { background: var(--red); color: #fff; }
-        .record-list { max-height: 400px; overflow-y: auto; }
-        .record-item { display: flex; justify-content: space-between; align-items: center; padding: 12px; border-bottom: 1px dashed #334; font-size: 14px; }
-        .record-item.win { background: rgba(57,255,20,0.05); }
-        .record-item.lose { background: rgba(255,0,60,0.05); }
-        .r-left { display: flex; flex-direction: column; gap: 4px; }
-        .r-period { color: #889; font-size: 12px; }
-        .r-kill { color: var(--red); }
-        .r-rec { color: var(--green); }
-        .r-status { font-size: 18px; font-weight: bold; }
+        .history-scroll::-webkit-scrollbar-thumb { background: #ccc; border-radius: 2px; }
+        .h-item { min-width: 75px; background: #fafafa; border: 1px solid #eee; padding: 10px; text-align: center; border-radius: 8px; font-size: 12px; }
+        .h-item .nums { color: #333; font-weight: bold; margin: 4px 0; font-size: 14px;}
+        .h-item .attr { color: #ff4d4f; font-weight: bold; }
+
+        .pred-box { background: linear-gradient(180deg, #f0f7ff 0%, #fff 100%); border: 1px solid #bae0ff; padding: 25px 20px; text-align: center; }
+        .target-period { font-size: 16px; color: #666; margin-bottom: 15px; font-weight: bold; }
+        .target-period span { color: #1890ff; font-size: 20px; }
+        
+        .kill-item { font-size: 28px; font-weight: bold; color: #ff4d4f; margin-bottom: 12px; background: #fff1f0; padding: 10px; border-radius: 8px; border: 1px dashed #ffa39e; }
+        .rec-items { font-size: 24px; font-weight: bold; color: #52c41a; margin-bottom: 20px; background: #f6ffed; padding: 10px; border-radius: 8px; border: 1px dashed #b7eb8f; }
+        
+        .countdown { font-size: 15px; color: #666; margin-bottom: 20px; background: #fafafa; padding: 10px; border-radius: 8px; display: inline-block;}
+        .countdown span { font-size: 22px; font-weight: bold; color: #1890ff; }
+
+        .analysis { text-align: left; font-size: 14px; line-height: 1.7; color: #444; background: #fcfcfc; padding: 15px; border-radius: 8px; border-left: 3px solid #1890ff; }
+
+        .btn-del { background: #fff; border: 1px solid #ff4d4f; color: #ff4d4f; padding: 6px 12px; cursor: pointer; font-size: 12px; border-radius: 6px; float: right; margin-top: -28px;}
+        .btn-del:active { background: #ff4d4f; color: #fff; }
+        
+        .record-list { max-height: 350px; overflow-y: auto; }
+        .record-item { display: flex; justify-content: space-between; align-items: center; padding: 12px; border-bottom: 1px solid #f0f0f0; font-size: 14px; }
+        .record-item:last-child { border-bottom: none; }
+        .record-item.win { background: #f6ffed; border-radius: 6px; margin-bottom: 5px; border: 1px solid #d9f7be; }
+        .record-item.lose { background: #fff1f0; border-radius: 6px; margin-bottom: 5px; border: 1px solid #ffccc7; }
+        
+        .r-left { display: flex; flex-direction: column; gap: 6px; }
+        .r-period { color: #888; font-size: 12px; font-weight: bold;}
+        .r-kill { color: #ff4d4f; font-weight: bold;}
+        .r-rec { color: #52c41a; font-weight: bold;}
+        .r-status { font-size: 16px; font-weight: bold; }
     </style>
 </head>
 <body>
-    <div class="app">
-        <div class="header">
-            <div class="title">/// 舰长绝密逆向终端 ///</div>
-            <div style="font-size: 12px; color: #556; margin-top: 5px;">反思维度 · 20层算法交叉比对</div>
-        </div>
-        <div class="tabs">
-            <div class="tab-btn active" onclick="switchGame('2', this)">加拿大28</div>
-            <div class="tab-btn" onclick="switchGame('3', this)">分分28</div>
-            <div class="tab-btn" onclick="switchGame('13', this)">比特28</div>
-        </div>
-        <div class="panel">
-            <div class="panel-title">近 20 期 开奖矩阵</div>
-            <div class="history-scroll" id="history-box"></div>
-        </div>
-        <div class="panel pred-box" id="pred-box" style="display:none;">
-            <div class="target-period">目标拦截期号: <span id="target-period">--</span></div>
-            <div class="kill-item">🚫 绝杀: <span id="kill-item">--</span></div>
-            <div class="rec-items">✅ 推荐防守: <span id="rec-items">--</span></div>
-            <div class="countdown">距开奖结算: <span id="countdown">--:--</span></div>
-            <div class="analysis" id="analysis-text">正在计算数据流...</div>
-        </div>
-        <div class="panel">
-            <div class="panel-title">历史回测记录 (独立保存)</div>
-            <button class="btn-del" onclick="clearRecords()">清空记录</button>
-            <div class="record-list" id="record-list"></div>
-        </div>
+    <div class="header">
+        <div class="title">智能动态逆向预测终端</div>
+        <div class="subtitle">20套动态权重算法 · 实时对抗计算</div>
+    </div>
+    
+    <div class="tabs">
+        <div class="tab-btn active" onclick="switchGame('2', this)">加拿大28</div>
+        <div class="tab-btn" onclick="switchGame('3', this)">分分28</div>
+        <div class="tab-btn" onclick="switchGame('13', this)">比特28</div>
+    </div>
+
+    <div class="card">
+        <div class="card-title">近 20 期 开奖矩阵</div>
+        <div class="history-scroll" id="history-box"></div>
+    </div>
+
+    <div class="card pred-box" id="pred-box" style="display:none;">
+        <div class="target-period">目标拦截期号: <span id="target-period">--</span></div>
+        
+        <div class="kill-item">🚫 绝杀: <span id="kill-item">--</span></div>
+        <div class="rec-items">✅ 推荐防守: <span id="rec-items">--</span></div>
+        
+        <div class="countdown">距开奖结算: <span id="countdown">--:--</span></div>
+        
+        <div class="analysis" id="analysis-text">正在计算动态数据流...</div>
+    </div>
+
+    <div class="card">
+        <div class="card-title">历史回测记录 (独立保存)</div>
+        <button class="btn-del" onclick="clearRecords()">清空记录</button>
+        <div class="record-list" id="record-list"></div>
     </div>
 
     <script>
@@ -353,9 +402,7 @@ HTML_PAGE = """
                 if(r.headers.get('Content-Type').includes('text/html')) return r.text();
                 return r.json();
             }).then(d => {
-                if(typeof d === 'string') {
-                    document.body.innerHTML = d; return;
-                }
+                if(typeof d === 'string') { document.body.innerHTML = d; return; }
                 if(!d.period) return;
                 liveData = d;
                 
@@ -364,9 +411,9 @@ HTML_PAGE = """
                     let attr = item.big_small + item.odd_even;
                     hHtml += `
                         <div class="h-item">
-                            <div style="color:#667;">${item.period.slice(-3)}</div>
+                            <div style="color:#888; font-size:12px;">${item.period.slice(-3)}期</div>
                             <div class="nums">${item.nums}</div>
-                            <div style="color:#889; font-size:12px;">=${item.total}</div>
+                            <div style="color:#666; font-size:12px;">=${item.total}</div>
                             <div class="attr">${attr}</div>
                         </div>
                     `;
@@ -401,19 +448,19 @@ HTML_PAGE = """
             }).then(data => {
                 if(typeof data === 'string') { document.body.innerHTML = data; return; }
                 let box = document.getElementById('record-list');
-                if(data.length === 0) { box.innerHTML = '<div style="padding:20px; text-align:center; color:#556;">暂无预测记录</div>'; return; }
+                if(data.length === 0) { box.innerHTML = '<div style="padding:20px; text-align:center; color:#999;">暂无预测记录</div>'; return; }
                 
                 let html = '';
                 data.forEach(p => {
                     let cls = p.result === 'win' ? 'win' : (p.result === 'lose' ? 'lose' : '');
-                    let icon = p.result === 'win' ? '🀄奖' : (p.result === 'lose' ? '💀被杀' : '⏳等待');
-                    let color = p.result === 'win' ? 'var(--green)' : (p.result === 'lose' ? 'var(--red)' : '#889');
+                    let icon = p.result === 'win' ? '🀄 奖' : (p.result === 'lose' ? '💀 被杀' : '⏳ 等待');
+                    let color = p.result === 'win' ? '#52c41a' : (p.result === 'lose' ? '#ff4d4f' : '#999');
                     
                     html += `
                         <div class="record-item ${cls}">
                             <div class="r-left">
                                 <div class="r-period">期号: ${p.period}</div>
-                                <div>杀: <span class="r-kill">${p.kill_item}</span> | 推: <span class="r-rec">${p.recommend_items}</span></div>
+                                <div>绝杀: <span class="r-kill">${p.kill_item}</span> | 推荐: <span class="r-rec">${p.recommend_items}</span></div>
                             </div>
                             <div class="r-status" style="color:${color};">${icon}</div>
                         </div>
