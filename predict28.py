@@ -5,13 +5,11 @@ import time
 import threading
 import os
 import sqlite3
-import re
-import random
 from flask import Flask, request, jsonify
 from datetime import datetime, timedelta
 
 app = Flask(__name__)
-SECRET_KEY = "high_win_v44"
+SECRET_KEY = "reverse_frequency_v50"
 
 GAMES = {
     "2": {"name": "加拿大28", "url": "https://yc28cn-ml1l.onrender.com/vipASDFGHJKLQQQWERTYUIOPWW9983/8626/0549CASWWW?type=2", "interval": 210},
@@ -19,14 +17,15 @@ GAMES = {
     "13": {"name": "比特28", "url": "https://yc28cn-ml1l.onrender.com/vipASDFGHJKLQQZXCVBNMWW9983/8626/0549CCBDR?type=13", "interval": 60}
 }
 
-AI_STATUS = {"online": True, "msg": "极简暴力推演中..."}
+AI_STATUS = {"online": True, "msg": "50期频次回测反杀中..."}
 LIVE_DATA = {gt: {"period": "", "next": "", "left": 0, "history": [], "pred": None, "algo_list": []} for gt in GAMES}
 
+# 记录上期的绝杀项和连杀次数
 LAST_KILL_STR = {"2": "", "3": "", "13": ""}
 KILL_STREAK_COUNT = {"2": 0, "3": 0, "13": 0}
 
 def db():
-    conn = sqlite3.connect('predict_v44.db', timeout=30)
+    conn = sqlite3.connect('predict_v50.db', timeout=30)
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -36,106 +35,79 @@ with db() as conn:
         analysis TEXT, real_result TEXT DEFAULT '', status TEXT DEFAULT 'wait')''')
     conn.commit()
 
-# ================== 极简暴力判定引擎 ==================
+# ================== 多周期高频反杀引擎 ==================
 def calculate_prediction(gt, history, next_p):
-    if len(history) < 5:
-        return {"kill": "数据不足", "rec": "数据不足", "analysis": "等待数据...", "algo_list": []}
+    if len(history) < 10:
+        return {"kill": "数据不足", "rec": "数据不足", "analysis": "等待足够的50期数据...", "algo_list": []}
         
-    bs_seq = [h['big_small'] for h in history[:5]]
-    oe_seq = [h['odd_even'] for h in history[:5]]
-
-    # --- 1. 大小判定 ---
-    if bs_seq[0] == bs_seq[1] == bs_seq[2] == bs_seq[3]:
-        main_bs, kill_bs = ("小", "大") if bs_seq[0] == "大" else ("大", "小")
-        reason_bs = f"【极值反杀】连开4期{bs_seq[0]}，物极必反，杀{bs_seq[0]}"
-    elif bs_seq[0] == bs_seq[1] == bs_seq[2] or bs_seq[0] == bs_seq[1]:
-        main_bs = bs_seq[0]
-        kill_bs = "小" if bs_seq[0] == "大" else "大"
-        reason_bs = f"【短龙顺跟】连开{bs_seq[0]}，顺势跟风，杀反向"
-    elif bs_seq[0] == bs_seq[2] and bs_seq[0] != bs_seq[1]:
-        main_bs = "小" if bs_seq[0] == "大" else "大"
-        kill_bs = bs_seq[0]
-        reason_bs = f"【假突破杀】走势{bs_seq[2]}-{bs_seq[1]}-{bs_seq[0]}，典型诱盘，杀{bs_seq[0]}"
-    else:
-        cnt_0 = bs_seq.count(bs_seq[0])
-        if cnt_0 >= 3:
-            main_bs, kill_bs = ("小", "大") if bs_seq[0] == "大" else ("大", "小")
-            reason_bs = f"【频次杀热】{bs_seq[0]}出号极多，防守回落，杀{bs_seq[0]}"
-        else:
-            main_bs = bs_seq[0]
-            kill_bs = "小" if bs_seq[0] == "大" else "大"
-            reason_bs = f"【无序震荡】顺延上期{bs_seq[0]}"
-
-    # --- 2. 单双判定 ---
-    if oe_seq[0] == oe_seq[1] == oe_seq[2] == oe_seq[3]:
-        main_oe, kill_oe = ("双", "单") if oe_seq[0] == "单" else ("单", "双")
-        reason_oe = f"【极值反杀】连开4期{oe_seq[0]}，物极必反，杀{oe_seq[0]}"
-    elif oe_seq[0] == oe_seq[1] == oe_seq[2] or oe_seq[0] == oe_seq[1]:
-        main_oe = oe_seq[0]
-        kill_oe = "双" if oe_seq[0] == "单" else "单"
-        reason_oe = f"【短龙顺跟】连开{oe_seq[0]}，顺势跟风，杀反向"
-    elif oe_seq[0] == oe_seq[2] and oe_seq[0] != oe_seq[1]:
-        main_oe = "双" if oe_seq[0] == "单" else "单"
-        kill_oe = oe_seq[0]
-        reason_oe = f"【假突破杀】走势诱盘，杀{oe_seq[0]}"
-    else:
-        cnt_0 = oe_seq.count(oe_seq[0])
-        if cnt_0 >= 3:
-            main_oe, kill_oe = ("双", "单") if oe_seq[0] == "单" else ("单", "双")
-            reason_oe = f"【频次杀热】{oe_seq[0]}出号极多，杀{oe_seq[0]}"
-        else:
-            main_oe = oe_seq[0]
-            kill_oe = "双" if oe_seq[0] == "单" else "单"
-            reason_oe = f"【无序震荡】顺延上期{oe_seq[0]}"
-
-    # --- 3. 组合与安全校验 ---
-    main_vote = main_bs + main_oe
-    kill_str = kill_bs + kill_oe
+    # 限制最大取50期
+    max_len = min(50, len(history))
     
-    # 强制互斥：如果算出来主攻=绝杀，直接打自己脸，重新分配
-    if main_vote == kill_str:
-        main_vote = "小双" if main_vote != "小双" else "大单"
+    # 周期权重定义：近10期权重最高，50期权重最低
+    cycles = {10: 5, 20: 4, 30: 3, 40: 2, 50: 1}
+    scores = {"大单": 0, "大双": 0, "小单": 0, "小双": 0}
+    
+    algo_list = []
+    
+    for cycle, weight in cycles.items():
+        if len(history) >= cycle:
+            recent = history[:cycle]
+            counts = {"大单": 0, "大双": 0, "小单": 0, "小双": 0}
+            for h in recent:
+                combo = h['big_small'] + h['odd_even']
+                if combo in counts:
+                    counts[combo] += 1
+            
+            # 累加加权得分
+            for combo in scores:
+                scores[combo] += counts[combo] * weight
+                
+            # 记录当前周期的最高频项
+            max_combo = max(counts, key=counts.get)
+            algo_list.append({
+                "name": f"近{cycle}期高频", 
+                "vote": max_combo, 
+                "detail": f"最高频【{max_combo}】出现{counts[max_combo]}次"
+            })
 
-    # --- 4. 过段熔断机制 ---
+    # 按得分从高到低排序（得分越高，出现次数越多，越容易回落）
+    sorted_scores = sorted(scores.items(), key=lambda x: x[1], reverse=True)
+    
+    # 【反着来逻辑】：高频的三个去防守和绝杀，低频的一个去主攻
+    # 排除连杀熔断
+    if KILL_STREAK_COUNT[gt] >= 2:
+        # 已经连杀两期同一个方向，第三期强制换
+        KILL_STREAK_COUNT[gt] = 0
+        kill_str = sorted_scores[1][0]
+        defend_str = sorted_scores[0][0]
+        backup_str = sorted_scores[2][0]
+        main_vote = sorted_scores[3][0]
+    else:
+        kill_str = sorted_scores[0][0]    # 最热的，绝杀
+        defend_str = sorted_scores[1][0]  # 第二热的，防守
+        backup_str = sorted_scores[2][0]  # 第三热的，备选
+        main_vote = sorted_scores[3][0]   # 最冷的，主攻
+
+    # 更新熔断计数
     if kill_str == LAST_KILL_STR[gt]:
         KILL_STREAK_COUNT[gt] += 1
     else:
         KILL_STREAK_COUNT[gt] = 1
-        
     LAST_KILL_STR[gt] = kill_str
 
-    if KILL_STREAK_COUNT[gt] >= 3:
-        all_opts = ["大单", "大双", "小单", "小双"]
-        available_kills = [opt for opt in all_opts if opt != kill_str and opt != main_vote]
-        kill_str = random.choice(available_kills)
-        KILL_STREAK_COUNT[gt] = 1
-        LAST_KILL_STR[gt] = kill_str
-        reason_bs += " (触发熔断)"
-        # 再次校验主攻与绝杀
-        if main_vote == kill_str:
-            main_vote = [opt for opt in all_opts if opt != kill_str][0]
-
-    # --- 5. 绝对互斥分配 ---
-    all_options = ["大单", "大双", "小单", "小双"]
-    available_recs = [opt for opt in all_options if opt != kill_str and opt != main_vote]
-    defend = available_recs[0]
-    backup = available_recs[1]
-
-    # 组装推演明细
-    algo_list = [
-        {"name": "大小判定", "vote": main_bs, "detail": reason_bs},
-        {"name": "单双判定", "vote": main_oe, "detail": reason_oe},
-        {"name": "过段风控", "vote": "正常", "detail": f"当前绝杀连击：{KILL_STREAK_COUNT[gt]}/3"}
-    ]
-
-    analysis = f"【多段位博弈推演】\n"
-    analysis += f"- 大小判定：{reason_bs}\n"
-    analysis += f"- 单双判定：{reason_oe}\n"
-    analysis += f"\n🎯 终极决断：主攻【{main_vote}】，坚决绝杀【{kill_str}】！"
+    # 格式化得分
+    score_str = " | ".join([f"{k}:{v}分" for k, v in sorted_scores])
+    
+    analysis = f"【多周期频次反杀】逆向博弈逻辑。\n"
+    analysis += f"- 综合得分：{score_str}\n"
+    analysis += f"- 【反着来】：坚决绝杀最热项【{kill_str}】，主攻最冷门【{main_vote}】！\n"
+    
+    # 把得分作为推演明细展示
+    algo_list.append({"name": "加权总分统计", "vote": "锁定", "detail": score_str})
 
     return {
         "kill": kill_str, 
-        "rec": f"{main_vote}(主攻)、{defend}(防守)、{backup}(备选)", 
+        "rec": f"{main_vote}(主攻)、{defend_str}(防守)、{backup_str}(备选)", 
         "analysis": analysis, 
         "algo_list": algo_list
     }
@@ -151,16 +123,20 @@ def fetch_loop():
                 with urllib.request.urlopen(req, timeout=5, context=ctx) as resp:
                     data = json.loads(resp.read().decode('utf-8'))
                     if data.get('data'):
-                        latest = data['data'][0]
+                        # 获取全部历史数据，最多截取50期
+                        raw_data = data['data'][:50]
+                        latest = raw_data[0]
+                        
                         history = [{
                             "period": i['period'], 
                             "nums": f"{i['num1']} + {i['num2']} + {i['num3']}", 
                             "total": i['total'], 
                             "big_small": i['big_small'], 
                             "odd_even": i['odd_even']
-                        } for i in data['data'][:20]]
+                        } for i in raw_data]
                         
                         if LIVE_DATA[gt]['period'] != latest['period']:
+                            # 结算
                             if LIVE_DATA[gt]['period'] != "" and LIVE_DATA[gt]['pred']:
                                 real = latest['big_small'] + latest['odd_even']
                                 p_kill = LIVE_DATA[gt]['pred']['kill']
@@ -189,7 +165,7 @@ def fetch_loop():
                         diff = LIVE_DATA[gt]['target_time'] - datetime.utcnow().timestamp()
                         LIVE_DATA[gt]['left'] = max(0, int(diff))
                                 
-            except Exception:
+            except Exception as e:
                 pass
         time.sleep(0.1)
 
@@ -238,7 +214,7 @@ def index():
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-    <title>多段位博弈推演</title>
+    <title>多周期频次反杀系统</title>
     <style>
         * { box-sizing: border-box; }
         body { background: #f4f6f9; margin: 0; font-family: -apple-system, sans-serif; color: #333; }
@@ -285,7 +261,7 @@ def index():
     </style>
 </head>
 <body>
-    <div class="head">多段位博弈推演</div>
+    <div class="head">多周期频次反杀系统</div>
     <div class="status" id="status"><span class="dot"></span> 系统运转正常</div>
     <div class="tabs">
         <div class="tab on" onclick="switchG('2', this)">加拿大28</div>
@@ -301,7 +277,7 @@ def index():
     </div>
 
     <div class="api-list" id="api-box">
-        <div class="api-title" id="api-title">📡 多段位博弈逻辑明细</div>
+        <div class="api-title" id="api-title">📡 多周期频次统计</div>
         <div id="api-content"></div>
     </div>
 
@@ -326,7 +302,7 @@ def index():
     </div>
 <script>
     let curG = '2', timer = null;
-    const KEY = "high_win_v44";
+    const KEY = "reverse_frequency_v50";
     
     function switchG(g, el) {
         curG = g;
