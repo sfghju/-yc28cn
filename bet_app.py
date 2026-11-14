@@ -67,12 +67,12 @@ def init_db():
         if not cursor.fetchone():
             conn.execute("INSERT INTO users (username, nickname, password, role, avatar) VALUES ('ADMIN888', '站长', '123456', 'admin', 'https://api.dicebear.com/7.x/bottts/svg?seed=admin')")
         
+        # 生成5000机器人
         robot_count = conn.execute("SELECT COUNT(*) FROM users WHERE role='robot'").fetchone()[0]
         if robot_count < 5000:
-            surnames = ["赵", "钱", "孙", "李", "周", "吴", "郑", "王", "冯", "陈", "褚", "卫", "蒋", "沈", "韩", "杨", "朱", "秦", "尤", "许"]
-            names = ["哥", "姐", "总", "少", "神", "王", "帝", "霸", "龙", "虎", "强", "帅", "美", "丽", "花", "爷", "董", "老板"]
-            robots_to_add = 5000 - robot_count
-            for i in range(robots_to_add):
+            surnames = ["赵", "钱", "孙", "李", "周", "吴", "郑", "王", "冯", "陈", "褚", "卫", "蒋", "沈", "韩", "杨", "朱", "秦"]
+            names = ["哥", "姐", "总", "少", "神", "王", "帝", "霸", "龙", "虎", "强", "帅", "美", "丽", "花", "爷", "董"]
+            for i in range(5000 - robot_count):
                 uname = f"R{random.randint(10000, 99999)}_{i}"
                 nick = random.choice(surnames) + random.choice(names) + str(random.randint(1, 99))
                 avatar = f"https://api.dicebear.com/7.x/adventurer/svg?seed={uname}"
@@ -84,72 +84,7 @@ def init_db():
 
 init_db()
 
-# ================== 机器人实时下注引擎 ==================
-def robot_continuous_bet(game_type):
-    if LIVE_DATA[game_type]['left_time'] <= GAMES[game_type]['close_sec']:
-        return
-
-    num_robots = random.randint(1, 3)
-
-    with get_db() as conn:
-        robots = conn.execute("SELECT id, nickname FROM users WHERE role='robot' ORDER BY RANDOM() LIMIT ?", (num_robots,)).fetchall()
-        
-        for r in robots:
-            amt = random.choice([10, 20, 50, 100, 200, 500])
-            b_type = random.choice(['bs', 'oe', 'num', 'combo', 'pattern'])
-            
-            if b_type == 'bs':
-                b_val = random.choice(['大', '小']); odds = 2.8
-            elif b_type == 'oe':
-                b_val = random.choice(['单', '双']); odds = 2.8
-            elif b_type == 'num':
-                b_val = str(random.randint(0, 27)); odds = ODDS['nums'].get(int(b_val), 10)
-            elif b_type == 'combo':
-                b_val = random.choice(['大单', '小双', '大双', '小单']); odds = 6.3 if '大单' in b_val or '小双' in b_val else 6.7
-            else:
-                b_val = random.choice(['豹子', '顺子', '对子', '极大', '极小']); odds = 88 if b_val=='豹子' else (16 if b_val in ['极大','极小','顺子'] else 3.6)
-            
-            conn.execute('''INSERT INTO bets (user_id, game_type, period, bet_type, bet_value, amount, odds) VALUES (?, ?, ?, ?, ?, ?, ?)''', 
-                         (r['id'], game_type, LIVE_DATA[game_type]['next_period'], b_type, b_val, amt, odds))
-            
-            msg_content = f"{b_val}:{amt}"
-            conn.execute("INSERT INTO messages (game_type, user_id, role, content) VALUES (?, ?, 'user', ?)", 
-                         (game_type, r['id'], msg_content))
-        
-        conn.commit()
-        
-        count = conn.execute("SELECT COUNT(DISTINCT user_id) FROM bets WHERE game_type=? AND period=?", (game_type, LIVE_DATA[game_type]['next_period'])).fetchone()[0]
-        LIVE_DATA[game_type]['robot_count'] = count
-
-# ================== 封盘账单播报 ==================
-def broadcast_bill(game_type, period):
-    with get_db() as conn:
-        bets = conn.execute('''SELECT u.nickname, b.bet_value, b.amount FROM bets b JOIN users u ON b.user_id = u.id WHERE b.game_type=? AND b.period=? AND b.status='pending' ''', (game_type, period)).fetchall()
-        if not bets: return
-        
-        user_bets = {}
-        for b in bets:
-            name = b['nickname']
-            if name not in user_bets: user_bets[name] = {'items': [], 'total': 0}
-            user_bets[name]['items'].append(f"{b['bet_value']}:{b['amount']}")
-            user_bets[name]['total'] += b['amount']
-        
-        bill_lines = [f"========= 封盘统计 ========="]
-        bill_lines.append(f"第 {period} 期玩家投注账单 (部分展示)")
-        
-        # 随机抽取前 30 个幸运玩家展示
-        display_items = list(user_bets.items())[:30] 
-        for u, data in display_items:
-            items_str = " ".join(data['items'])
-            bill_lines.append(f"{u}-[{items_str}]_{data['total']}")
-        
-        bill_lines.append(f"... 本期共有 {len(user_bets)} 名玩家参与，感谢支持！")
-        bill_lines.append(f"===========================")
-            
-        conn.execute("INSERT INTO messages (game_type, user_id, role, content) VALUES (?, 0, 'robot', ?)", (game_type, "\n".join(bill_lines)))
-        conn.commit()
-
-# ================== 自动结算 ==================
+# ================== 极速结算模块 ==================
 def settle_bets(game_type, period, nums, total):
     n1, n2, n3 = nums
     is_triple = (n1 == n2 == n3)
@@ -161,6 +96,9 @@ def settle_bets(game_type, period, nums, total):
     
     with get_db() as conn:
         pending_bets = conn.execute("SELECT * FROM bets WHERE game_type=? AND period=? AND status='pending'", (game_type, period)).fetchall()
+        if not pending_bets: return
+        
+        updates = []
         for bet in pending_bets:
             win, refund, win_amt = False, False, 0.0
             if total in [13, 14] and (is_pair or is_straight or is_triple):
@@ -179,16 +117,70 @@ def settle_bets(game_type, period, nums, total):
                     if bet['bet_value'] == '对子' and is_pair and not is_triple: win, win_amt = True, bet['amount'] * bet['odds']
 
             if refund:
-                conn.execute("UPDATE bets SET status='refund' WHERE id=?", (bet['id'],))
-                conn.execute("UPDATE users SET balance = balance + ? WHERE id=?", (bet['amount'], bet['user_id']))
+                updates.append((bet['id'], 'refund', 0.0, bet['user_id'], bet['amount']))
             elif win:
-                conn.execute("UPDATE bets SET status='win', win_amount=? WHERE id=?", (win_amt, bet['id']))
-                conn.execute("UPDATE users SET balance = balance + ? WHERE id=?", (win_amt, bet['user_id']))
+                updates.append((bet['id'], 'win', win_amt, bet['user_id'], win_amt))
             else:
-                conn.execute("UPDATE bets SET status='lose' WHERE id=?", (bet['id'],))
+                updates.append((bet['id'], 'lose', 0.0, bet['user_id'], 0.0))
+
+        for u in updates:
+            bet_id, status, win_amt, uid, add_bal = u
+            conn.execute("UPDATE bets SET status=?, win_amount=? WHERE id=?", (status, win_amt, bet_id))
+            if add_bal > 0:
+                conn.execute("UPDATE users SET balance = balance + ? WHERE id=?", (add_bal, uid))
         conn.commit()
 
-# ================== 核心抓取与控制 ==================
+def broadcast_bill(game_type, period):
+    with get_db() as conn:
+        bets = conn.execute('''SELECT u.nickname, b.bet_value, b.amount FROM bets b JOIN users u ON b.user_id = u.id WHERE b.game_type=? AND b.period=? ''', (game_type, period)).fetchall()
+        if not bets: return
+        
+        user_bets = {}
+        for b in bets:
+            name = b['nickname']
+            if name not in user_bets: user_bets[name] = {'items': [], 'total': 0}
+            user_bets[name]['items'].append(f"{b['bet_value']}:{b['amount']}")
+            user_bets[name]['total'] += b['amount']
+        
+        bill_lines = [f"========= 封盘统计 ========="]
+        bill_lines.append(f"第 {period} 期玩家投注账单 (部分展示)")
+        
+        display_items = list(user_bets.items())[:30] 
+        for u, data in display_items:
+            items_str = " ".join(data['items'])
+            bill_lines.append(f"{u}-[{items_str}]_{data['total']}")
+        
+        bill_lines.append(f"... 本期共有 {len(user_bets)} 名玩家参与！")
+        bill_lines.append(f"===========================")
+            
+        conn.execute("INSERT INTO messages (game_type, user_id, role, content) VALUES (?, 0, 'robot', ?)", (game_type, "\n".join(bill_lines)))
+        conn.commit()
+
+def robot_continuous_bet(game_type):
+    if LIVE_DATA[game_type]['left_time'] <= GAMES[game_type]['close_sec']: return
+
+    num_robots = random.randint(1, 3)
+    with get_db() as conn:
+        robots = conn.execute("SELECT id, nickname FROM users WHERE role='robot' ORDER BY RANDOM() LIMIT ?", (num_robots,)).fetchall()
+        for r in robots:
+            amt = random.choice([10, 20, 50, 100, 200, 500])
+            b_type = random.choice(['bs', 'oe', 'num', 'combo', 'pattern'])
+            
+            if b_type == 'bs': b_val = random.choice(['大', '小']); odds = 2.8
+            elif b_type == 'oe': b_val = random.choice(['单', '双']); odds = 2.8
+            elif b_type == 'num': b_val = str(random.randint(0, 27)); odds = ODDS['nums'].get(int(b_val), 10)
+            elif b_type == 'combo': b_val = random.choice(['大单', '小双', '大双', '小单']); odds = 6.3 if '大单' in b_val or '小双' in b_val else 6.7
+            else: b_val = random.choice(['豹子', '顺子', '对子', '极大', '极小']); odds = 88 if b_val=='豹子' else (16 if b_val in ['极大','极小','顺子'] else 3.6)
+            
+            conn.execute('''INSERT INTO bets (user_id, game_type, period, bet_type, bet_value, amount, odds) VALUES (?, ?, ?, ?, ?, ?, ?)''', 
+                         (r['id'], game_type, LIVE_DATA[game_type]['next_period'], b_type, b_val, amt, odds))
+            conn.execute("INSERT INTO messages (game_type, user_id, role, content) VALUES (?, ?, 'user', ?)", (game_type, r['id'], f"{b_val}:{amt}"))
+        
+        conn.commit()
+        count = conn.execute("SELECT COUNT(DISTINCT user_id) FROM bets WHERE game_type=? AND period=?", (game_type, LIVE_DATA[game_type]['next_period'])).fetchone()[0]
+        LIVE_DATA[game_type]['robot_count'] = count
+
+# ================== 核心抓取与结算控制 ==================
 def fetch_loop():
     ctx = ssl._create_unverified_context()
     last_tick_time = time.time()
@@ -207,6 +199,7 @@ def fetch_loop():
                         history = [{"period": item['period'][-3:], "total": item['total'], "attr": f"{item['big_small']}{item['odd_even']}"} for item in latest_data[:15]]
                         
                         if LIVE_DATA[g_type]['period'] != latest['period']:
+                            # 1. 发现新期，先结算上一期（毫秒级）
                             if LIVE_DATA[g_type]['period'] != "":
                                 settle_bets(g_type, LIVE_DATA[g_type]['period'], LIVE_DATA[g_type]['nums'], LIVE_DATA[g_type]['total'])
                             
@@ -215,11 +208,6 @@ def fetch_loop():
                                 "left_time": cfg['interval'], "nums": [latest['num1'], latest['num2'], latest['num3']],
                                 "total": latest['total'], "history": history, "robot_count": 0
                             }
-                            # 重置标记，允许新一期重新生成账单
-                            if REPORTED_PERIODS[g_type] == LIVE_DATA[g_type]['next_period']:
-                                pass # 保持不变
-                            else:
-                                pass
                         
                         draw_dt = datetime.strptime(latest['draw_time'], "%Y-%m-%d %H:%M:%S")
                         target_utc = draw_dt - timedelta(hours=8) + timedelta(seconds=cfg['interval'])
@@ -228,22 +216,16 @@ def fetch_loop():
                         
                         if LIVE_DATA[g_type]['left_time'] <= cfg['close_sec']:
                             LIVE_DATA[g_type]['status'] = "封盘中"
-                            # 封盘瞬间，播报统计账单
                             if REPORTED_PERIODS[g_type] != LIVE_DATA[g_type]['next_period']:
                                 REPORTED_PERIODS[g_type] = LIVE_DATA[g_type]['next_period']
                                 threading.Thread(target=broadcast_bill, args=(g_type, LIVE_DATA[g_type]['next_period'])).start()
                         else:
                             LIVE_DATA[g_type]['status'] = "下注中"
-                            
                             if now_ts - last_tick_time >= 1.0:
                                 threading.Thread(target=robot_continuous_bet, args=(g_type,)).start()
-                                
             except Exception:
                 pass
-        
-        if now_ts - last_tick_time >= 1.0:
-            last_tick_time = now_ts
-            
+        if now_ts - last_tick_time >= 1.0: last_tick_time = now_ts
         time.sleep(1)
 
 threading.Thread(target=fetch_loop, daemon=True).start()
@@ -251,6 +233,15 @@ threading.Thread(target=fetch_loop, daemon=True).start()
 # ================== API 路由 ==================
 @app.route('/api/live/<g_type>')
 def api_live(g_type): return jsonify(LIVE_DATA.get(g_type, {}))
+
+@app.route('/api/check_win/<period>')
+def api_check_win(period):
+    if 'user_id' not in session: return jsonify({"success": False})
+    with get_db() as conn:
+        wins = conn.execute("SELECT SUM(win_amount - amount) as profit FROM bets WHERE user_id=? AND period=? AND status='win'", (session['user_id'], period)).fetchone()
+        if wins and wins['profit'] and wins['profit'] > 0:
+            return jsonify({"success": True, "profit": round(wins['profit'], 2)})
+    return jsonify({"success": False})
 
 @app.route('/api/bet', methods=['POST'])
 def api_bet():
@@ -267,7 +258,6 @@ def api_bet():
         conn.execute("UPDATE users SET balance = balance - ? WHERE id=?", (data['amount'], session['user_id']))
         conn.execute('''INSERT INTO bets (user_id, game_type, period, bet_type, bet_value, amount, odds) VALUES (?, ?, ?, ?, ?, ?, ?)''', 
                      (session['user_id'], g_type, LIVE_DATA[g_type]['next_period'], data['bet_type'], data['bet_value'], data['amount'], data['odds']))
-        
         conn.execute("INSERT INTO messages (game_type, user_id, role, content) VALUES (?, ?, 'user', ?)", 
                      (g_type, session['user_id'], f"{data['bet_value']}:{data['amount']}"))
         conn.commit()
@@ -281,7 +271,6 @@ def api_cancel_bet():
         bet = conn.execute("SELECT * FROM bets WHERE id=? AND user_id=?", (bet_id, session['user_id'])).fetchone()
         if not bet: return jsonify({"success": False, "msg": "注单不存在"})
         if bet['status'] != 'pending': return jsonify({"success": False, "msg": "已开奖，无法取消"})
-        
         if LIVE_DATA[bet['game_type']]['left_time'] <= GAMES[bet['game_type']]['close_sec']:
             return jsonify({"success": False, "msg": "已封盘，禁止取消"})
             
@@ -289,16 +278,6 @@ def api_cancel_bet():
         conn.execute("UPDATE users SET balance = balance + ? WHERE id=?", (bet['amount'], session['user_id']))
         conn.commit()
     return jsonify({"success": True, "msg": "取消成功，金额已退回"})
-
-@app.route('/api/my_last_win', methods=['POST'])
-def api_my_last_win():
-    if 'user_id' not in session: return jsonify({"success": False})
-    period = request.json.get('period')
-    with get_db() as conn:
-        wins = conn.execute("SELECT SUM(win_amount - amount) as profit FROM bets WHERE user_id=? AND period=? AND status='win'", (session['user_id'], period)).fetchone()
-        if wins and wins['profit'] and wins['profit'] > 0:
-            return jsonify({"success": True, "profit": round(wins['profit'], 2)})
-    return jsonify({"success": False})
 
 @app.route('/api/chat/<g_type>')
 def api_chat(g_type):
@@ -311,7 +290,7 @@ def api_chat(g_type):
 def api_my_bets():
     if 'user_id' not in session: return jsonify([])
     with get_db() as conn:
-        bets = conn.execute("SELECT * FROM bets WHERE user_id=? ORDER BY id DESC LIMIT 20", (session['user_id'],)).fetchall()
+        bets = conn.execute("SELECT * FROM bets WHERE user_id=? ORDER BY id DESC LIMIT 50", (session['user_id'],)).fetchall()
     return jsonify([dict(b) for b in bets])
 
 @app.route('/api/request_money', methods=['POST'])
@@ -738,12 +717,25 @@ HTML_GAME = BASE_CSS + """
     .k-gray .k-t { color: #8898aa; }
     .k-blue { background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%); border: none; box-shadow: 0 4px 10px rgba(42,82,152,0.3);}
     .k-blue .k-t { color: #fff; font-size: 18px; }
+
+    /* 账单卡片样式完全还原截图 */
+    .bill-card { background: #fff; border-radius: 8px; margin-bottom: 15px; box-shadow: 0 2px 10px rgba(0,0,0,0.05); overflow: hidden; }
+    .bill-header { display: flex; justify-content: space-between; align-items: center; padding: 15px; border-bottom: 1px solid #f0f0f0; background: #fafafa;}
+    .bill-title { display: flex; align-items: center; font-size: 16px; font-weight: bold; color: #333; }
+    .bill-title::before { content: ''; display: inline-block; width: 4px; height: 16px; background: #00a2ff; border-radius: 2px; margin-right: 8px; }
+    .bill-total { font-size: 16px; font-weight: bold; }
+    .bill-body { padding: 15px; }
+    .bill-item { display: flex; justify-content: space-between; align-items: center; padding: 10px 0; font-size: 15px; border-bottom: 1px dashed #f0f0f0; }
+    .bill-item:last-child { border-bottom: none; }
+    .bill-item-left { color: #333; }
+    .bill-item-right { font-weight: bold; }
+    .bill-footer { display: flex; justify-content: space-between; padding: 12px 15px; background: #fafafa; font-size: 12px; color: #8898aa; border-top: 1px solid #f0f0f0;}
 </style>
 
 <div class="game-header">
     <a href="/">〈</a>
     <span>{{ game_name }}-2.8</span>
-    <span style="font-size:14px;">余额: <span style="color:#ffd700; font-weight:bold;">{{ user.balance }}</span></span>
+    <span style="font-size:14px;">余额: <span style="color:#ffd700; font-weight:bold;" id="top-balance">{{ user.balance }}</span></span>
 </div>
 
 <div class="info-bar">
@@ -842,13 +834,12 @@ HTML_GAME = BASE_CSS + """
 </div>
 
 <div id="modal-bets" class="modal">
-    <div class="modal-content">
+    <div class="modal-content" style="padding: 15px; background: #f4f7f9;">
         <span class="close-modal" onclick="closeModal('modal-bets')">✖</span>
-        <h3 style="text-align:center; margin-bottom:20px; color: #1e3c72;">近期账单</h3>
-        <table style="width:100%; border-collapse:collapse; font-size:13px; text-align:center;">
-            <tr style="background:#f4f7f9;"><th style="padding:10px;">期号</th><th>内容</th><th>金额</th><th>状态</th></tr>
-            <tbody id="bets-table-body"></tbody>
-        </table>
+        <h3 style="text-align:center; margin-bottom:15px; color: #1e3c72;">投注记录</h3>
+        <div id="bets-list-container">
+            <!-- 动态生成卡片 -->
+        </div>
     </div>
 </div>
 
@@ -864,16 +855,65 @@ HTML_GAME = BASE_CSS + """
 
     function openModal(id) { document.getElementById(id).style.display = 'flex'; }
     function closeModal(id) { document.getElementById(id).style.display = 'none'; }
+
+    // 核心重构：极速获取并渲染账单，完全还原截图
     function fetchMyBets() {
         fetch('/api/my_bets').then(r=>r.json()).then(data => {
-            let tbody = document.getElementById('bets-table-body'); tbody.innerHTML = '';
-            if(data.length === 0) tbody.innerHTML = '<tr><td colspan="4" style="padding:20px;">暂无记录</td></tr>';
+            let container = document.getElementById('bets-list-container'); container.innerHTML = '';
+            if(data.length === 0) { container.innerHTML = '<div style="text-align:center; padding:20px; color:#8898aa;">暂无记录</div>'; return; }
+            
+            // 按期号分组
+            let grouped = {};
             data.forEach(b => {
-                let cls = b.status === 'win' ? 'text-green' : (b.status === 'lose' ? 'text-red' : '');
-                let win_amt = b.status === 'win' ? b.win_amount : '-';
-                let cancelBtn = b.status === 'pending' ? `<button onclick="cancelBet(${b.id})" style="background:#ef473a; color:#fff; border:none; padding:4px 8px; border-radius:4px; font-size:12px; cursor:pointer;">取消</button>` : '';
-                tbody.innerHTML += `<tr style="border-bottom:1px solid #f0f0f0;"><td style="padding:10px;">${b.period}</td><td>${b.bet_value}</td><td>${b.amount}</td><td class="${cls}">${win_amt}</td><td>${cancelBtn}</td></tr>`;
+                if(!grouped[b.period]) grouped[b.period] = { period: b.period, time: b.created_at, items: [], profit: 0, game_name: "{{ game_name }}" };
+                grouped[b.period].items.push(b);
+                
+                // 计算盈亏 (赢的纯利润 = win_amount - amount, 输的 = -amount, 待开奖/取消 = 0)
+                if(b.status === 'win') grouped[b.period].profit += (b.win_amount - b.amount);
+                else if(b.status === 'lose') grouped[b.period].profit -= b.amount;
             });
+            
+            // 按时间倒序渲染卡片
+            Object.values(grouped).forEach(g => {
+                let profitClass = g.profit > 0 ? 'text-green' : (g.profit < 0 ? 'text-red' : 'text-gray');
+                let profitStr = g.profit > 0 ? `+${g.profit.toFixed(2)}` : (g.profit < 0 ? `${g.profit.toFixed(2)}` : '0.00');
+                
+                let itemsHtml = '';
+                g.items.forEach(item => {
+                    let itemProfit = 0;
+                    if(item.status === 'win') itemProfit = item.win_amount - item.amount;
+                    else if(item.status === 'lose') itemProfit = -item.amount;
+                    
+                    let subClass = itemProfit > 0 ? 'text-green' : (itemProfit < 0 ? 'text-red' : 'text-gray');
+                    let subStr = itemProfit > 0 ? `+${itemProfit.toFixed(2)}` : (itemProfit < 0 ? `${itemProfit.toFixed(2)}` : '0.00');
+                    
+                    // 如果是 pending，显示取消按钮
+                    let extraBtn = item.status === 'pending' ? `<button onclick="cancelBet(${item.id})" style="background:#ef473a; color:#fff; border:none; padding:2px 6px; border-radius:4px; font-size:11px; margin-left:10px;">取消</button>` : '';
+                    
+                    itemsHtml += `
+                        <div class="bill-item">
+                            <div class="bill-item-left">${item.bet_value}: ${item.amount.toFixed(2)} ${extraBtn}</div>
+                            <div class="bill-item-right ${subClass}">${subStr}</div>
+                        </div>
+                    `;
+                });
+                
+                let cardHtml = `
+                    <div class="bill-card">
+                        <div class="bill-header">
+                            <div class="bill-title">${g.game_name}-2.8</div>
+                            <div class="bill-total ${profitClass}">${profitStr}</div>
+                        </div>
+                        <div class="bill-body">${itemsHtml}</div>
+                        <div class="bill-footer">
+                            <div>${g.time.substring(0,19)}</div>
+                            <div>期号: ${g.period}</div>
+                        </div>
+                    </div>
+                `;
+                container.innerHTML += cardHtml;
+            });
+            
             openModal('modal-bets');
         });
     }
@@ -889,31 +929,24 @@ HTML_GAME = BASE_CSS + """
         });
     }
 
+    // 极速结算与中奖检测
     function fetchLive() {
         fetch('/api/live/' + G_TYPE).then(r => r.json()).then(d => {
-            // 新一期开奖逻辑
-            if(currentDisplayedPeriod !== d.period) {
-                // 如果之前已经有期数，说明开奖了，检测是否中奖
-                if(currentDisplayedPeriod !== "" && lastCheckedPeriod !== d.period) {
-                    lastCheckedPeriod = d.period;
-                    fetch('/api/my_last_win', {
-                        method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({period: d.period})
-                    }).then(res=>res.json()).then(winData => {
-                        if(winData.success) {
-                            alert(`🎉 恭喜您中奖了！\n\n本期纯盈利：${winData.profit} 元`);
-                            setTimeout(()=>location.reload(), 1000);
-                        }
-                    });
-                }
-                currentDisplayedPeriod = d.period;
-                liveData = d; // 只有在换期时，才重置整体倒计时
-            } else {
-                // 没换期，只更新状态和历史走势，千万别动 left_time 本地倒计时
-                liveData.status = d.status;
-                liveData.history = d.history;
-                liveData.nums = d.nums;
-                liveData.total = d.total;
+            // 核心逻辑：如果前端发现期号变了，说明上一期开奖了
+            if(currentDisplayedPeriod !== "" && currentDisplayedPeriod !== d.period) {
+                // 2秒内检测上一期是否中奖
+                fetch('/api/check_win/' + currentDisplayedPeriod)
+                .then(res=>res.json()).then(winData => {
+                    if(winData.success) {
+                        alert(`🎉 恭喜您中奖了！\n\n本期纯盈利：${winData.profit} 元`);
+                    }
+                    // 无论中不中奖，立刻刷新页面，更新最新余额
+                    location.reload();
+                });
             }
+            
+            currentDisplayedPeriod = d.period;
+            liveData = d; 
             
             document.getElementById('next-period').innerText = d.next_period;
             document.getElementById('cur-period').innerText = d.period;
@@ -934,6 +967,7 @@ HTML_GAME = BASE_CSS + """
             document.getElementById('status-text').innerText = d.status;
         });
     }
+    
     setInterval(fetchLive, 2000); fetchLive();
     
     setInterval(() => {
@@ -945,7 +979,6 @@ HTML_GAME = BASE_CSS + """
         
         if(leftClose > 0) {
             cdEl.innerText = leftClose + "秒封盘"; cdEl.style.color = "#ef473a"; panel.classList.remove('locked');
-            // 核心修复：如果之前因为网络波动变成了封盘提示，要恢复输入框
             if(inp.value === "封盘中禁止下注") { inp.value = ""; }
         } else {
             cdEl.innerText = "已封盘"; cdEl.style.color = "#8898aa"; panel.classList.add('locked');
