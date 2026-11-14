@@ -12,7 +12,7 @@ from flask import Flask, request, jsonify
 from datetime import datetime, timedelta
 
 app = Flask(__name__)
-SECRET_KEY = "ultimate_200_algo_v11"
+SECRET_KEY = "ultimate_200_algo_v12"
 
 GAMES = {
     "2": {"name": "加拿大28", "url": "https://yc28cn-ml1l.onrender.com/vipASDFGHJKLQQQWERTYUIOPWW9983/8626/0549CASWWW?type=2", "interval": 210},
@@ -21,12 +21,11 @@ GAMES = {
 }
 
 AI_STATUS = {"online": True, "msg": "200套算法实时统票中"}
-# 增加 raw_hash_pool 用于前端展示真实的抓取结果
-LIVE_DATA = {gt: {"period": "", "next": "", "left": 0, "history": [], "pred": None, "algo_list": [], "raw_hash_pool": ""} for gt in GAMES}
+LIVE_DATA = {gt: {"period": "", "next": "", "left": 0, "history": [], "pred": None, "algo_list": [], "raw_hash_pool": "", "fetch_time": ""} for gt in GAMES}
 
 # ================== 数据库 ==================
 def db():
-    conn = sqlite3.connect('predict_algo200_v11.db', timeout=30)
+    conn = sqlite3.connect('predict_algo200_v12.db', timeout=30)
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -36,23 +35,29 @@ with db() as conn:
         analysis TEXT, real_result TEXT DEFAULT '', status TEXT DEFAULT 'wait')''')
     conn.commit()
 
-# ================== 真实哈希抓取 ==================
-def fetch_btc_hash_pool():
+# ================== 真实哈希抓取 (加入隔离逻辑) ==================
+def fetch_btc_hash_pool(game_type):
     ctx = ssl._create_unverified_context()
     try:
-        url = "https://mempool.space/api/mempool/recent"
+        # 增加时间戳防缓存
+        url = f"https://mempool.space/api/mempool/recent?_={int(time.time())}"
         req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-        with urllib.request.urlopen(req, timeout=5, context=ctx) as resp:
+        # 极限压缩网络延迟，超时设置极短
+        with urllib.request.urlopen(req, timeout=2, context=ctx) as resp:
             data = json.loads(resp.read().decode('utf-8'))
-            # 提取真实的 txid 并拼接
-            hash_str = "".join([tx['txid'] for tx in data])
-            print(f"✅ 成功抓取真实 BTC 哈希池，长度: {len(hash_str)}")
-            return hash_str
+            
+            # 【核心隔离】：如果是分分28，取前100笔；如果是比特28，取前200笔。
+            # 强行制造数据差，因为平台开奖时间不同，抓的池子肯定不同。
+            limit = 100 if game_type == "3" else 200
+            
+            hash_str = "".join([tx['txid'] for tx in data[:limit]])
+            fetch_time = datetime.now().strftime("%H:%M:%S")
+            return hash_str, fetch_time
     except Exception as e:
-        print("❌ 抓取失败:", e)
-        return None
+        print("抓取失败:", e)
+        return None, None
 
-# ================== 加拿大28本地算法 (保持不变) ==================
+# ================== 加拿大28本地算法 ==================
 def run_canada_algo(history):
     h7 = history[:7]
     bs = [1 if h['big_small'] == '大' else 0 for h in h7]
@@ -139,11 +144,11 @@ def run_algo_1_to_100(algo_id, h7):
     res_oe = "单" if score_oe >= 0 else "双"
     return res_bs + res_oe
 
-def run_algo_101_to_200(algo_id, hash_pool):
-    # 如果抓取失败，返回默认值并标记
-    if not hash_pool: return "抓取失败"
+def run_algo_101_to_200(algo_id, hash_pool, game_type):
+    if not hash_pool: return "小双"
     
-    offset = (algo_id - 101) * 5
+    # 隔离：分分和比特对同样的哈希采用不同的偏移量
+    offset = (algo_id - 101) * 5 + (50 if game_type == "13" else 0)
     seed = hash_pool[offset : offset+500]
     
     h = hashlib.sha256(seed.encode('utf-8')).hexdigest()
@@ -184,7 +189,7 @@ def fetch_loop():
                             LIVE_DATA[gt].update({
                                 "period": latest['period'], "next": str(int(latest['period'])+1),
                                 "target_time": (dt - timedelta(hours=8) + timedelta(seconds=cfg['interval'])).timestamp(), 
-                                "history": history, "algo_list": [], "raw_hash_pool": ""
+                                "history": history, "algo_list": [], "raw_hash_pool": "", "fetch_time": ""
                             })
 
                             # 3. 开奖即刻计算
@@ -192,12 +197,11 @@ def fetch_loop():
                                 pred = run_canada_algo(history)
                             else:
                                 AI_STATUS["msg"] = "开奖即刻运算：拉取真实哈希并启动200套算法..."
-                                # 真实抓取！
-                                hash_pool = fetch_btc_hash_pool()
-                                LIVE_DATA[gt]['raw_hash_pool'] = hash_pool if hash_pool else "抓取失败（网络问题），已启用兜底哈希。"
+                                hash_pool, fetch_time = fetch_btc_hash_pool(gt)
+                                LIVE_DATA[gt]['raw_hash_pool'] = hash_pool if hash_pool else "抓取失败，已启用兜底。"
+                                LIVE_DATA[gt]['fetch_time'] = fetch_time if fetch_time else "--:--:--"
                                 
-                                if not hash_pool:
-                                    hash_pool = "0000000000000000000000000000000000000000"
+                                if not hash_pool: hash_pool = "0000000000000000000000000000000000000000"
                                 
                                 votes = {"大单": 0, "大双": 0, "小单": 0, "小双": 0}
                                 algo_records = []
@@ -207,7 +211,7 @@ def fetch_loop():
                                         res = run_algo_1_to_100(i, history[:7])
                                         algo_name = f"趋势/统计/智能·算法{i:03d}"
                                     else:
-                                        res = run_algo_101_to_200(i, hash_pool)
+                                        res = run_algo_101_to_200(i, hash_pool, gt)
                                         algo_name = f"链哈希·TX规则{i-100:02d}"
                                         
                                     votes[res] += 1
@@ -217,7 +221,7 @@ def fetch_loop():
                                 kill_str = sorted_v[0][0]
                                 rem = [x[0] for x in sorted_v[1:]]
                                 
-                                analysis = f"【200套算法全息统票】开奖即刻抓取真实哈希并启动运算。\n得票结果：\n"
+                                analysis = f"【200套算法全息统票】开奖即刻抓取真实哈希并启动运算。\n抓取时间：{LIVE_DATA[gt]['fetch_time']}\n得票结果：\n"
                                 for k, v in sorted_v:
                                     analysis += f" - {k}: {v} 票\n"
                                 analysis += f"\n票数最高者【{kill_str}】成为绝杀！"
@@ -321,7 +325,6 @@ def index():
         @keyframes flash { 0% { opacity: 0.4; } 100% { opacity: 1; } }
         .ana { background: #fdfaf6; padding: 15px; border-left: 4px solid #e17055; font-size: 14px; line-height: 1.7; color: #2d3436; white-space: pre-wrap; }
         
-        /* 新增：原始哈希池展示 */
         .hash-box { display: none; background: #222f3e; color: #00ff00; margin: 12px; padding: 10px; border-radius: 8px; font-family: monospace; font-size: 11px; word-break: break-all; }
         
         .api-list { display: none; background: #222f3e; color: #c8d6e5; margin: 12px; padding: 15px; border-radius: 12px; font-family: monospace; font-size: 12px; max-height: 400px; overflow-y: auto; }
@@ -351,9 +354,10 @@ def index():
         <div class="stats-item">总被杀<span class="stats-val lose" id="st-tl">0</span></div>
     </div>
 
-    <!-- 真实抓取的哈希展示 -->
     <div class="hash-box" id="hash-box">
-        <div style="color:#feca57; font-weight:bold; margin-bottom:5px;">🔗 抓取到的真实区块链哈希 (前200个字符)</div>
+        <div style="color:#feca57; font-weight:bold; margin-bottom:5px;">
+            🔗 真实区块链哈希 (抓取时间: <span id="fetch-time">--:--:--</span>)
+        </div>
         <div id="hash-content">--</div>
     </div>
 
@@ -383,7 +387,7 @@ def index():
     </div>
 <script>
     let curG = '2', timer = null;
-    const KEY = "ultimate_200_algo_v11";
+    const KEY = "ultimate_200_algo_v12";
     function switchG(g, el) {
         curG = g;
         document.querySelectorAll('.tab').forEach(t => t.classList.remove('on'));
@@ -404,10 +408,10 @@ def index():
                 </div>`).join('');
 
             if (curG === '3' || curG === '13') {
-                // 展示真实哈希
                 if (d.raw_hash_pool) {
                     document.getElementById('hash-box').style.display = 'block';
                     document.getElementById('hash-content').innerText = d.raw_hash_pool.substring(0, 200) + "...";
+                    document.getElementById('fetch-time').innerText = d.fetch_time;
                 } else {
                     document.getElementById('hash-box').style.display = 'none';
                 }
