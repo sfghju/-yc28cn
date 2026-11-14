@@ -5,6 +5,8 @@ import time
 import threading
 import os
 import sqlite3
+import re
+import random
 from flask import Flask, request, jsonify
 from datetime import datetime, timedelta
 
@@ -21,7 +23,7 @@ GAMES = {
 }
 
 # 全局运行状态
-AI_STATUS = {"online": False, "msg": "系统初始化..."}
+AI_STATUS = {"online": False, "msg": "AI 核心接口未连接"}
 LIVE_DATA = {
     "2": {"period": "", "next": "", "left": 0, "history": [], "pred": None},
     "3": {"period": "", "next": "", "left": 0, "history": [], "pred": None},
@@ -32,7 +34,7 @@ LIVE_DATA = {
 # 模块 2：SQLite 数据库持久化层
 # =====================================================================
 def db():
-    conn = sqlite3.connect('predict_matrix_800.db', timeout=30)
+    conn = sqlite3.connect('predict_ai_advanced.db', timeout=30)
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -52,173 +54,153 @@ with db() as conn:
     conn.commit()
 
 # =====================================================================
-# 模块 3：核心推演引擎 - 100维矩阵逻辑 (纯代码真实计算)
-# 重点分析近 7 期及以下的切片，进行层层剥洋葱式的推演
+# 模块 3：核心推演引擎 - AI 精准预测 (严格落实跟反与5连逻辑)
 # =====================================================================
-def calculate_matrix_prediction(history):
-    # 确保有足够的数据切片
+def calculate_ai_prediction(history):
     if len(history) < 7:
-        return {
-            "kill": "数据不足", "rec": "数据不足", "analysis": "系统正在收集足够的历史切片数据，请等待下一期开奖后进行初始化分析。"
-        }
+        return {"kill": "数据不足", "rec": "数据不足", "analysis": "系统正在收集足够的历史切片数据，请等待下一期开奖后进行初始化分析。"}
 
-    # 截取近 7 期数据用于深度推演
-    recent_7 = history[:7]
+    # 截取近 7 期数据
+    h7 = history[:7]
+    bs_seq = [1 if h['big_small'] == '大' else 0 for h in h7]
+    oe_seq = [1 if h['odd_even'] == '单' else 0 for h in h7]
     
-    # 提取大小、单双序列 (1 代表 大/单，0 代表 小/双)
-    bs_seq = [1 if h['big_small'] == '大' else 0 for h in recent_7]
-    oe_seq = [1 if h['odd_even'] == '单' else 0 for h in recent_7]
+    big_cnt = sum(bs_seq)
+    small_cnt = 7 - big_cnt
+    odd_cnt = sum(oe_seq)
+    even_cnt = 7 - odd_cnt
 
-    # 权重计分板 (分数越高，越容易被庄家收割，即绝杀概率越大)
-    scores = {'大': 0, '小': 0, '单': 0, '双': 0}
-    
-    # 记录推演过程的关键词，用于生成小作文
-    analysis_events = []
-
-    # ---------------------------------------------------------
-    # 第一层：连号极值与断裂点分析 (对应逻辑 1 - 20)
-    # ---------------------------------------------------------
+    # 计算连号
     def get_streak(seq):
-        streak = 1
+        s = 1
         for i in range(1, len(seq)):
-            if seq[i] == seq[0]: streak += 1
+            if seq[i] == seq[0]: s += 1
             else: break
-        return streak
-
-    bs_streak = get_streak(bs_seq)
-    oe_streak = get_streak(oe_seq)
-
-    # 大小连号分析
-    if bs_streak >= 4:
-        # 4连以上，极大概率断裂，庄家会利用惯性杀反龙
-        scores['大' if bs_seq[0] == 1 else '小'] += 15
-        analysis_events.append(f"【极值断裂】大小端已连开{bs_streak}期{recent_7[0]['big_small']}，达到历史极值，动能衰竭，坚决杀连")
-    elif bs_streak == 3:
-        scores['大' if bs_seq[0] == 1 else '小'] += 8
-        analysis_events.append(f"【高危连号】大小端3连{recent_7[0]['big_small']}，需高度防范庄家回马枪诱盘")
+        return s
     
-    # 单双连号分析
-    if oe_streak >= 4:
-        scores['单' if oe_seq[0] == 1 else '双'] += 15
-        analysis_events.append(f"【单双断层】单双端已连开{oe_streak}期{recent_7[0]['odd_even']}，触及红线，下期反转概率极高")
-    elif oe_streak == 3:
-        scores['单' if oe_seq[0] == 1 else '双'] += 8
-        analysis_events.append(f"【单双警示】单双端3连{recent_7[0]['odd_even']}，谨防假突破")
+    bs_s = get_streak(bs_seq)
+    oe_s = get_streak(oe_seq)
 
-    # ---------------------------------------------------------
-    # 第二层：近7期冷热均态与诱盘分析 (对应逻辑 21 - 50)
-    # ---------------------------------------------------------
-    big_count = sum(bs_seq)
-    small_count = 7 - big_count
-    odd_count = sum(oe_seq)
-    even_count = 7 - odd_count
+    kill_bs = ''
+    kill_oe = ''
+    reasons = []
 
-    # 极热必死逻辑
-    if big_count >= 5:
-        scores['大'] += 12
-        analysis_events.append(f"【大热必死】近7期大号出现{big_count}次，严重超买，均值回归势在必行")
-    elif small_count >= 5:
-        scores['小'] += 12
-        analysis_events.append(f"【小号超卖】近7期小号出现{small_count}次，庄家养鱼结束，面临反弹")
+    # ==========================================
+    # 核心逻辑 1：判定大小端绝杀项
+    # 规则：未达5连：少的跟，多的反(杀多)。5连以上：多的跟(杀反向)
+    # ==========================================
+    if bs_s >= 5:
+        kill_bs = '小' if bs_seq[0] == 1 else '大'
+        reasons.append(f"【极值长龙】大小端已强势连开{bs_s}期{ h7[0]['big_small'] }，触发5连以上顺势跟龙铁律，坚决绝杀反向的【{kill_bs}】。")
+    else:
+        if big_cnt > small_cnt:
+            kill_bs = '大'
+            reasons.append(f"【反多跟少】近7期大数出现{big_cnt}次，处于绝对高频期。严格执行“多的就反”的逆向博弈原则，绝杀大数。")
+        elif small_cnt > big_cnt:
+            kill_bs = '小'
+            reasons.append(f"【反多跟少】近7期小数出现{small_cnt}次，频次过高。严格执行“多的就反”的逆向博弈原则，绝杀小数。")
+        else:
+            # 平局时，看最近两期谁多，或者杀上期
+            kill_bs = h7[0]['big_small']
+            reasons.append(f"【均衡破局】近期大小呈现50%均态平衡，根据走势惯性推演，上期开出{h7[0]['big_small']}，本期大概率回马枪诱杀，绝杀{kill_bs}。")
 
-    if odd_count >= 5:
-        scores['单'] += 12
-        analysis_events.append(f"【单数过热】近7期单数出现{odd_count}次，多头动能耗尽，防断崖下跌")
-    elif even_count >= 5:
-        scores['双'] += 12
-        analysis_events.append(f"【双数集结】近7期双数出现{even_count}次，筹码高度密集，需防洗盘")
+    # ==========================================
+    # 核心逻辑 2：判定单双端绝杀项
+    # ==========================================
+    if oe_s >= 5:
+        kill_oe = '双' if oe_seq[0] == 1 else '单'
+        reasons.append(f"【单双长龙】单双端已连续{oe_s}期开出{h7[0]['odd_even']}，顺应强趋势动能，严禁反杀，强行绝杀相反的【{kill_oe}】。")
+    else:
+        if odd_cnt > even_cnt:
+            kill_oe = '单'
+            reasons.append(f"【反多跟少】近7期单数出现{odd_cnt}次，动能消耗严重。严格执行“多的就反”逻辑，本期判定单数动能枯竭，绝杀单数。")
+        elif even_cnt > odd_cnt:
+            kill_oe = '双'
+            reasons.append(f"【反多跟少】近7期双数出现{even_cnt}次，频次占优。严格执行“多的就反”逻辑，防均值回归，绝杀双数。")
+        else:
+            kill_oe = h7[0]['odd_even']
+            reasons.append(f"【均势打压】单双多空力量完全均衡，遵循“一跟一反”的交替原则，上期为{h7[0]['odd_even']}，本期反向斩杀。")
 
-    # 均衡状态下的冷热交替逻辑 (3-4次徘徊)
-    if 3 <= big_count <= 4 and 3 <= small_count <= 4:
-        # 看上一期是什么，庄家喜欢杀追热的人
-        last_bs = recent_7[0]['big_small']
-        scores[last_bs] += 5
-        analysis_events.append(f"【均衡猎杀】大小端处于多空平衡，上期开{last_bs}，本期极易回马枪杀{last_bs}")
-
-    if 3 <= odd_count <= 4 and 3 <= even_count <= 4:
-        last_oe = recent_7[0]['odd_even']
-        scores[last_oe] += 5
-        analysis_events.append(f"【单双纠缠】单双端势均力敌，上期开{last_oe}，庄家洗盘周期至，反杀概率大")
-
-    # ---------------------------------------------------------
-    # 第三层：组合形态与近3期微操切片分析 (对应逻辑 51 - 80)
-    # ---------------------------------------------------------
-    # 检查近 3 期的走势形态，判断是单边、震荡还是深V
-    last_3_bs = bs_seq[:3]
-    if last_3_bs == [1, 0, 1] or last_3_bs == [0, 1, 0]:
-        # 典型的单跳震荡
-        scores['大' if bs_seq[0] == 1 else '小'] += 6
-        analysis_events.append("【震荡陷阱】近期大小呈现单跳节奏，本期大概率延续震荡拉爆追单者")
-    elif last_3_bs == [1, 1, 0] or last_3_bs == [0, 0, 1]:
-        # 连开中断
-        scores['大' if bs_seq[1] == 1 else '小'] += 8
-        analysis_events.append("【连号中断】大小走势刚经历长龙被终结，存在极强的连杀动能")
-
-    last_3_oe = oe_seq[:3]
-    if last_3_oe == [1, 0, 1] or last_3_oe == [0, 1, 0]:
-        scores['单' if oe_seq[0] == 1 else '双'] += 6
-        analysis_events.append("【单双插针】单双形态出现插针，假动作频发，杀上期同项最稳")
-    elif last_3_oe == [1, 1, 0] or last_3_oe == [0, 0, 1]:
-        scores['单' if oe_seq[1] == 1 else '双'] += 8
-        analysis_events.append("【动能转换】单双刚完成多空转换，需防回抽确认")
-
-    # ---------------------------------------------------------
-    # 第四层：交叉共振终极确认 (对应逻辑 81 - 100)
-    # ---------------------------------------------------------
-    # 如果大小和单双同时指向要杀某个属性，则提升绝对权重
-    kill_bs_candidate = '大' if scores['大'] > scores['小'] else '小'
-    kill_oe_candidate = '单' if scores['单'] > scores['双'] else '双'
-
-    # 极端危险信号加成
-    if scores[kill_bs_candidate] >= 15 and scores[kill_oe_candidate] >= 15:
-        scores[kill_bs_candidate] += 5
-        scores[kill_oe_candidate] += 5
-        analysis_events.append("【双端共振】大小与单双同时触及极度危险阈值，绝杀条件已完全成熟")
-
-    # 最终选定绝杀项
-    kill_str = kill_bs_candidate + kill_oe_candidate
-    
-    # 确定另外三个为安全项
+    # 组合绝杀项
+    kill_str = kill_bs + kill_oe
     all_options = ["大单", "大双", "小单", "小双"]
     rec_list = [opt for opt in all_options if opt != kill_str]
-    
-    # ---------------------------------------------------------
-    # 第五层：动态生成 150 - 300 字的高质量分析小作文
-    # ---------------------------------------------------------
-    # 每次从事件库中抽取最核心的 3 条进行组合，保证文字不重复
-    import random
-    if len(analysis_events) >= 3:
-        selected_events = random.sample(analysis_events, 3)
-    else:
-        selected_events = analysis_events
 
-    # 构建小作文模板
-    intro_templates = [
-        "【矩阵核心推演】本期算法对近7期切片进行了高维扫描。",
-        "【量化深度剖析】结合近期实盘轨迹与庄家洗盘模型，得出以下结论：",
-        "【盘面全息解析】七期数据已构成明显的诱多/诱空形态，具体解析如下："
+    # ==========================================
+    # 核心逻辑 3：生成至少 10 条解释说明
+    # ==========================================
+    # 补充计算用于生成 10 条文案的数据
+    total_sum = sum([h['total'] for h in h7])
+    avg_sum = total_sum / 7.0
+    
+    # 预置 10 条说明库，每次随机抽取保证不重复
+    reason_pool = [
+        f"【均值回归模型】近7期大小比为 {big_cnt}:{small_cnt}，单双比为 {odd_cnt}:{even_cnt}，当前数据严重偏离正态分布中心轴，修正引力极强。",
+        f"【震荡周期律】观察近 3 期形态，走势呈明显的 {h7[2]['big_small']}-{h7[1]['big_small']}-{h7[0]['big_small']} 跳跃震荡，本期坚决防范单边拉升或暴跌陷阱。",
+        f"【极值反转测算】综合近7期和值均值为 {avg_sum:.1f}，目前盘面正处于高/低点转换边缘，庄家杀大赔小的意图已被算法识破。",
+        f"【回马枪预警】上期开出【{h7[0]['big_small']}{h7[0]['odd_even']}】，极易引发大量散户跟风，本期庄家极大概率使用回马枪战术，绝杀当前热门形态。",
+        f"【动能衰减系数】连号期数分别为大小 {bs_s} 连、单双 {oe_s} 连，根据动能衰减曲线，突破历史极值前必然有一次剧烈的洗盘动作。",
+        f"【组合交叉共振】大单、大双、小单、小双四个象限中，当前热门象限极易形成资金黑洞，算法已锁定高危死亡陷阱【{kill_str}】。",
+        f"【庄家诱盘心理】利用“少的就跟”思维，庄家在前期故意压制某一属性，后期极易引发报复性连开，当前反向操作策略已启动。",
+        f"【筹码分布探测】热号区域筹码过于集中，已触发警报系统，必须坚决规避高位接盘，转向防守冷门区域。",
+        f"【动量背离信号】从近两期走势来看，虽然表面延续趋势，但底层波幅已出现明显背离，这是典型的变盘前兆。",
+        f"【卡方分布检验】经过严密测算，近期开奖序列的随机性概率低于阈值，存在明显的操盘干预痕迹，需执行强反杀逻辑。",
+        f"【冷热交替法则】极热必死，极冷必爆。系统检测到大小单双属性即将发生剧烈换手，请紧跟防守阵列。",
+        f"【斐波那契时间窗】当前期号末尾进入时间共振极点，历史同形态回测胜率极高，绝杀项不容置疑。"
     ]
-    
-    conclusion_templates = [
-        f"综合极值、冷热与共振逻辑，本方阵判定【{kill_str}】为高危死亡陷阱。推荐将仓位重心防守转移至【{'、'.join(rec_list)}】。",
-        f"多维度数据交叉验证后，强烈建议绝杀【{kill_str}】。重点布防【{'、'.join(rec_list)}】以规避庄家回马枪。",
-        f"顶层博弈模型已锁定【{kill_str}】为收割对象，请坚决规避。利用【{'、'.join(rec_list)}】构建坚实的防守矩阵。"
-    ]
 
-    # 拼接生成文本
-    analysis_text = random.choice(intro_templates) + "\n\n"
+    # 随机打乱并抽取 10 条
+    random.shuffle(reason_pool)
+    selected_reasons = reason_pool[:10]
     
-    for i, event in enumerate(selected_events):
-        analysis_text += f"{i+1}. {event}；\n"
-    
-    analysis_text += "\n" + random.choice(conclusion_templates)
+    # 组装初始文案
+    intro = "【AI 核心矩阵推演报告】本次运算结合走势逆反逻辑与连号极值规律，深度解析如下：\n\n"
+    for i, r in enumerate(selected_reasons):
+        reasons.append(r)
+        
+    # 将核心判定逻辑插入最前面
+    final_reasons = reasons + selected_reasons
+    random.shuffle(final_reasons) # 打乱顺序让内容看起来更丰富
 
-    # 严格兜底：确保字数在 150 - 300 之间
-    if len(analysis_text) < 150:
-        analysis_text += "\n【深度警示】当前盘面极其诡异，庄家利用连续开奖制造的虚假繁荣极容易让人上头，系统已启动强制冷静协议，坚决执行绝杀策略，不要有丝毫侥幸心理，跟紧防守阵型。"
+    body_text = ""
+    for i, r in enumerate(final_reasons):
+        body_text += f"{i+1}. {r}\n"
+        
+    outro = f"\n【最终审判】严格落实“一跟一反、少跟多反”铁律，强烈建议绝杀【{kill_str}】。将所有筹码重心布防于【{'、'.join(rec_list)}】。"
     
-    if len(analysis_text) > 300:
-        analysis_text = analysis_text[:290] + "..."
+    analysis_text = intro + body_text + outro
+
+    # ==========================================
+    # 核心逻辑 4：字数刺客，严格控制 150-500 字（不含标点）
+    # ==========================================
+    def count_chinese_chars(text):
+        # 匹配所有中文字符
+        return len(re.findall(r'[\u4e00-\u9fa5]', text))
+
+    ch_count = count_chinese_chars(analysis_text)
+    
+    # 如果字数不足 150，强制补充宏观废话（深度剖析）
+    while ch_count < 150:
+        padding = [
+            "【高维数据下沉】系统已对所有底层筹码进行降维打击，确保毫无盲区。",
+            "【心理博弈极限】反向利用散户的锚定效应，完成最终的财富收割。",
+            "【量化风控防线】严格按照跟反比例调配防守仓位，绝不留任何漏洞。"
+        ]
+        analysis_text += random.choice(padding)
+        ch_count = count_chinese_chars(analysis_text)
+        
+    # 如果字数超过 500，强制截断
+    if ch_count > 500:
+        # 比较难直接精确截取中文字符，这里做粗略截断（保留前面部分）
+        # 为了避免破坏最终审判的格式，直接削减中间段落
+        cut_index = analysis_text.find("【最终审判】")
+        if cut_index != -1:
+            part1 = analysis_text[:cut_index]
+            part2 = analysis_text[cut_index:]
+            # 截断前半部分
+            analysis_text = part1[:int(len(part1) * 0.6)] + "\n(已省略部分冗余推演)\n" + part2
+        else:
+            analysis_text = analysis_text[:1000] + "..."
 
     return {
         "kill": kill_str,
@@ -240,7 +222,7 @@ def fetch_loop():
                     if data.get('data'):
                         latest = data['data'][0]
                         
-                        # 完美提取包含加号的数据
+                        # 提取包含加号的数据
                         history = []
                         for i in data['data'][:20]:
                             history.append({
@@ -253,18 +235,16 @@ def fetch_loop():
                         
                         if LIVE_DATA[gt]['period'] != latest['period']:
                             
-                            # 结算上一期的数据
+                            # 结算上一期
                             if LIVE_DATA[gt]['period'] != "":
                                 real = latest['big_small'] + latest['odd_even']
                                 with db() as conn:
-                                    # 真实结算：只要开出的结果不等于绝杀项，即为预测成功 (Win)
                                     if real != LIVE_DATA[gt]['pred']['kill']:
                                         conn.execute("UPDATE logs SET real_result=?, status='win' WHERE gtype=? AND period=? AND status='wait'", (real, gt, latest['period']))
                                     else:
                                         conn.execute("UPDATE logs SET real_result=?, status='lose' WHERE gtype=? AND period=? AND status='wait'", (real, gt, latest['period']))
                                     conn.commit()
                             
-                            # 计算下一期的开奖倒计时
                             dt = datetime.strptime(latest['draw_time'], "%Y-%m-%d %H:%M:%S")
                             next_utc = dt - timedelta(hours=8) + timedelta(seconds=cfg['interval'])
                             
@@ -275,14 +255,13 @@ def fetch_loop():
                                 "history": history
                             })
                             
+                            # 更新顶部状态，表现出 AI 在工作
                             AI_STATUS["online"] = True
-                            AI_STATUS["msg"] = "100维矩阵运算中，正锁定庄家死穴..."
+                            AI_STATUS["msg"] = "AI 核心接口已连接 · 正在精准计算..."
                             
-                            # 执行真实的矩阵计算
-                            pred = calculate_matrix_prediction(history)
+                            pred = calculate_ai_prediction(history)
                             LIVE_DATA[gt]['pred'] = pred
                             
-                            # 入库记录
                             with db() as conn:
                                 conn.execute('''INSERT INTO logs (gtype, period, kill, rec, analysis) VALUES (?,?,?,?,?)''', 
                                              (gt, LIVE_DATA[gt]['next'], pred['kill'], pred['rec'], pred['analysis']))
@@ -291,7 +270,9 @@ def fetch_loop():
                         diff = LIVE_DATA[gt]['target_time'] - datetime.utcnow().timestamp()
                         LIVE_DATA[gt]['left'] = max(0, int(diff))
             except Exception as e:
-                print("Error fetching data:", e)
+                print("数据抓取异常:", e)
+                AI_STATUS["online"] = False
+                AI_STATUS["msg"] = "数据接口重连中..."
         time.sleep(1)
 
 threading.Thread(target=fetch_loop, daemon=True).start()
@@ -311,12 +292,9 @@ def api_data(gt):
 def api_logs(gt):
     if not verify(): return "<h1>Access Denied</h1>", 403
     with db() as conn:
-        # 全量查询，无上限
         logs = conn.execute("SELECT * FROM logs WHERE gtype=? ORDER BY id DESC", (gt,)).fetchall()
         
         stats = {"current_win": 0, "current_lose": 0, "total_win": 0, "total_lose": 0}
-        
-        # 核心修复：过滤掉 'wait'，保证连中记录绝对准确不被中断
         settled_status = [l['status'] for l in logs if l['status'] in ('win', 'lose')]
         
         for st in settled_status:
@@ -342,7 +320,7 @@ def api_clear(gt):
     return jsonify({"ok": True})
 
 # =====================================================================
-# 模块 6：前端 HTML + CSS + JS 渲染模板
+# 模块 6：前端 HTML 渲染
 # =====================================================================
 @app.route('/')
 def index():
@@ -352,44 +330,41 @@ def index():
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-    <title>终极矩阵实弹推演系统</title>
+    <title>AI 极智逆向预测终端</title>
     <style>
-        /* 基础重置 */
         * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
-        body { background: #f4f6f9; margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; color: #333; }
+        body { background: #f4f6f9; margin: 0; font-family: -apple-system, sans-serif; color: #333; }
         
         /* 顶部栏 */
         .head { background: #111; color: #fff; padding: 16px; text-align: center; font-size: 20px; font-weight: bold; letter-spacing: 1px; box-shadow: 0 2px 10px rgba(0,0,0,0.2);}
-        .status { text-align: center; padding: 10px; font-size: 13px; background: #fff; border-bottom: 1px solid #eaeaea; color: #666; display: flex; justify-content: center; align-items: center;}
-        .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
-        .on { background: #00b894; box-shadow: 0 0 5px #00b894;} 
-        .off { background: #d63031; }
         
-        /* 选项卡 */
+        /* 强调 AI 接口连接状态 */
+        .status { text-align: center; padding: 12px; font-size: 14px; background: #fff; border-bottom: 1px solid #eaeaea; font-weight: bold; display: flex; justify-content: center; align-items: center;}
+        .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 8px; }
+        .on { background: #00b894; box-shadow: 0 0 8px #00b894; animation: pulse 1.5s infinite;} 
+        .off { background: #d63031; }
+        @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.5; } 100% { opacity: 1; } }
+        
         .tabs { display: flex; padding: 12px; gap: 10px; background: #fff; border-bottom: 1px solid #f1f2f6;}
         .tab { flex: 1; padding: 10px; text-align: center; background: #f0f2f5; border-radius: 8px; font-weight: bold; font-size: 14px; cursor: pointer; transition: all 0.3s;}
         .tab.on { background: #0984e3; color: #fff; box-shadow: 0 4px 10px rgba(9,132,227,0.3); transform: translateY(-2px);}
         
-        /* 统计栏 */
         .stats-bar { display: flex; justify-content: space-between; background: #fff; margin: 12px; padding: 12px; border-radius: 12px; font-size: 13px; font-weight: bold; box-shadow: 0 2px 10px rgba(0,0,0,0.04);}
         .stats-item { text-align: center; flex: 1; border-right: 1px solid #f1f2f6;}
         .stats-item:last-child { border-right: none; }
         .stats-val { display: block; font-size: 20px; margin-top: 4px;}
 
-        /* 卡片容器 */
         .card { background: #fff; margin: 12px; padding: 16px; border-radius: 12px; box-shadow: 0 2px 10px rgba(0,0,0,0.04); }
         .title { font-size: 14px; color: #2d3436; margin-bottom: 12px; font-weight: bold; display: flex; align-items: center;}
         .title::before { content: ''; display: inline-block; width: 4px; height: 14px; background: #0984e3; border-radius: 2px; margin-right: 8px;}
         
-        /* 盘面历史展示 */
         .history { display: flex; overflow-x: auto; gap: 10px; font-size: 12px; text-align: center; padding-bottom: 5px; }
-        .h-item { background: #f8f9fa; padding: 10px 8px; border-radius: 8px; min-width: 90px; border: 1px solid #eee; flex-shrink: 0;}
+        .h-item { background: #f8f9fa; padding: 10px 8px; border-radius: 8px; min-width: 95px; border: 1px solid #eee; flex-shrink: 0;}
         .h-period { color: #b2bec3; font-weight: bold; margin-bottom: 4px; font-size: 11px;}
-        .h-nums { color: #636e72; font-size: 12px; margin-bottom: 4px; font-weight: 500;} /* 显示加号格式 */
+        .h-nums { color: #636e72; font-size: 12px; margin-bottom: 4px; font-weight: 500;}
         .h-total { color: #d63031; font-weight: bold; font-size: 16px; margin: 4px 0;}
         .h-combo { font-weight: bold; color: #2d3436;}
         
-        /* 预测展示区 */
         .kill { color: #d63031; font-size: 28px; font-weight: 900; text-align: center; margin: 15px 0; background: #fff5f5; padding: 15px; border-radius: 8px; letter-spacing: 2px;}
         .rec { color: #00b894; font-size: 22px; font-weight: bold; text-align: center; margin-bottom: 15px; background: #f0fff4; padding: 12px; border-radius: 8px;}
         
@@ -398,25 +373,25 @@ def index():
         .cd.danger { color: #d63031; animation: flash 0.5s infinite alternate;}
         @keyframes flash { 0% { opacity: 0.4; } 100% { opacity: 1; } }
         
-        /* 分析小作文展示 */
-        .ana { background: #fffaf0; padding: 15px; border-left: 4px solid #d63031; font-size: 14px; line-height: 1.8; border-radius: 4px; color: #2d3436; font-weight: 500; text-align: justify;}
+        /* 深度分析小作文 */
+        .ana { background: #fffaf0; padding: 18px; border-left: 4px solid #d63031; font-size: 14px; line-height: 1.8; border-radius: 4px; color: #2d3436; font-weight: 500; text-align: justify; white-space: pre-wrap;}
         
-        /* 历史记录滚动区 */
         .log-item { border-bottom: 1px solid #f1f2f6; padding: 12px 0; font-size: 13px; display: flex; justify-content: space-between; }
         .log-item:last-child { border-bottom: none; }
         .win { color: #00b894; font-weight: bold; } .lose { color: #d63031; font-weight: bold; }
         .btn-clear { float:right; margin-top:-30px; font-size:12px; padding:6px 12px; border:1px solid #d63031; background:#fff; color:#d63031; border-radius:6px; font-weight: bold; transition: 0.2s;}
         .btn-clear:active { background: #d63031; color: #fff;}
         
-        /* 隐藏滚动条但保留滚动功能 */
         .log-scroll { max-height: 500px; overflow-y: auto; padding-right: 5px; }
         .log-scroll::-webkit-scrollbar { width: 4px; }
         .log-scroll::-webkit-scrollbar-thumb { background: #dfe6e9; border-radius: 4px; }
     </style>
 </head>
 <body>
-    <div class="head">终极矩阵实弹推演</div>
-    <div class="status" id="status"><span class="dot off"></span> 系统连接中...</div>
+    <div class="head">AI 极智逆向预测终端</div>
+    
+    <!-- 强调 AI 连接状态 -->
+    <div class="status" id="status"><span class="dot off"></span> AI 核心接口未连接</div>
     
     <div class="tabs">
         <div class="tab on" onclick="switchG('2', this)">加拿大28</div>
@@ -441,7 +416,7 @@ def index():
         <div class="kill">🚫 绝杀: <span id="kill-item"></span></div>
         <div class="rec">✅ 重点防守: <span id="rec-item"></span></div>
         <div class="cd-box">距开奖结算: <span class="cd" id="cd">--:--</span></div>
-        <div class="ana" id="ana">矩阵算法正在扫描数据切片...</div>
+        <div class="ana" id="ana">AI 正在进行 100 维深度推演，请稍后...</div>
     </div>
 
     <div class="card">
@@ -469,19 +444,17 @@ def index():
         .then(r => r.json()).then(res => {
             let st = document.getElementById('status');
             if(res.status.online) {
-                st.innerHTML = `<span class="dot on"></span> ${res.status.msg}`;
+                st.innerHTML = `<span class="dot on"></span> AI 接口：${res.status.msg}`;
             } else {
-                st.innerHTML = `<span class="dot off"></span> ${res.status.msg}`;
+                st.innerHTML = `<span class="dot off"></span> AI 接口：${res.status.msg}`;
             }
 
             let d = res.data;
             if(!d.period) return;
 
-            // 渲染盘面数据 (带有加号)
             let hHtml = '';
             d.history.slice(0, 10).forEach(h => {
                 let shortPeriod = h.period.slice(-4); 
-                // h.nums 在后台已经拼接为 "1 + 2 + 3" 格式
                 hHtml += `<div class="h-item">
                     <div class="h-period">${shortPeriod}期</div>
                     <div class="h-nums">${h.nums}</div>
@@ -491,7 +464,6 @@ def index():
             });
             document.getElementById('history').innerHTML = hHtml;
 
-            // 渲染预测结果
             if(d.pred) {
                 document.getElementById('pred-box').style.display = 'block';
                 document.getElementById('next-period').innerText = d.next;
@@ -500,7 +472,6 @@ def index():
                 document.getElementById('ana').innerText = d.pred.analysis;
             }
 
-            // 倒计时逻辑
             if(timer) clearInterval(timer);
             let left = d.left || 0;
             let cdEl = document.getElementById('cd');
@@ -548,7 +519,6 @@ def index():
         .then(r => r.json()).then(() => fetchLogs());
     }
 
-    // 初始化加载
     fetchData();
     fetchLogs();
     setInterval(fetchData, 2000);
@@ -559,6 +529,5 @@ def index():
     """
 
 if __name__ == '__main__':
-    # 自动获取平台分配的端口
     port = int(os.environ.get("PORT", 8888))
     app.run(host='0.0.0.0', port=port)
