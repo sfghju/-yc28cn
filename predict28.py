@@ -11,7 +11,7 @@ from flask import Flask, request, jsonify
 from datetime import datetime, timedelta
 
 app = Flask(__name__)
-SECRET_KEY = "pure_formula_v35"
+SECRET_KEY = "precision_formula_v36"
 
 GAMES = {
     "2": {"name": "加拿大28", "url": "https://yc28cn-ml1l.onrender.com/vipASDFGHJKLQQQWERTYUIOPWW9983/8626/0549CASWWW?type=2", "interval": 210},
@@ -19,11 +19,11 @@ GAMES = {
     "13": {"name": "比特28", "url": "https://yc28cn-ml1l.onrender.com/vipASDFGHJKLQQZXCVBNMWW9983/8626/0549CCBDR?type=13", "interval": 60}
 }
 
-AI_STATUS = {"online": True, "msg": "三大核心公式推演中..."}
+AI_STATUS = {"online": True, "msg": "精密振幅公式运算中..."}
 LIVE_DATA = {gt: {"period": "", "next": "", "left": 0, "history": [], "pred": None, "algo_list": []} for gt in GAMES}
 
 def db():
-    conn = sqlite3.connect('predict_formula_v35.db', timeout=30)
+    conn = sqlite3.connect('predict_precision_v36.db', timeout=30)
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -33,68 +33,83 @@ with db() as conn:
         analysis TEXT, real_result TEXT DEFAULT '', status TEXT DEFAULT 'wait')''')
     conn.commit()
 
-# ================== 核心三公式计算引擎 ==================
-def calculate_formulas(history):
-    data = {}
-    for i in range(4):
-        if i < len(history):
-            h = history[i]
-            nums = h['nums'].split(' + ')
-            a = int(nums[0])
-            b = int(nums[1])
-            c = int(nums[2])
-            d = int(nums[3]) if len(nums) > 3 else 0
-            
-            prefix = ['A', 'B', 'C', 'D'][i]
-            data[f'{prefix}1'] = a
-            data[f'{prefix}2'] = b
-            data[f'{prefix}3'] = c
-            data[f'{prefix}4'] = d
-        else:
-            for p in ['A', 'B', 'C', 'D']:
-                for j in range(1, 5): data[f'{p}{j}'] = 0
-
-    # 公式1：基础运算取尾
-    S1 = data['A1'] + data['B3']
-    R1 = S1 % 10
+# ================== 全新 3 大核心公式引擎 ==================
+def calculate_precision_formulas(history):
+    # 提取近4期的数据 (A1最新, B1上一期, C1上上期)
+    h0 = history[0] # 最新
+    h1 = history[1] # 上1
+    h2 = history[2] # 上2
     
-    # 公式2：多位置组合运算
-    X = (data['C1'] + data['B3']) % 10
-    Y = (data['A2'] + data['B4'] + data['C3']) % 10
-    Z = (data['B3'] + data['C2']) % 10
-    S2 = X + X + Y + Z
-    R2 = S2 % 10
+    n0 = [int(x) for x in h0['nums'].split(' + ')]
+    n1 = [int(x) for x in h1['nums'].split(' + ')]
+    n2 = [int(x) for x in h2['nums'].split(' + ')]
+    
+    sum0, sum1, sum2 = h0['total'], h1['total'], h2['total']
 
-    # 公式3：多期数据混合
-    S_1 = (data['A2'] + data['B2'] + data['C2']) % 10
-    S_2 = (data['B1'] + data['B2'] + data['B3']) % 10
-    S_3 = (data['A4'] + data['C4']) % 10
-    S3 = S_1 + S_2 + S_3
-    R3 = S3 % 10
+    # 公式1：位置惯性衰减 (预测下一期A/B/C位的落点，进而求和)
+    # 采用阻尼系数 0.65，防止预测值超出 0-9 范围
+    pred_A = int(n0[0] + (n0[0] - n1[0]) * 0.65)
+    pred_B = int(n0[1] + (n0[1] - n1[1]) * 0.65)
+    pred_C = int(n0[2] + (n0[2] - n1[2]) * 0.65)
+    
+    # 限制单个数在 0-9 之间
+    pred_A = max(0, min(9, pred_A))
+    pred_B = max(0, min(9, pred_B))
+    pred_C = max(0, min(9, pred_C))
+    
+    pred_sum1 = pred_A + pred_B + pred_C
+    vote1_bs = "大" if pred_sum1 >= 14 else "小"
+    vote1_oe = "单" if pred_sum1 % 2 != 0 else "双"
+    vote1 = vote1_bs + vote1_oe
+    detail1 = f"位置惯性测算和值约:{pred_sum1}"
 
-    results = []
-    for idx, (r, detail) in enumerate([(R1, f"A1+B3={S1}"), (R2, f"X+X+Y+Z={S2}"), (R3, f"S1+S2+S3={S3}")]):
-        bs = "大" if r >= 5 else "小"
-        oe = "单" if r % 2 != 0 else "双"
-        results.append({
-            "id": idx + 1,
-            "name": f"公式{idx + 1}",
-            "R": r,
-            "detail": detail,
-            "vote": bs + oe
-        })
-        
+    # 公式2：均值极值折返 (监控振幅，比如20跌到15，下一期预测反弹或继续跌)
+    # 振幅 = 上期总和 - 最新总和
+    amplitude = sum0 - sum1 
+    # 预测和值 = 最新和值 + 振幅 * 0.5 (预期振幅衰减一半)
+    pred_sum2 = int(sum0 + (amplitude * 0.5))
+    # 限制总和范围在 0-27
+    pred_sum2 = max(0, min(27, pred_sum2))
+    vote2_bs = "大" if pred_sum2 >= 14 else "小"
+    vote2_oe = "单" if pred_sum2 % 2 != 0 else "双"
+    vote2 = vote2_bs + vote2_oe
+    detail2 = f"振幅折返测算和值约:{pred_sum2}"
+
+    # 公式3：奇偶转换矩阵 (利用最近两期的状态跳变)
+    # 如果连续两期大单，大概率洗盘。如果连续极端偏态，也会反转。
+    last_bs, last_oe = h0['big_small'], h0['odd_even']
+    prev_bs, prev_oe = h1['big_small'], h1['odd_even']
+    
+    if last_bs == prev_bs and last_oe == prev_oe:
+        # 连续同属性，预测断点反转
+        vote3_bs = "小" if last_bs == "大" else "大"
+        vote3_oe = "双" if last_oe == "单" else "单"
+    else:
+        # 震荡期，杀最新一期的属性
+        vote3_bs = "小" if last_bs == "大" else "大"
+        vote3_oe = "双" if last_oe == "单" else "单"
+    
+    vote3 = vote3_bs + vote3_oe
+    detail3 = "连续形态断裂反转"
+
+    results = [
+        {"name": "惯性衰减公式", "vote": vote1, "detail": detail1},
+        {"name": "振幅折返公式", "vote": vote2, "detail": detail2},
+        {"name": "奇偶异动公式", "vote": vote3, "detail": detail3}
+    ]
+    
     return results
 
-# ================== 统票与预测逻辑 ==================
+# ================== 杀一推三推导 ==================
 def calculate_prediction(gt, history, next_p):
-    algo_list = calculate_formulas(history)
+    algo_list = calculate_precision_formulas(history)
     
+    # 统票
     votes = {"大单": 0, "大双": 0, "小单": 0, "小双": 0}
     for a in algo_list:
         votes[a['vote']] += 1
 
-    # 纯按票数排序，允许并列，允许连续杀
+    # 排序：票数多优先
     sorted_v = sorted(votes.items(), key=lambda x: x[1], reverse=True)
     
     main_atk = sorted_v[0][0] 
@@ -102,12 +117,12 @@ def calculate_prediction(gt, history, next_p):
     backup = sorted_v[2][0]   
     kill_str = sorted_v[3][0] 
 
-    f1, f2, f3 = algo_list[0], algo_list[1], algo_list[2]
-    analysis = f"【三路纯正公式推演】已严格完成取尾推导。\n"
-    analysis += f"- 公式1(基础)：{f1['detail']}，尾数 {f1['R']}，判定 {f1['vote']}。\n"
-    analysis += f"- 公式2(组合)：{f2['detail']}，尾数 {f2['R']}，判定 {f2['vote']}。\n"
-    analysis += f"- 公式3(混合)：{f3['detail']}，尾数 {f3['R']}，判定 {f3['vote']}。\n"
-    analysis += f"\n综合交叉验证，主攻锁定【{main_atk}】。本期绝杀【{kill_str}】！"
+    # 生成解析
+    analysis = f"【三大核心精密公式推演】\n"
+    for a in algo_list:
+        analysis += f"- {a['name']}：{a['detail']}，指向【{a['vote']}】\n"
+    
+    analysis += f"\n综合三维交叉验证，主攻锁定【{main_atk}】。经深度计算，坚决绝杀【{kill_str}】！"
 
     return {
         "kill": kill_str, 
@@ -214,7 +229,7 @@ def index():
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-    <title>三路纯正公式实战预测</title>
+    <title>精密振幅实战预测</title>
     <style>
         * { box-sizing: border-box; }
         body { background: #f4f6f9; margin: 0; font-family: -apple-system, sans-serif; color: #333; }
@@ -253,7 +268,6 @@ def index():
         .api-title { color: #feca57; font-weight: bold; margin-bottom: 10px; font-size: 14px; position: sticky; top: 0; background: #222f3e; padding-bottom: 5px; border-bottom: 1px solid #576574; z-index: 10;}
         .api-row { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px dashed #2c3e50; }
         .api-row span.red { color: #ff6b6b; font-weight: bold; }
-        .api-row span.tail { color: #feca57; font-weight: bold; }
 
         .log-item { border-bottom: 1px solid #f1f2f6; padding: 10px 0; font-size: 13px; display: flex; justify-content: space-between; }
         .win { color: #00b894; font-weight: bold; } .lose { color: #d63031; font-weight: bold; }
@@ -262,7 +276,7 @@ def index():
     </style>
 </head>
 <body>
-    <div class="head">三路纯正公式实战</div>
+    <div class="head">精密振幅实战预测</div>
     <div class="status" id="status"><span class="dot"></span> 系统运转正常</div>
     <div class="tabs">
         <div class="tab on" onclick="switchG('2', this)">加拿大28</div>
@@ -278,7 +292,7 @@ def index():
     </div>
 
     <div class="api-list" id="api-box">
-        <div class="api-title" id="api-title">📡 三大核心公式详细运算明细</div>
+        <div class="api-title" id="api-title">📡 三大核心公式明细</div>
         <div id="api-content"></div>
     </div>
 
@@ -303,7 +317,7 @@ def index():
     </div>
 <script>
     let curG = '2', timer = null;
-    const KEY = "pure_formula_v35";
+    const KEY = "precision_formula_v36";
     
     function switchG(g, el) {
         curG = g;
@@ -332,10 +346,10 @@ def index():
                 d.algo_list.forEach(algo => {
                     html += `<div class="api-row">
                         <div>
-                            <div>[${algo.name}] ${algo.detail}</div>
-                            <div>算出尾数: <span class="tail">${algo.R}</span></div>
+                            <div style="color:#feca57;">[${algo.name}]</div>
+                            <div style="font-size:11px;">${algo.detail}</div>
                         </div>
-                        <div class="red">${algo.vote}</div>
+                        <div class="red" style="font-size:16px;">${algo.vote}</div>
                     </div>`;
                 });
                 document.getElementById('api-content').innerHTML = html;
