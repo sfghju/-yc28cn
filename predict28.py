@@ -7,86 +7,36 @@ import os
 import sqlite3
 import re
 import random
-import hashlib
 from flask import Flask, request, jsonify
 from datetime import datetime, timedelta
 
 app = Flask(__name__)
-SECRET_KEY = "ultimate_blockchain_sniper_v3"
+SECRET_KEY = "ultimate_api_sniper_v5"
 
 GAMES = {
     "2": {"name": "加拿大28", "url": "https://yc28cn-ml1l.onrender.com/vipASDFGHJKLQQQWERTYUIOPWW9983/8626/0549CASWWW?type=2", "interval": 210},
-    "3": {"name": "分分28", "url": "https://yc28cn-ml1l.onrender.com/vipASDFGHJKLQQASDFGHJKLWW9986/8626/0549CFKFGH?type=3", "interval": 60},
-    "13": {"name": "比特28", "url": "https://yc28cn-ml1l.onrender.com/vipASDFGHJKLQQZXCVBNMWW9983/8626/0549CCBDR?type=13", "interval": 60}
+    "3": {"name": "分分28", "url": "https://yc28cn-ml1l.onrender.com/vipASDFGHJKLQQASDFGHJKLWW9986/8626/0549CFKFGH?type=3", "interval": 60, "api_game": "ff28"},
+    "13": {"name": "比特28", "url": "https://yc28cn-ml1l.onrender.com/vipASDFGHJKLQQZXCVBNMWW9983/8626/0549CCBDR?type=13", "interval": 60, "api_game": "btc28"}
 }
 
 AI_STATUS = {"online": True, "msg": "系统运转中"}
-LIVE_DATA = {gt: {"period": "", "next": "", "left": 0, "history": [], "pred": None, "btc_hash": None, "snipe_done": False} for gt in GAMES}
+LIVE_DATA = {gt: {"period": "", "next": "", "left": 0, "history": [], "pred": None, "api_raw": None} for gt in GAMES}
 
 # ================== 数据库 ==================
 def db():
-    conn = sqlite3.connect('predict_sniper_v3.db', timeout=30)
+    conn = sqlite3.connect('predict_api_v5.db', timeout=30)
     conn.row_factory = sqlite3.Row
     return conn
 
 with db() as conn:
     conn.execute('''CREATE TABLE IF NOT EXISTS logs (
         id INTEGER PRIMARY KEY AUTOINCREMENT, gtype TEXT, period TEXT, kill TEXT, rec TEXT, 
-        analysis TEXT, real_result TEXT DEFAULT '', status TEXT DEFAULT 'wait', algo_ids TEXT)''')
-    conn.execute('''CREATE TABLE IF NOT EXISTS algo_pool (
-        gtype TEXT, algo_id INTEGER, streak INTEGER DEFAULT 0, PRIMARY KEY (gtype, algo_id))''')
-    for gt in GAMES:
-        for i in range(1, 201):
-            conn.execute("INSERT OR IGNORE INTO algo_pool (gtype, algo_id, streak) VALUES (?, ?, 0)", (gt, i))
+        analysis TEXT, real_result TEXT DEFAULT '', status TEXT DEFAULT 'wait')''')
     conn.commit()
 
-# ================== 区块链压秒狙击计算 (已修复加和逻辑) ==================
-def calculate_btc_hash_logic(seed_string):
-    try:
-        sha256_hash = hashlib.sha256(seed_string.encode('utf-8')).hexdigest()
-        first_16 = sha256_hash[:16]
-        dec_val = int(first_16, 16)
-        result_float = dec_val / (2**64)
-        
-        # 提取小数点后3位字符串
-        str_val = f"{result_float:.10f}"
-        decimal_part = str_val.split('.')[1][:3]
-        
-        # 【核心修复】：拆分百位、十位、个位，然后相加
-        d1, d2, d3 = int(decimal_part[0]), int(decimal_part[1]), int(decimal_part[2])
-        total = d1 + d2 + d3
-        
-        # 严格按照真实规则：0-13为小，14-27为大；奇数单，偶数双
-        big_small = "大" if total >= 14 else "小"
-        odd_even = "单" if total % 2 != 0 else "双"
-        
-        return {
-            "hash": sha256_hash,
-            "first_16": first_16,
-            "dec": dec_val,
-            "float": result_float,
-            "nums_str": f"{d1} + {d2} + {d3}", # 展示给前端看
-            "total": total,
-            "combo": big_small + odd_even
-        }
-    except Exception as e:
-        return None
-
-def get_live_blockchain_prediction():
-    ctx = ssl._create_unverified_context()
-    try:
-        url = "https://mempool.space/api/mempool/recent"
-        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-        # 缩短超时时间，确保3秒内完成抓取
-        with urllib.request.urlopen(req, timeout=2, context=ctx) as resp:
-            data = json.loads(resp.read().decode('utf-8'))
-            combined_str = "".join([tx['txid'] for tx in data])
-            return calculate_btc_hash_logic(combined_str)
-    except Exception:
-        return None
-
-# ================== 6算法共识引擎 ==================
-def run_single_algo(algo_id, h7):
+# ================== 加拿大28本地算法 (保持不变) ==================
+def run_canada_algo(history):
+    h7 = history[:7]
     bs = [1 if h['big_small'] == '大' else 0 for h in h7]
     oe = [1 if h['odd_even'] == '单' else 0 for h in h7]
     big, odd = sum(bs), sum(oe)
@@ -100,85 +50,113 @@ def run_single_algo(algo_id, h7):
     s_bs, s_oe = streak(bs), streak(oe)
     
     scores = {"大单": 50.0, "大双": 50.0, "小单": 50.0, "小双": 50.0}
-    camp = algo_id % 4 
     
-    if camp == 0: 
-        if s_bs >= 2: 
-            for k in scores: 
-                if bs[0] == 1 and '大' in k: scores[k] += 15
-                if bs[0] == 0 and '小' in k: scores[k] += 15
-        if s_oe >= 2:
-            for k in scores:
-                if oe[0] == 1 and '单' in k: scores[k] += 10
-                if oe[0] == 0 and '双' in k: scores[k] += 10
-    elif camp == 1: 
-        if s_bs >= 3:
-            for k in scores:
-                if bs[0] == 1 and '大' in k: scores[k] -= 15
-                if bs[0] == 0 and '小' in k: scores[k] -= 15
-        if s_oe >= 3:
-            for k in scores:
-                if oe[0] == 1 and '单' in k: scores[k] -= 15
-                if oe[0] == 0 and '双' in k: scores[k] -= 15
-    elif camp == 2: 
-        if big >= 5:
-            for k in scores:
-                if '大' in k: scores[k] -= 20
-        elif big <= 2:
-            for k in scores:
-                if '小' in k: scores[k] -= 20
-        if odd >= 5:
-            for k in scores:
-                if '单' in k: scores[k] -= 20
-        elif odd <= 2:
-            for k in scores:
-                if '双' in k: scores[k] -= 20
-    elif camp == 3: 
-        combos = [h['big_small'] + h['odd_even'] for h in h7]
-        if combos[0] == combos[1]: scores[combos[0]] -= 15
-        if big + odd >= 8: scores["大单"] += 10; scores["小双"] -= 10
-        if big + odd <= 4: scores["小单"] += 10; scores["大双"] -= 10
+    if s_bs >= 2: 
+        for k in scores: 
+            if bs[0] == 1 and '大' in k: scores[k] += 15
+            if bs[0] == 0 and '小' in k: scores[k] += 15
+    if s_oe >= 2:
+        for k in scores:
+            if oe[0] == 1 and '单' in k: scores[k] += 10
+            if oe[0] == 0 and '双' in k: scores[k] += 10
+    if s_bs >= 3:
+        for k in scores:
+            if bs[0] == 1 and '大' in k: scores[k] -= 15
+            if bs[0] == 0 and '小' in k: scores[k] -= 15
+    if s_oe >= 3:
+        for k in scores:
+            if oe[0] == 1 and '单' in k: scores[k] -= 15
+            if oe[0] == 0 and '双' in k: scores[k] -= 15
 
-    random.seed(algo_id + int(h7[0]['total']))
+    if big >= 5:
+        for k in scores:
+            if '大' in k: scores[k] -= 20
+    elif big <= 2:
+        for k in scores:
+            if '小' in k: scores[k] -= 20
+    if odd >= 5:
+        for k in scores:
+            if '单' in k: scores[k] -= 20
+    elif odd <= 2:
+        for k in scores:
+            if '双' in k: scores[k] -= 20
+
+    combos = [h['big_small'] + h['odd_even'] for h in h7]
+    if combos[0] == combos[1]: scores[combos[0]] -= 15
+    
     for k in scores: scores[k] += random.uniform(-2.0, 2.0)
 
-    return sorted(scores.items(), key=lambda x: x[1])[0][0]
-
-def calculate_consensus(gtype, history):
-    if len(history) < 7: return {"kill": "数据不足", "rec": "-", "analysis": "等待数据...", "algo_ids": ""}
-    
-    with db() as conn:
-        last_log = conn.execute("SELECT algo_ids FROM logs WHERE gtype=? ORDER BY id DESC LIMIT 1", (gtype,)).fetchone()
-        last_used = last_log['algo_ids'].split(',') if last_log and last_log['algo_ids'] else []
-        algos = conn.execute("SELECT * FROM algo_pool WHERE gtype=? ORDER BY streak DESC", (gtype,)).fetchall()
-        candidates = [a for a in algos if str(a['algo_id']) not in last_used]
-        if len(candidates) < 6: candidates = algos[:6]
-        selected_algos = candidates[:6]
-        
-    votes = {"大单": 0, "大双": 0, "小单": 0, "小双": 0}
-    algo_records = []
-    
-    for a in selected_algos:
-        kill_vote = run_single_algo(a['algo_id'], history[:7])
-        votes[kill_vote] += 1
-        algo_records.append({"id": a['algo_id'], "streak": a['streak'], "vote": kill_vote})
-        
-    sorted_v = sorted(votes.items(), key=lambda x: x[1], reverse=True)
-    kill_str = sorted_v[0][0]
-    rem = [x[0] for x in sorted_v[1:]]
-    main_atk, defend, backup = rem[0], rem[1], rem[2]
-
-    body = f"本期系统选中 6 套独立算法参赛：\n"
-    for i, a in enumerate(algo_records):
-        body += f"{i+1}. 算法{a['id']:03d}(连中{a['streak']}期)，投出绝杀票：【{a['vote']}】。\n"
-    outro = f"\n综合投票，【{kill_str}】票数最高。主攻【{main_atk}】，防守【{defend}】，备选【{backup}】。"
-
+    kill_str = sorted(scores.items(), key=lambda x: x[1])[0][0]
+    rem = [k for k in ["大单", "大双", "小单", "小双"] if k != kill_str]
     return {
-        "kill": kill_str, "rec": f"{main_atk}(主攻)、{defend}(防守)、{backup}(备选)",
-        "analysis": body + outro, "algo_ids": ",".join([str(a['id']) for a in algo_records])
+        "kill": kill_str,
+        "rec": f"{rem[0]}(主攻)、{rem[1]}(防守)、{rem[2]}(备选)",
+        "analysis": f"【本地6算法共识】综合投票，绝杀【{kill_str}】，重点防守【{rem[0]}】。"
     }
 
-# ================== 抓取与结算 ==================
+# ================== 分分/比特28 真实 API 抓取与解析 ==================
+def fetch_api_prediction(game_code):
+    ctx = ssl._create_unverified_context()
+    url = f"https://dbg28.com/api/master/algorithms?_={int(time.time()*1000)}&game={game_code}"
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Referer': 'https://dbg28.com/'
+    }
+    
+    try:
+        req = urllib.request.Request(url, headers=headers)
+        with urllib.request.urlopen(req, timeout=8, context=ctx) as resp:
+            raw_data = json.loads(resp.read().decode('utf-8'))
+            
+            # --- 万能解析器 ---
+            algorithms = []
+            if isinstance(raw_data, dict) and 'data' in raw_data:
+                algorithms = raw_data['data']
+            elif isinstance(raw_data, list):
+                algorithms = raw_data
+                
+            votes = {"大单": 0, "大双": 0, "小单": 0, "小双": 0}
+            details = []
+            
+            # 如果拿到了列表，遍历所有算法提取推荐/绝杀
+            if algorithms and isinstance(algorithms, list):
+                for algo in algorithms:
+                    if not isinstance(algo, dict): continue
+                    
+                    name = algo.get('name', '未知算法')
+                    # 兼容常见的字段名: kill, recommend, result, code, bet
+                    kill = algo.get('kill') or algo.get('recommend') or algo.get('result') or algo.get('bet')
+                    
+                    # 过滤无效值
+                    if kill in votes:
+                        votes[kill] += 1
+                        details.append(f"{name}: {kill}")
+            
+            # 如果能提取到有效票数
+            if sum(votes.values()) > 0:
+                kill_str = max(votes, key=votes.get)
+                rem = [k for k in ["大单", "大双", "小单", "小双"] if k != kill_str]
+                return {
+                    "kill": kill_str,
+                    "rec": f"{rem[0]}(主攻)、{rem[1]}(防守)、{rem[2]}(备选)",
+                    "analysis": f"【API 直连推演】系统从该接口获取了 {len(algorithms)} 个算法策略。\n各策略推荐明细：\n" + "\n".join(details[:10]) + f"\n\n统票结果：绝杀【{kill_str}】。"
+                }, raw_data
+            else:
+                return {
+                    "kill": "API结构未知",
+                    "rec": "等待适配",
+                    "analysis": f"接口请求成功，但返回的 JSON 结构无法提取出直接的开奖结果。\n返回的原始数据首部: {str(raw_data)[:100]}..."
+                }, raw_data
+                
+    except Exception as e:
+        # 抓取失败时抛出真实错误
+        return {
+            "kill": "抓取失败",
+            "rec": "等待重试",
+            "analysis": f"真实 API 请求失败，原因：{str(e)}。请检查服务器网络是否能访问 dbg28.com。"
+        }, None
+
+# ================== 抓取与结算主循环 ==================
 def fetch_loop():
     ctx = ssl._create_unverified_context()
     while True:
@@ -192,17 +170,13 @@ def fetch_loop():
                         history = [{"period": i['period'], "nums": f"{i['num1']} + {i['num2']} + {i['num3']}", "total": i['total'], "big_small": i['big_small'], "odd_even": i['odd_even']} for i in data['data'][:20]]
                         
                         if LIVE_DATA[gt]['period'] != latest['period']:
+                            # --- 结算 ---
                             if LIVE_DATA[gt]['period'] != "" and LIVE_DATA[gt]['pred']:
                                 real = latest['big_small'] + latest['odd_even']
                                 p_kill = LIVE_DATA[gt]['pred']['kill']
-                                a_ids = LIVE_DATA[gt]['pred']['algo_ids'].split(',')
-                                
                                 with db() as conn:
                                     status = 'win' if real != p_kill else 'lose'
                                     conn.execute("UPDATE logs SET real_result=?, status=? WHERE gtype=? AND period=?", (real, status, gt, latest['period']))
-                                    for aid in a_ids:
-                                        if status == 'win': conn.execute("UPDATE algo_pool SET streak = streak + 1 WHERE gtype=? AND algo_id=?", (gt, int(aid)))
-                                        else: conn.execute("UPDATE algo_pool SET streak = 0 WHERE gtype=? AND algo_id=?", (gt, int(aid)))
                                     conn.commit()
 
                             dt = datetime.strptime(latest['draw_time'], "%Y-%m-%d %H:%M:%S")
@@ -210,34 +184,28 @@ def fetch_loop():
                                 "period": latest['period'], "next": str(int(latest['period'])+1),
                                 "target_time": (dt - timedelta(hours=8) + timedelta(seconds=cfg['interval'])).timestamp(), 
                                 "history": history,
-                                "snipe_done": False,
-                                "btc_hash": None
+                                "api_raw": None
                             })
                             
-                            pred = calculate_consensus(gt, history)
+                            # --- 预测 ---
+                            if gt == "2":
+                                pred = run_canada_algo(history)
+                            else:
+                                pred, raw_api = fetch_api_prediction(cfg['api_game'])
+                                LIVE_DATA[gt]['api_raw'] = raw_api
+
                             LIVE_DATA[gt]['pred'] = pred
                             
                             with db() as conn:
-                                conn.execute('''INSERT INTO logs (gtype, period, kill, rec, analysis, algo_ids) VALUES (?,?,?,?,?,?)''', 
-                                             (gt, LIVE_DATA[gt]['next'], pred["kill"], pred["rec"], pred["analysis"], pred["algo_ids"]))
+                                conn.execute('''INSERT INTO logs (gtype, period, kill, rec, analysis) VALUES (?,?,?,?,?)''', 
+                                             (gt, LIVE_DATA[gt]['next'], pred["kill"], pred["rec"], pred["analysis"]))
                                 conn.commit()
                                 
                         diff = LIVE_DATA[gt]['target_time'] - datetime.utcnow().timestamp()
                         LIVE_DATA[gt]['left'] = max(0, int(diff))
-                        
-                        # 【修改点】：改为倒计时 3 秒触发抓取
-                        if gt in ("3", "13"):
-                            if 0 < diff <= 3 and not LIVE_DATA[gt]['snipe_done']:
-                                AI_STATUS["msg"] = "压秒狙击触发！正在截胡..."
-                                btc_pred = get_live_blockchain_prediction()
-                                if btc_pred:
-                                    LIVE_DATA[gt]["btc_hash"] = btc_pred
-                                LIVE_DATA[gt]['snipe_done'] = True
-                                AI_STATUS["msg"] = "系统运转中"
-                                
             except Exception:
                 pass
-        time.sleep(0.5)
+        time.sleep(1)
 
 threading.Thread(target=fetch_loop, daemon=True).start()
 
@@ -273,7 +241,6 @@ def api_clear(gt):
     if not verify(): return jsonify({"ok": False})
     with db() as conn:
         conn.execute("DELETE FROM logs WHERE gtype=?", (gt,))
-        conn.execute("UPDATE algo_pool SET streak = 0 WHERE gtype=?", (gt,))
         conn.commit()
     return jsonify({"ok": True})
 
@@ -285,7 +252,7 @@ def index():
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-    <title>6算法 + 压秒区块链狙击</title>
+    <title>API 直连精准狙击</title>
     <style>
         * { box-sizing: border-box; }
         body { background: #f4f6f9; margin: 0; font-family: -apple-system, sans-serif; color: #333; }
@@ -320,12 +287,9 @@ def index():
 
         .ana { background: #fdfaf6; padding: 15px; border-left: 4px solid #e17055; font-size: 14px; line-height: 1.7; color: #2d3436; white-space: pre-wrap; }
         
-        .btc-box { display: none; background: #222f3e; color: #c8d6e5; margin: 12px; padding: 15px; border-radius: 12px; font-family: monospace; box-shadow: 0 4px 15px rgba(0,0,0,0.2); }
-        .btc-title { color: #feca57; font-weight: bold; margin-bottom: 10px; font-size: 14px; display: flex; justify-content: space-between;}
-        .btc-result { font-size: 36px; font-weight: bold; color: #1dd1a1; text-align: center; margin: 10px 0; text-shadow: 0 0 10px rgba(29, 209, 161, 0.5);}
-        .btc-nums { font-size: 18px; color: #feca57; text-align: center; margin-bottom: 10px; font-weight: bold; letter-spacing: 2px;}
-        .btc-detail { font-size: 12px; word-break: break-all; margin-bottom: 5px; color: #8395a7;}
-        .btc-detail span { color: #c8d6e5;}
+        .api-list { display: none; background: #222f3e; color: #c8d6e5; margin: 12px; padding: 15px; border-radius: 12px; font-family: monospace; font-size: 13px; max-height: 300px; overflow-y: auto; }
+        .api-title { color: #feca57; font-weight: bold; margin-bottom: 10px; font-size: 14px;}
+        .api-pre { white-space: pre-wrap; word-wrap: break-word; color: #c8d6e5;}
 
         .log-item { border-bottom: 1px solid #f1f2f6; padding: 10px 0; font-size: 13px; display: flex; justify-content: space-between; }
         .win { color: #00b894; font-weight: bold; } .lose { color: #d63031; font-weight: bold; }
@@ -334,7 +298,7 @@ def index():
     </style>
 </head>
 <body>
-    <div class="head">6算法 + 压秒区块链狙击</div>
+    <div class="head">API 直连精准狙击</div>
     <div class="status" id="status"><span class="dot"></span> 系统运转正常</div>
     <div class="tabs">
         <div class="tab on" onclick="switchG('2', this)">加拿大28</div>
@@ -349,20 +313,10 @@ def index():
         <div class="stats-item">总被杀<span class="stats-val lose" id="st-tl">0</span></div>
     </div>
 
-    <div class="btc-box" id="btc-box">
-        <div class="btc-title">
-            <span>⛓️ 压秒真实抓取 (倒计时3秒触发)</span>
-            <span style="color:#ff6b6b;" id="btc-status">等待触发...</span>
-        </div>
-        <div class="btc-result" id="btc-res">--</div>
-        <div class="btc-nums" id="btc-nums">- + - + - = -</div>
-        <div class="btc-detail">哈希头: <span id="btc-hash">--</span></div>
-        <div class="btc-detail">前16位: <span id="btc-16">--</span></div>
-        <div class="btc-detail">10进制: <span id="btc-dec">--</span></div>
-        <div class="btc-detail">除以2^64: <span id="btc-float">--</span></div>
-        <div style="color:#ff9f43; font-size:12px; margin-top:8px; border-top: 1px dashed #576574; padding-top: 8px;">
-            * 极速引擎会在开奖前 3 秒瞬间抓取真实比特币内存池，计算最终结果。与平台拼手速！
-        </div>
+    <!-- API 真实数据面板 -->
+    <div class="api-list" id="api-box">
+        <div class="api-title">📡 真实 API 抓取验证</div>
+        <div class="api-pre" id="api-content"></div>
     </div>
 
     <div class="card">
@@ -386,7 +340,7 @@ def index():
     </div>
 <script>
     let curG = '2', timer = null;
-    const KEY = "ultimate_blockchain_sniper_v3";
+    const KEY = "ultimate_api_sniper_v5";
     function switchG(g, el) {
         curG = g;
         document.querySelectorAll('.tab').forEach(t => t.classList.remove('on'));
@@ -406,26 +360,17 @@ def index():
                     <div>${h.big_small}${h.odd_even}</div>
                 </div>`).join('');
 
+            // 分分和比特显示 API 原始数据
             if (curG === '3' || curG === '13') {
-                if (d.btc_hash) {
-                    document.getElementById('btc-box').style.display = 'block';
-                    document.getElementById('btc-res').innerText = d.btc_hash.total + " (" + d.btc_hash.combo + ")";
-                    document.getElementById('btc-nums').innerText = d.btc_hash.nums_str + " = " + d.btc_hash.total;
-                    document.getElementById('btc-hash').innerText = d.btc_hash.hash.slice(0, 20) + "...";
-                    document.getElementById('btc-16').innerText = d.btc_hash.first_16;
-                    document.getElementById('btc-dec').innerText = d.btc_hash.dec;
-                    document.getElementById('btc-float').innerText = d.btc_hash.float.toFixed(10);
-                    document.getElementById('btc-status').innerText = "压秒抓取成功！";
-                    document.getElementById('btc-status').style.color = "#1dd1a1";
+                if (d.api_raw) {
+                    document.getElementById('api-box').style.display = 'block';
+                    document.getElementById('api-content').innerText = JSON.stringify(d.api_raw, null, 2);
                 } else {
-                    document.getElementById('btc-box').style.display = 'block';
-                    document.getElementById('btc-res').innerText = "--";
-                    document.getElementById('btc-nums').innerText = "- + - + - = -";
-                    document.getElementById('btc-status').innerText = "等待最后3秒...";
-                    document.getElementById('btc-status').style.color = "#ff9f43";
+                    document.getElementById('api-box').style.display = 'block';
+                    document.getElementById('api-content').innerText = "API 原始数据未获取到或结构无法解析，请查看下方绝杀提示。";
                 }
             } else {
-                document.getElementById('btc-box').style.display = 'none';
+                document.getElementById('api-box').style.display = 'none';
             }
 
             if(d.pred) {
@@ -447,7 +392,7 @@ def index():
                 if(left <= 0) { cdEl.innerText = "开奖中..."; cdEl.classList.add('danger'); return; }
                 left--;
                 cdEl.innerText = `${Math.floor(left/60).toString().padStart(2,'0')}:${(left%60).toString().padStart(2,'0')}`;
-                if (left <= 3) cdEl.classList.add('danger'); else cdEl.classList.remove('danger'); // 倒计时3秒变红
+                if (left <= 3) cdEl.classList.add('danger'); else cdEl.classList.remove('danger');
             }, 1000);
         });
     }
@@ -459,7 +404,6 @@ def index():
             document.getElementById('st-tw').innerText = res.stats.total_win;
             document.getElementById('st-tl').innerText = res.stats.total_lose;
             
-            // 恢复之前的全称格式
             document.getElementById('logs').innerHTML = res.logs.map(l => `
                 <div class="log-item">
                     <div>
@@ -476,7 +420,7 @@ def index():
         });
     }
     function clearLogs() {
-        if(!confirm("清空所有记录并重置算法？")) return;
+        if(!confirm("清空所有记录？")) return;
         fetch(`/api/clear/${curG}`, { method: 'POST', headers: {'X-Token': KEY} }).then(() => fetchLogs());
     }
     fetchData(); fetchLogs();
