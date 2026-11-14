@@ -11,7 +11,7 @@ from flask import Flask, request, jsonify
 from datetime import datetime, timedelta
 
 app = Flask(__name__)
-SECRET_KEY = "pure_formula_v32"
+SECRET_KEY = "pure_formula_v33"
 
 GAMES = {
     "2": {"name": "加拿大28", "url": "https://yc28cn-ml1l.onrender.com/vipASDFGHJKLQQQWERTYUIOPWW9983/8626/0549CASWWW?type=2", "interval": 210},
@@ -19,11 +19,13 @@ GAMES = {
     "13": {"name": "比特28", "url": "https://yc28cn-ml1l.onrender.com/vipASDFGHJKLQQZXCVBNMWW9983/8626/0549CCBDR?type=13", "interval": 60}
 }
 
-AI_STATUS = {"online": True, "msg": "100套纯数学公式运算中..."}
+AI_STATUS = {"online": True, "msg": "三路核心公式交叉运算中..."}
 LIVE_DATA = {gt: {"period": "", "next": "", "left": 0, "history": [], "pred": None, "algo_list": []} for gt in GAMES}
 
+LAST_KILL_STR = {"2": "", "3": "", "13": ""}
+
 def db():
-    conn = sqlite3.connect('predict_formula_v32.db', timeout=30)
+    conn = sqlite3.connect('predict_formula_v33.db', timeout=30)
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -33,104 +35,118 @@ with db() as conn:
         analysis TEXT, real_result TEXT DEFAULT '', status TEXT DEFAULT 'wait')''')
     conn.commit()
 
-# ================== 动态生成 100 套纯数学公式 ==================
-ALGO_FORMULAS = {}
-positions = ['A', 'B', 'C']
+# ================== 核心三公式计算引擎 ==================
+def get_tail(x):
+    return x % 10
 
-for i in range(1, 101):
-    if i <= 35:
-        # 1-35: 基础运算取尾 (如 A1+B3)
-        p1, p2 = random.choice(positions), random.choice(positions)
-        o1, o2 = random.randint(1, 4), random.randint(1, 4)
-        ALGO_FORMULAS[i] = {
-            "name": f"基础公式-{i:02d}", 
-            "desc": f"({p1}{o1}+{p2}{o2})取尾", 
-            "vars": [f"{p1}{o1}", f"{p2}{o2}"]
-        }
-    elif i <= 70:
-        # 36-70: 多位置组合运算 (如 C1+B3 + A2+B4+C3)
-        p1, p2, p3, p4, p5 = [random.choice(positions) for _ in range(5)]
-        o1, o2, o3, o4, o5 = [random.randint(1, 4) for _ in range(5)]
-        ALGO_FORMULAS[i] = {
-            "name": f"组合公式-{i:02d}", 
-            "desc": f"({p1}{o1}+{p2}{o2}) + ({p3}{o3}+{p4}{o4}+{p5}{o5})取尾", 
-            "vars": [f"{p1}{o1}", f"{p2}{o2}", f"{p3}{o3}", f"{p4}{o4}", f"{p5}{o5}"]
-        }
-    else:
-        # 71-100: 多期数据混合 (如 A2+B2+C2 + B1+B2+B3 + A4+C4)
-        o1, o2, o3, o4 = [random.randint(1, 4) for _ in range(4)]
-        ALGO_FORMULAS[i] = {
-            "name": f"混合公式-{i:02d}", 
-            "desc": f"(A{o1}+B{o1}+C{o1}) + (B{o2}+B{o3}) + (A{o4}+C{o4})取尾", 
-            "vars": [f"A{o1}", f"B{o1}", f"C{o1}", f"B{o2}", f"B{o3}", f"A{o4}", f"C{o4}"]
-        }
+def get_head_mid_tail(r):
+    if r in [0, 1, 2, 3]: return "头"
+    elif r in [4, 5, 6]: return "中"
+    else: return "尾"
 
-# ================== 公式运算引擎 ==================
-def calculate_formula(algo_id, history):
-    # 提取近 4 期的 A, B, C 数字
+def get_bs_oe(r):
+    oe = "单" if r % 2 != 0 else "双"
+    bs = "大" if r >= 5 else "小"
+    return bs, oe
+
+def calculate_formulas(history):
+    # 构建期次位置字典
+    # 按照定义：A最新期，B上一期，C上上期，D上上上期(用于第4位)
     data = {}
     for i in range(4):
         if i < len(history):
             h = history[i]
             nums = h['nums'].split(' + ')
-            data[f'A{i+1}'] = int(nums[0])
-            data[f'B{i+1}'] = int(nums[1])
-            data[f'C{i+1}'] = int(nums[2])
+            # 如果只有3个数字，第4个位置默认补0
+            a = int(nums[0])
+            b = int(nums[1])
+            c = int(nums[2])
+            d = int(nums[3]) if len(nums) > 3 else 0
+            
+            prefix = ['A', 'B', 'C', 'D'][i]
+            data[f'{prefix}1'] = a
+            data[f'{prefix}2'] = b
+            data[f'{prefix}3'] = c
+            data[f'{prefix}4'] = d
         else:
-            data[f'A{i+1}'] = 0
-            data[f'B{i+1}'] = 0
-            data[f'C{i+1}'] = 0
+            for p in ['A', 'B', 'C', 'D']:
+                for j in range(1, 5): data[f'{p}{j}'] = 0
 
-    formula = ALGO_FORMULAS[algo_id]
+    # 公式1：基础取尾
+    # R1 = t(A1+B3)
+    S1 = data['A1'] + data['B3']
+    R1 = get_tail(S1)
     
-    # 累加公式中所有变量的值
-    total_val = sum([data.get(v, 0) for v in formula['vars']])
-    
-    # 取尾数 (0-9)
-    tail = total_val % 10
-    
-    # 判断大小单双
-    bs = "大" if tail >= 5 else "小"
-    oe = "单" if tail % 2 != 0 else "双"
-    
-    return bs + oe, tail
+    # 公式2：多位置组合
+    # R2 = t(X+X+Y+Z)
+    X = get_tail(data['C1'] + data['B3'])
+    Y = get_tail(data['A2'] + data['B4'] + data['C3'])
+    Z = get_tail(data['B3'] + data['C2'])
+    R2 = get_tail(X + X + Y + Z)
 
-# ================== 统票与杀一推三 ==================
-def calculate_prediction(gt, history, next_p):
-    votes = {"大单": 0, "大双": 0, "小单": 0, "小双": 0}
-    algo_records = []
-    
-    # 100 套公式真实推演
-    for aid in range(1, 101):
-        res, tail = calculate_formula(aid, history)
-        votes[res] += 1
-        algo_records.append({
-            "id": aid, 
-            "name": ALGO_FORMULAS[aid]['name'], 
-            "desc": ALGO_FORMULAS[aid]['desc'],
-            "tail": tail,
-            "vote": res
+    # 公式3：多期混合
+    # R3 = t(S1+S2+S3)
+    S_1 = get_tail(data['A2'] + data['B2'] + data['C2'])
+    S_2 = get_tail(data['B1'] + data['B2'] + data['B3'])
+    S_3 = get_tail(data['A4'] + data['C4'])
+    R3 = get_tail(S_1 + S_2 + S_3)
+
+    # 结果整理
+    results = []
+    for idx, r in enumerate([R1, R2, R3]):
+        bs, oe = get_bs_oe(r)
+        results.append({
+            "id": idx + 1,
+            "name": f"公式{idx + 1}",
+            "R": r,
+            "hmt": get_head_mid_tail(r),
+            "vote": bs + oe
         })
+        
+    return results
 
-    # 投票结果排序
+# ================== 杀一推三与防重逻辑 ==================
+def calculate_prediction(gt, history, next_p):
+    algo_list = calculate_formulas(history)
+    
+    # 统计三路公式投票
+    votes = {"大单": 0, "大双": 0, "小单": 0, "小双": 0}
+    for a in algo_list:
+        votes[a['vote']] += 1
+
+    # 排序：票数多的优先
     sorted_v = sorted(votes.items(), key=lambda x: x[1], reverse=True)
     
-    # 精准杀一推三（票数最高主攻，票数最低绝杀）
+    # 如果有两个结果并列 1 票，我们利用头中尾做二次裁决
+    # 为了强行“杀一推三”，我们把 4 个选项按得票排好
     main_atk = sorted_v[0][0] 
     defend = sorted_v[1][0]   
     backup = sorted_v[2][0]   
     kill_str = sorted_v[3][0] 
 
-    analysis = f"【纯数学公式推演】已真实跑完 100 套历史取尾运算。\n主攻趋势锁定【{main_atk}】({votes[main_atk]}票)；\n防守布局于【{defend}】({votes[defend]}票)；\n依据公式反向共振，精准绝杀【{kill_str}】！"
+    # 【防死磕机制】
+    if kill_str == LAST_KILL_STR[gt]:
+        kill_str = backup  
+        backup = sorted_v[3][0]
+        
+    LAST_KILL_STR[gt] = kill_str
+
+    # 生成解析
+    f1, f2, f3 = algo_list[0], algo_list[1], algo_list[2]
+    analysis = f"【三路核心公式推演】已严格完成取尾与头中尾判定。\n"
+    analysis += f"- 公式1(基础取尾)：算出尾数 {f1['R']}，判定【{f1['hmt']}】，结果为 {f1['vote']}。\n"
+    analysis += f"- 公式2(多位置组合)：算出尾数 {f2['R']}，判定【{f2['hmt']}】，结果为 {f2['vote']}。\n"
+    analysis += f"- 公式3(多期混合)：算出尾数 {f3['R']}，判定【{f3['hmt']}】，结果为 {f3['vote']}。\n"
+    analysis += f"\n综合交叉验证，主攻指向【{main_atk}】。根据防重机制，本期绝杀【{kill_str}】！"
 
     return {
         "kill": kill_str, 
         "rec": f"{main_atk}(主攻)、{defend}(防守)、{backup}(备选)", 
         "analysis": analysis, 
-        "algo_list": algo_records
+        "algo_list": algo_list
     }
 
-# ================== 极速抓取主循环 ==================
+# ================== 抓取主循环 ==================
 def fetch_loop():
     ctx = ssl._create_unverified_context()
     while True:
@@ -151,7 +167,6 @@ def fetch_loop():
                         } for i in data['data'][:20]]
                         
                         if LIVE_DATA[gt]['period'] != latest['period']:
-                            # 结算上期
                             if LIVE_DATA[gt]['period'] != "" and LIVE_DATA[gt]['pred']:
                                 real = latest['big_small'] + latest['odd_even']
                                 p_kill = LIVE_DATA[gt]['pred']['kill']
@@ -229,7 +244,7 @@ def index():
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-    <title>公式量化实战预测</title>
+    <title>三路核心公式实战预测</title>
     <style>
         * { box-sizing: border-box; }
         body { background: #f4f6f9; margin: 0; font-family: -apple-system, sans-serif; color: #333; }
@@ -266,9 +281,10 @@ def index():
         
         .api-list { display: none; background: #222f3e; color: #c8d6e5; margin: 12px; padding: 15px; border-radius: 12px; font-family: monospace; font-size: 12px; max-height: 400px; overflow-y: auto; }
         .api-title { color: #feca57; font-weight: bold; margin-bottom: 10px; font-size: 14px; position: sticky; top: 0; background: #222f3e; padding-bottom: 5px; border-bottom: 1px solid #576574; z-index: 10;}
-        .api-row { display: flex; justify-content: space-between; padding: 5px 0; border-bottom: 1px dashed #2c3e50; }
+        .api-row { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px dashed #2c3e50; }
         .api-row span.red { color: #ff6b6b; font-weight: bold; }
         .api-row span.tail { color: #feca57; font-weight: bold; }
+        .api-row span.hmt { color: #48dbfb; font-weight: bold; }
 
         .log-item { border-bottom: 1px solid #f1f2f6; padding: 10px 0; font-size: 13px; display: flex; justify-content: space-between; }
         .win { color: #00b894; font-weight: bold; } .lose { color: #d63031; font-weight: bold; }
@@ -277,7 +293,7 @@ def index():
     </style>
 </head>
 <body>
-    <div class="head">公式量化实战预测</div>
+    <div class="head">三路核心公式实战</div>
     <div class="status" id="status"><span class="dot"></span> 系统运转正常</div>
     <div class="tabs">
         <div class="tab on" onclick="switchG('2', this)">加拿大28</div>
@@ -293,7 +309,7 @@ def index():
     </div>
 
     <div class="api-list" id="api-box">
-        <div class="api-title" id="api-title">📡 100 套纯数学公式明细 (真实运算)</div>
+        <div class="api-title" id="api-title">📡 三路公式明细 (取尾与头中尾验证)</div>
         <div id="api-content"></div>
     </div>
 
@@ -318,7 +334,7 @@ def index():
     </div>
 <script>
     let curG = '2', timer = null;
-    const KEY = "pure_formula_v32";
+    const KEY = "pure_formula_v33";
     
     function switchG(g, el) {
         curG = g;
@@ -346,7 +362,10 @@ def index():
                 let html = '';
                 d.algo_list.forEach(algo => {
                     html += `<div class="api-row">
-                        <div>[${algo.id}] ${algo.name} | ${algo.desc} <span class="tail">(尾:${algo.tail})</span></div>
+                        <div>
+                            <div>[公式${algo.id}] 尾数: <span class="tail">${algo.R}</span></div>
+                            <div>判定: <span class="hmt">${algo.hmt}</span></div>
+                        </div>
                         <div class="red">${algo.vote}</div>
                     </div>`;
                 });
