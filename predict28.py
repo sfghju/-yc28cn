@@ -11,7 +11,7 @@ from flask import Flask, request, jsonify
 from datetime import datetime, timedelta
 
 app = Flask(__name__)
-SECRET_KEY = "ultimate_streak_v30"
+SECRET_KEY = "pure_formula_v32"
 
 GAMES = {
     "2": {"name": "加拿大28", "url": "https://yc28cn-ml1l.onrender.com/vipASDFGHJKLQQQWERTYUIOPWW9983/8626/0549CASWWW?type=2", "interval": 210},
@@ -19,18 +19,11 @@ GAMES = {
     "13": {"name": "比特28", "url": "https://yc28cn-ml1l.onrender.com/vipASDFGHJKLQQZXCVBNMWW9983/8626/0549CCBDR?type=13", "interval": 60}
 }
 
-AI_STATUS = {"online": True, "msg": "连胜追踪+严酷淘汰中..."}
+AI_STATUS = {"online": True, "msg": "100套纯数学公式运算中..."}
 LIVE_DATA = {gt: {"period": "", "next": "", "left": 0, "history": [], "pred": None, "algo_list": []} for gt in GAMES}
 
-# ================== 核心：初始连中全部设定为 5 期 ==================
-# 满足你的条件：所有算法当前全部连中 5 期，符合上场标准！
-ALGO_STREAKS = {gt: {i: 5 for i in range(1, 101)} for gt in GAMES}
-
-LAST_KILL_STR = {"2": "", "3": "", "13": ""}
-LAST_KILL_COUNT = {"2": 0, "3": 0, "13": 0}
-
 def db():
-    conn = sqlite3.connect('predict_streak_v30.db', timeout=30)
+    conn = sqlite3.connect('predict_formula_v32.db', timeout=30)
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -40,105 +33,96 @@ with db() as conn:
         analysis TEXT, real_result TEXT DEFAULT '', status TEXT DEFAULT 'wait')''')
     conn.commit()
 
-ALGO_NAMES = {i: f"策略算法{i:03d}" for i in range(1, 101)}
+# ================== 动态生成 100 套纯数学公式 ==================
+ALGO_FORMULAS = {}
+positions = ['A', 'B', 'C']
 
-# ================== 算法底层计算 ==================
-def run_single_algo(algo_id, h7, period, game_type):
-    bs = [1 if h['big_small'] == '大' else 0 for h in h7]
-    oe = [1 if h['odd_even'] == '单' else 0 for h in h7]
-    sums = [h['total'] for h in h7]
-    big_cnt, odd_cnt = sum(bs), sum(oe)
-    
-    random.seed(algo_id + int(period) + (13 if game_type == "13" else (3 if game_type == "3" else 2)))
-    score_bs = big_cnt - 3.5 + random.uniform(-1.2, 1.2)
-    score_oe = odd_cnt - 3.5 + random.uniform(-1.2, 1.2)
-    
-    if 1 <= algo_id <= 25: 
-        if bs[0] == 1: score_bs *= 1.5
-        if oe[0] == 1: score_oe *= 1.5
-    elif 26 <= algo_id <= 50: 
-        if big_cnt >= 4: score_bs = -score_bs * 1.8
-        if odd_cnt >= 4: score_oe = -score_oe * 1.8
-    elif 51 <= algo_id <= 75: 
-        if sums[0] > 15: score_bs -= 1.0
-        if sums[0] < 12: score_bs += 1.0
-    elif 76 <= algo_id <= 100: 
-        if algo_id in [86, 98]: score_bs = -score_bs; score_oe = -score_oe
-    return ("大" if score_bs >= 0 else "小") + ("单" if score_oe >= 0 else "双")
+for i in range(1, 101):
+    if i <= 35:
+        # 1-35: 基础运算取尾 (如 A1+B3)
+        p1, p2 = random.choice(positions), random.choice(positions)
+        o1, o2 = random.randint(1, 4), random.randint(1, 4)
+        ALGO_FORMULAS[i] = {
+            "name": f"基础公式-{i:02d}", 
+            "desc": f"({p1}{o1}+{p2}{o2})取尾", 
+            "vars": [f"{p1}{o1}", f"{p2}{o2}"]
+        }
+    elif i <= 70:
+        # 36-70: 多位置组合运算 (如 C1+B3 + A2+B4+C3)
+        p1, p2, p3, p4, p5 = [random.choice(positions) for _ in range(5)]
+        o1, o2, o3, o4, o5 = [random.randint(1, 4) for _ in range(5)]
+        ALGO_FORMULAS[i] = {
+            "name": f"组合公式-{i:02d}", 
+            "desc": f"({p1}{o1}+{p2}{o2}) + ({p3}{o3}+{p4}{o4}+{p5}{o5})取尾", 
+            "vars": [f"{p1}{o1}", f"{p2}{o2}", f"{p3}{o3}", f"{p4}{o4}", f"{p5}{o5}"]
+        }
+    else:
+        # 71-100: 多期数据混合 (如 A2+B2+C2 + B1+B2+B3 + A4+C4)
+        o1, o2, o3, o4 = [random.randint(1, 4) for _ in range(4)]
+        ALGO_FORMULAS[i] = {
+            "name": f"混合公式-{i:02d}", 
+            "desc": f"(A{o1}+B{o1}+C{o1}) + (B{o2}+B{o3}) + (A{o4}+C{o4})取尾", 
+            "vars": [f"A{o1}", f"B{o1}", f"C{o1}", f"B{o2}", f"B{o3}", f"A{o4}", f"C{o4}"]
+        }
 
-# ================== 连胜追踪与预测主逻辑 ==================
-def calculate_prediction(gt, history, next_p, prev_preds=None, prev_real=None):
-    global ALGO_STREAKS
-    
-    # 1. 结算上一期：更新 100 套算法的连中状态
-    if prev_preds and prev_real:
-        for item in prev_preds:
-            aid = item['id']
-            p_vote = item['vote']
-            if p_vote == prev_real:
-                ALGO_STREAKS[gt][aid] += 1  # 连中继续加
-            else:
-                ALGO_STREAKS[gt][aid] = 0   # 猜错直接清零（打入冷宫）
+# ================== 公式运算引擎 ==================
+def calculate_formula(algo_id, history):
+    # 提取近 4 期的 A, B, C 数字
+    data = {}
+    for i in range(4):
+        if i < len(history):
+            h = history[i]
+            nums = h['nums'].split(' + ')
+            data[f'A{i+1}'] = int(nums[0])
+            data[f'B{i+1}'] = int(nums[1])
+            data[f'C{i+1}'] = int(nums[2])
+        else:
+            data[f'A{i+1}'] = 0
+            data[f'B{i+1}'] = 0
+            data[f'C{i+1}'] = 0
 
-    # 2. 严格选拔：三端错峰，挑选当前连中 >= 5 的算法
-    current_streaks = ALGO_STREAKS[gt]
-    sorted_algos = sorted(current_streaks.items(), key=lambda x: x[1], reverse=True)
+    formula = ALGO_FORMULAS[algo_id]
     
-    offset = {"2": 0, "3": 10, "13": 20}[gt]
-    # 取前 50 个作为候选池，确保能挑出足够的 5 连中
-    ranked_pool = sorted_algos[offset : offset+50] 
+    # 累加公式中所有变量的值
+    total_val = sum([data.get(v, 0) for v in formula['vars']])
     
-    # 强制过滤：必须是 5 连中以上
-    strict_5plus = [aid for aid, streak in ranked_pool if streak >= 5]
+    # 取尾数 (0-9)
+    tail = total_val % 10
     
-    # 如果满足 5连中的不足 20 个，就按连中数高低顺延补齐
-    selected_algos = strict_5plus[:20]
-    if len(selected_algos) < 20:
-        for aid, streak in ranked_pool:
-            if aid not in selected_algos:
-                selected_algos.append(aid)
-            if len(selected_algos) == 20:
-                break
+    # 判断大小单双
+    bs = "大" if tail >= 5 else "小"
+    oe = "单" if tail % 2 != 0 else "双"
+    
+    return bs + oe, tail
 
-    # 3. 让这 20 个“常胜将军”预测投票
+# ================== 统票与杀一推三 ==================
+def calculate_prediction(gt, history, next_p):
     votes = {"大单": 0, "大双": 0, "小单": 0, "小双": 0}
     algo_records = []
-    for aid in selected_algos:
-        res = run_single_algo(aid, history[:7], next_p, gt)
+    
+    # 100 套公式真实推演
+    for aid in range(1, 101):
+        res, tail = calculate_formula(aid, history)
         votes[res] += 1
         algo_records.append({
             "id": aid, 
-            "name": ALGO_NAMES[aid], 
-            "vote": res, 
-            "streak": current_streaks[aid]
+            "name": ALGO_FORMULAS[aid]['name'], 
+            "desc": ALGO_FORMULAS[aid]['desc'],
+            "tail": tail,
+            "vote": res
         })
 
+    # 投票结果排序
     sorted_v = sorted(votes.items(), key=lambda x: x[1], reverse=True)
     
+    # 精准杀一推三（票数最高主攻，票数最低绝杀）
     main_atk = sorted_v[0][0] 
     defend = sorted_v[1][0]   
-    kill_str = sorted_v[2][0] 
-    backup = sorted_v[3][0]   
+    backup = sorted_v[2][0]   
+    kill_str = sorted_v[3][0] 
 
-    # 4. 防死磕机制：最多连杀 2 期
-    if kill_str == LAST_KILL_STR[gt]:
-        LAST_KILL_COUNT[gt] += 1
-        if LAST_KILL_COUNT[gt] >= 2:
-            kill_str = backup 
-            backup = sorted_v[2][0]
-            LAST_KILL_COUNT[gt] = 0 
-            if kill_str == LAST_KILL_STR[gt]:
-                kill_str = defend
-                defend = sorted_v[2][0]
-    else:
-        LAST_KILL_COUNT[gt] = 0 
-        
-    LAST_KILL_STR[gt] = kill_str
+    analysis = f"【纯数学公式推演】已真实跑完 100 套历史取尾运算。\n主攻趋势锁定【{main_atk}】({votes[main_atk]}票)；\n防守布局于【{defend}】({votes[defend]}票)；\n依据公式反向共振，精准绝杀【{kill_str}】！"
 
-    # 5. 战绩播报
-    avg_streak = sum([current_streaks[aid] for aid in selected_algos]) / 20.0
-    analysis = f"【极限连中追踪模型】本期出战的 20 套算法，平均当前连中：{avg_streak:.1f} 期。\n主攻趋势锁定【{main_atk}】({votes[main_atk]}票)；\n防守布置于【{defend}】({votes[defend]}票)；\n根据走势，本期绝杀【{kill_str}】！"
-    
     return {
         "kill": kill_str, 
         "rec": f"{main_atk}(主攻)、{defend}(防守)、{backup}(备选)", 
@@ -146,7 +130,7 @@ def calculate_prediction(gt, history, next_p, prev_preds=None, prev_real=None):
         "algo_list": algo_records
     }
 
-# ================== 抓取主循环 ==================
+# ================== 极速抓取主循环 ==================
 def fetch_loop():
     ctx = ssl._create_unverified_context()
     while True:
@@ -158,18 +142,22 @@ def fetch_loop():
                     data = json.loads(resp.read().decode('utf-8'))
                     if data.get('data'):
                         latest = data['data'][0]
-                        history = [{"period": i['period'], "nums": f"{i['num1']} + {i['num2']} + {i['num3']}", "total": i['total'], "big_small": i['big_small'], "odd_even": i['odd_even']} for i in data['data'][:20]]
+                        history = [{
+                            "period": i['period'], 
+                            "nums": f"{i['num1']} + {i['num2']} + {i['num3']}", 
+                            "total": i['total'], 
+                            "big_small": i['big_small'], 
+                            "odd_even": i['odd_even']
+                        } for i in data['data'][:20]]
                         
                         if LIVE_DATA[gt]['period'] != latest['period']:
-                            # 获取上一期预测和真实结果进行结算更新连中
-                            prev_preds = LIVE_DATA[gt]['algo_list'] if LIVE_DATA[gt]['pred'] else None
-                            prev_real = (latest['big_small'] + latest['odd_even']) if LIVE_DATA[gt]['period'] != "" else None
-                            
+                            # 结算上期
                             if LIVE_DATA[gt]['period'] != "" and LIVE_DATA[gt]['pred']:
+                                real = latest['big_small'] + latest['odd_even']
                                 p_kill = LIVE_DATA[gt]['pred']['kill']
                                 with db() as conn:
-                                    status = 'win' if prev_real != p_kill else 'lose'
-                                    conn.execute("UPDATE logs SET real_result=?, status=? WHERE gtype=? AND period=?", (prev_real, status, gt, latest['period']))
+                                    status = 'win' if real != p_kill else 'lose'
+                                    conn.execute("UPDATE logs SET real_result=?, status=? WHERE gtype=? AND period=?", (real, status, gt, latest['period']))
                                     conn.commit()
 
                             dt = datetime.strptime(latest['draw_time'], "%Y-%m-%d %H:%M:%S")
@@ -180,8 +168,7 @@ def fetch_loop():
                                 "history": history
                             })
 
-                            # 执行预测
-                            pred = calculate_prediction(gt, history, next_p, prev_preds, prev_real)
+                            pred = calculate_prediction(gt, history, next_p)
                             LIVE_DATA[gt]['pred'] = pred
                             LIVE_DATA[gt]['algo_list'] = pred['algo_list']
                             
@@ -199,7 +186,7 @@ def fetch_loop():
 
 threading.Thread(target=fetch_loop, daemon=True).start()
 
-# ================== 前端接口 ==================
+# ================== API 与 前端 ==================
 def verify(): return request.headers.get('X-Token') == SECRET_KEY
 
 @app.route('/api/data/<gt>')
@@ -232,9 +219,6 @@ def api_clear(gt):
     with db() as conn:
         conn.execute("DELETE FROM logs WHERE gtype=?", (gt,))
         conn.commit()
-    # 清空记录时，重置连中为 5
-    for aid in range(1, 101):
-        ALGO_STREAKS[gt][aid] = 5
     return jsonify({"ok": True})
 
 @app.route('/')
@@ -245,7 +229,7 @@ def index():
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-    <title>极限连胜实战预测</title>
+    <title>公式量化实战预测</title>
     <style>
         * { box-sizing: border-box; }
         body { background: #f4f6f9; margin: 0; font-family: -apple-system, sans-serif; color: #333; }
@@ -284,7 +268,7 @@ def index():
         .api-title { color: #feca57; font-weight: bold; margin-bottom: 10px; font-size: 14px; position: sticky; top: 0; background: #222f3e; padding-bottom: 5px; border-bottom: 1px solid #576574; z-index: 10;}
         .api-row { display: flex; justify-content: space-between; padding: 5px 0; border-bottom: 1px dashed #2c3e50; }
         .api-row span.red { color: #ff6b6b; font-weight: bold; }
-        .api-row span.green { color: #00b894; font-weight: bold; }
+        .api-row span.tail { color: #feca57; font-weight: bold; }
 
         .log-item { border-bottom: 1px solid #f1f2f6; padding: 10px 0; font-size: 13px; display: flex; justify-content: space-between; }
         .win { color: #00b894; font-weight: bold; } .lose { color: #d63031; font-weight: bold; }
@@ -293,7 +277,7 @@ def index():
     </style>
 </head>
 <body>
-    <div class="head">极限连胜实战预测</div>
+    <div class="head">公式量化实战预测</div>
     <div class="status" id="status"><span class="dot"></span> 系统运转正常</div>
     <div class="tabs">
         <div class="tab on" onclick="switchG('2', this)">加拿大28</div>
@@ -309,7 +293,7 @@ def index():
     </div>
 
     <div class="api-list" id="api-box">
-        <div class="api-title" id="api-title">📡 当前出战的 20 套算法 (严格考核连中>=5期)</div>
+        <div class="api-title" id="api-title">📡 100 套纯数学公式明细 (真实运算)</div>
         <div id="api-content"></div>
     </div>
 
@@ -334,7 +318,7 @@ def index():
     </div>
 <script>
     let curG = '2', timer = null;
-    const KEY = "ultimate_streak_v30";
+    const KEY = "pure_formula_v32";
     
     function switchG(g, el) {
         curG = g;
@@ -361,9 +345,8 @@ def index():
                 document.getElementById('api-box').style.display = 'block';
                 let html = '';
                 d.algo_list.forEach(algo => {
-                    let streak_color = algo.streak >= 5 ? 'green' : 'red';
                     html += `<div class="api-row">
-                        <div>[${algo.id}] ${algo.name} (<span class="${streak_color}">连中${algo.streak}期</span>)</div>
+                        <div>[${algo.id}] ${algo.name} | ${algo.desc} <span class="tail">(尾:${algo.tail})</span></div>
                         <div class="red">${algo.vote}</div>
                     </div>`;
                 });
