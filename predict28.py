@@ -11,7 +11,7 @@ from flask import Flask, request, jsonify
 from datetime import datetime, timedelta
 
 app = Flask(__name__)
-SECRET_KEY = "algo_consensus_v6"
+SECRET_KEY = "algo_consensus_v7"
 
 GAMES = {
     "2": {"name": "加拿大28", "url": "https://yc28cn-ml1l.onrender.com/vipASDFGHJKLQQQWERTYUIOPWW9983/8626/0549CASWWW?type=2", "interval": 210},
@@ -19,12 +19,12 @@ GAMES = {
     "13": {"name": "比特28", "url": "https://yc28cn-ml1l.onrender.com/vipASDFGHJKLQQZXCVBNMWW9983/8626/0549CCBDR?type=13", "interval": 60}
 }
 
-AI_STATUS = {"online": True, "msg": "多因子共识在线 · 6算法联合运转"}
+AI_STATUS = {"online": True, "msg": "6大算法共识引擎运转中..."}
 LIVE_DATA = {gt: {"period": "", "next": "", "left": 0, "history": [], "pred": None} for gt in GAMES}
 
 # ================== 数据库 ==================
 def db():
-    conn = sqlite3.connect('predict_consensus.db', timeout=30)
+    conn = sqlite3.connect('predict_v7.db', timeout=30)
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -39,12 +39,8 @@ with db() as conn:
             conn.execute("INSERT OR IGNORE INTO algo_pool (gtype, algo_id, streak) VALUES (?, ?, 0)", (gt, i))
     conn.commit()
 
-# ================== 核心算法矩阵 ==================
+# ================== 核心算法矩阵 (强制分票) ==================
 def run_single_algo(algo_id, h7):
-    # 利用算法ID生成固定的随机权重，保证同名算法结果唯一
-    random.seed(algo_id)
-    w_s, w_m, w_c = random.uniform(0.5, 2.0), random.uniform(0.5, 2.0), random.uniform(0.5, 2.0)
-    
     bs = [1 if h['big_small'] == '大' else 0 for h in h7]
     oe = [1 if h['odd_even'] == '单' else 0 for h in h7]
     big, odd = sum(bs), sum(oe)
@@ -55,29 +51,54 @@ def run_single_algo(algo_id, h7):
             if seq[i] == seq[0]: s += 1
             else: break
         return s
-
-    scores = {"大单": 50.0, "大双": 50.0, "小单": 50.0, "小双": 50.0}
-    
-    # 连号逻辑
     s_bs, s_oe = streak(bs), streak(oe)
-    if s_bs >= 4:
-        pos = "大" if bs[0] == 1 else "小"
-        scores[pos+"单"] += 15*w_s; scores[pos+"双"] += 15*w_s
-        scores[("小" if pos=="大" else "大")+"单"] -= 20*w_s; scores[("小" if pos=="大" else "大")+"双"] -= 20*w_s
-    if s_oe >= 4:
-        pos = "单" if oe[0] == 1 else "双"
-        scores["大"+pos] += 15*w_s; scores["小"+pos] += 15*w_s
-        scores["大"+("双" if pos=="单" else "单")] -= 20*w_s; scores["小"+("双" if pos=="单" else "单")] -= 20*w_s
+    
+    scores = {"大单": 50.0, "大双": 50.0, "小单": 50.0, "小双": 50.0}
+    camp = algo_id % 4 # 划分为4种不同性格的算法阵营
+    
+    if camp == 0: # 【顺势派】喜欢追长龙
+        if s_bs >= 2: 
+            for k in scores: 
+                if bs[0] == 1 and '大' in k: scores[k] += 15
+                if bs[0] == 0 and '小' in k: scores[k] += 15
+        if s_oe >= 2:
+            for k in scores:
+                if oe[0] == 1 and '单' in k: scores[k] += 10
+                if oe[0] == 0 and '双' in k: scores[k] += 10
+                
+    elif camp == 1: # 【反杀派】专杀长龙
+        if s_bs >= 3:
+            for k in scores:
+                if bs[0] == 1 and '大' in k: scores[k] -= 15
+                if bs[0] == 0 and '小' in k: scores[k] -= 15
+        if s_oe >= 3:
+            for k in scores:
+                if oe[0] == 1 and '单' in k: scores[k] -= 15
+                if oe[0] == 0 and '双' in k: scores[k] -= 15
+                
+    elif camp == 2: # 【均值回归派】谁多杀谁
+        if big >= 5:
+            for k in scores:
+                if '大' in k: scores[k] -= 20
+        elif big <= 2:
+            for k in scores:
+                if '小' in k: scores[k] -= 20
+        if odd >= 5:
+            for k in scores:
+                if '单' in k: scores[k] -= 20
+        elif odd <= 2:
+            for k in scores:
+                if '双' in k: scores[k] -= 20
+                
+    elif camp == 3: # 【混沌震荡派】看组合和交叉
+        combos = [h['big_small'] + h['odd_even'] for h in h7]
+        if combos[0] == combos[1]: scores[combos[0]] -= 15
+        if big + odd >= 8: scores["大单"] += 10; scores["小双"] -= 10 # 偏态修正
+        if big + odd <= 4: scores["小单"] += 10; scores["大双"] -= 10
 
-    # 均值回归逻辑
-    if big >= 5: scores["大单"] -= 15*w_m; scores["大双"] -= 15*w_m
-    elif big <= 2: scores["小单"] -= 15*w_m; scores["小双"] -= 15*w_m
-    if odd >= 5: scores["大单"] -= 15*w_m; scores["小单"] -= 15*w_m
-    elif odd <= 2: scores["大双"] -= 15*w_m; scores["小双"] -= 15*w_m
-
-    # 组合形态逻辑
-    combos = [h['big_small'] + h['odd_even'] for h in h7]
-    if combos[0] == combos[1]: scores[combos[0]] -= 10 * w_c
+    # 加入微小的个体随机差异，确保 200 套算法独一无二
+    random.seed(algo_id + int(h7[0]['total']))
+    for k in scores: scores[k] += random.uniform(-2.0, 2.0)
 
     return sorted(scores.items(), key=lambda x: x[1])[0][0] # 返回分数最低的绝杀
 
@@ -86,16 +107,12 @@ def calculate_consensus(gtype, history):
     if len(history) < 7: return {"kill": "数据不足", "rec": "-", "analysis": "等待数据...", "algo_ids": ""}
     
     with db() as conn:
-        # 强制选出 6 个未上场的算法
         last_log = conn.execute("SELECT algo_ids FROM logs WHERE gtype=? ORDER BY id DESC LIMIT 1", (gtype,)).fetchone()
         last_used = last_log['algo_ids'].split(',') if last_log and last_log['algo_ids'] else []
         
         algos = conn.execute("SELECT * FROM algo_pool WHERE gtype=? ORDER BY streak DESC", (gtype,)).fetchall()
         candidates = [a for a in algos if str(a['algo_id']) not in last_used]
-        
-        # 如果不够 6 个，从剩余池子拉人凑齐
-        if len(candidates) < 6:
-            candidates = algos[:6]
+        if len(candidates) < 6: candidates = algos[:6]
         selected_algos = candidates[:6]
         
     votes = {"大单": 0, "大双": 0, "小单": 0, "小双": 0}
@@ -106,25 +123,21 @@ def calculate_consensus(gtype, history):
         votes[kill_vote] += 1
         algo_records.append({"id": a['algo_id'], "streak": a['streak'], "vote": kill_vote})
         
-    # 统票排序
     sorted_v = sorted(votes.items(), key=lambda x: x[1], reverse=True)
     kill_str = sorted_v[0][0]
     rem = [x[0] for x in sorted_v[1:]]
     main_atk, defend, backup = rem[0], rem[1], rem[2]
 
-    # 构建必含 6 个算法的分析文案
-    algo_text = "、".join([f"算法{a['id']:03d}" for a in algo_records])
-    body = f"本期系统选中 6 套独立算法参赛：{algo_text}。\n\n具体运算明细如下：\n"
+    body = f"本期系统选中 6 套独立算法参赛：\n"
     for i, a in enumerate(algo_records):
-        body += f"{i+1}. 算法{a['id']:03d}(当前连中{a['streak']}期)，独立测算后投出绝杀票：【{a['vote']}】。\n"
+        body += f"{i+1}. 算法{a['id']:03d}(连中{a['streak']}期)，投出绝杀票：【{a['vote']}】。\n"
         
-    outro = f"\n综合多套矩阵交叉验证，票数最高的【{kill_str}】已成为死亡陷阱。主攻方案锁定【{main_atk}】，辅以【{defend}】防守和【{backup}】备选。严格执行！"
+    outro = f"\n综合投票，【{kill_str}】票数最高，成为绝杀陷阱。主攻【{main_atk}】，防守【{defend}】，备选【{backup}】。严格执行！"
     analysis_text = body + outro
     
-    # 字数兜底
     def c_len(t): return len(re.findall(r'[\u4e00-\u9fa5]', t))
-    if c_len(analysis_text) < 150: analysis_text += "\n【系统补充】当前盘面振幅收敛，四象限博弈白热化，请严格遵守共识防守指令。"
-    if c_len(analysis_text) > 500: analysis_text = body + f"\n最终决断：【{kill_str}】必杀，主攻【{main_atk}】。"
+    if c_len(analysis_text) < 150: analysis_text += "\n【风控提示】多空博弈进入深水区，请严格遵循共识防守指令，切勿追热。"
+    if c_len(analysis_text) > 500: analysis_text = body + outro
 
     return {
         "kill": kill_str, "rec": f"{main_atk}(主攻)、{defend}(防守)、{backup}(备选)",
@@ -169,9 +182,10 @@ def fetch_loop():
                             pred = calculate_consensus(gt, history)
                             LIVE_DATA[gt]['pred'] = pred
                             
+                            # 修正 Bug：数据入库，严格按照字段名插入
                             with db() as conn:
                                 conn.execute('''INSERT INTO logs (gtype, period, kill, rec, analysis, algo_ids) VALUES (?,?,?,?,?,?)''', 
-                                             (gt, pred.get("kill", ""), pred.get("rec", ""), pred.get("analysis", ""), pred.get("algo_ids", ""), "wait"))
+                                             (gt, LIVE_DATA[gt]['next'], pred["kill"], pred["rec"], pred["analysis"], pred["algo_ids"]))
                                 conn.commit()
                                 
                         diff = LIVE_DATA[gt]['target_time'] - datetime.utcnow().timestamp()
@@ -297,7 +311,7 @@ def index():
     </div>
 <script>
     let curG = '2', timer = null;
-    const KEY = "algo_consensus_v6";
+    const KEY = "algo_consensus_v7";
     function switchG(g, el) {
         curG = g;
         document.querySelectorAll('.tab').forEach(t => t.classList.remove('on'));
@@ -344,18 +358,25 @@ def index():
             document.getElementById('st-cl').innerText = res.stats.current_lose;
             document.getElementById('st-tw').innerText = res.stats.total_win;
             document.getElementById('st-tl').innerText = res.stats.total_lose;
+            
+            // 恢复到之前的极简清晰样式
             document.getElementById('logs').innerHTML = res.logs.map(l => `
                 <div class="log-item">
-                    <div><div style="color:#b2bec3; font-size:12px;">${l.period}</div><div>绝杀:<span class="lose">${l.kill}</span> | 推荐:${l.rec.replace(/(\(.*?\))/g, '')}</div></div>
+                    <div>
+                        <div style="color:#b2bec3; font-size:12px;">${l.period}</div>
+                        <div>绝杀:<span class="lose">${l.kill}</span> | 推荐:${l.rec.split('、')[0]}</div>
+                    </div>
                     <div style="text-align:right">
-                        <div class="${l.status === 'win' ? 'win' : (l.status === 'lose' ? 'lose' : '')}">${l.status === 'win' ? '🀄 命中' : (l.status === 'lose' ? '💀 被杀' : '⏳ 等待')}</div>
+                        <div class="${l.status === 'win' ? 'win' : (l.status === 'lose' ? 'lose' : '')}">
+                            ${l.status === 'win' ? '🀄 命中' : (l.status === 'lose' ? '💀 被杀' : '⏳ 等待')}
+                        </div>
                         <div style="color:#b2bec3; font-size:12px;">${l.real_result ? `(实开:${l.real_result})` : ''}</div>
                     </div>
                 </div>`).join('') || '<div style="text-align:center; padding:20px;">暂无记录</div>';
         });
     }
     function clearLogs() {
-        if(!confirm("清空所有记录并重置所有算法连中状态？")) return;
+        if(!confirm("清空所有记录并重置算法连中？")) return;
         fetch(`/api/clear/${curG}`, { method: 'POST', headers: {'X-Token': KEY} }).then(() => fetchLogs());
     }
     fetchData(); fetchLogs();
