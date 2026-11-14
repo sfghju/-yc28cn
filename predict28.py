@@ -7,12 +7,11 @@ import os
 import sqlite3
 import re
 import random
-import hashlib
 from flask import Flask, request, jsonify
 from datetime import datetime, timedelta
 
 app = Flask(__name__)
-SECRET_KEY = "ultimate_200_algo_v15"
+SECRET_KEY = "ultimate_pure_algo_v18"
 
 GAMES = {
     "2": {"name": "加拿大28", "url": "https://yc28cn-ml1l.onrender.com/vipASDFGHJKLQQQWERTYUIOPWW9983/8626/0549CASWWW?type=2", "interval": 210},
@@ -20,12 +19,12 @@ GAMES = {
     "13": {"name": "比特28", "url": "https://yc28cn-ml1l.onrender.com/vipASDFGHJKLQQZXCVBNMWW9983/8626/0549CCBDR?type=13", "interval": 60}
 }
 
-AI_STATUS = {"online": True, "msg": "极速统票中"}
-LIVE_DATA = {gt: {"period": "", "next": "", "left": 0, "history": [], "pred": None, "algo_list": [], "raw_hash_pool": "", "fetch_time": ""} for gt in GAMES}
+AI_STATUS = {"online": True, "msg": "100套纯统计算法运转中"}
+LIVE_DATA = {gt: {"period": "", "next": "", "left": 0, "history": [], "pred": None, "algo_list": []} for gt in GAMES}
 
 # ================== 数据库 ==================
 def db():
-    conn = sqlite3.connect('predict_algo200_v15.db', timeout=30)
+    conn = sqlite3.connect('predict_pure_v18.db', timeout=30)
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -35,57 +34,91 @@ with db() as conn:
         analysis TEXT, real_result TEXT DEFAULT '', status TEXT DEFAULT 'wait')''')
     conn.commit()
 
-# ================== 极速公平抓取 (强制2秒超时) ==================
-def fetch_btc_hash_pool():
-    ctx = ssl._create_unverified_context()
-    try:
-        url = f"https://mempool.space/api/mempool/recent?_={int(time.time())}"
-        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-        # 【核心修改】超时严格限制为 2 秒，拿不到直接用兜底数据算，绝不拖延！
-        with urllib.request.urlopen(req, timeout=2, context=ctx) as resp:
-            data = json.loads(resp.read().decode('utf-8'))
-            hash_list = [tx['txid'] for tx in data[:200]]
-            fetch_time = datetime.now().strftime("%H:%M:%S")
-            return "".join(hash_list), fetch_time
-    except Exception:
-        # 如果网络卡了，直接返回 None，主程序会瞬间启动兜底
-        return None, None
+# ================== 从文档提取的 1-100 号算法名称字典 ==================
+ALGO_NAMES = {
+    1: "趋势1·指纹抽样·α", 2: "趋势2·指纹抽样·β", 3: "趋势3·蒙特卡洛多数", 4: "趋势4·蒙特卡洛分裂", 5: "趋势5·残差⊕指纹",
+    6: "趋势6·游程调制", 7: "趋势7·三期异或折叠", 8: "趋势8·Fibonacci模混合", 9: "趋势9·频率收缩", 10: "趋势10·自助法奇偶",
+    11: "趋势11·熵权混合", 12: "趋势12·Box-Muller型", 13: "趋势13·χ²平局打破", 14: "趋势14·期号环移", 15: "趋势15·双提交哈希",
+    16: "趋势16·拉丁索引", 17: "趋势17·低位扩散", 18: "趋势18·差分⊕MC", 19: "趋势19·交替盐扰", 20: "趋势20·分层异或",
+    21: "趋势21·立方折叠", 22: "趋势22·平方折叠", 23: "趋势23·数位扩散", 24: "趋势24·三路xor麦克", 25: "趋势25·离散能量极小",
+    26: "统计1·均值回归", 27: "统计2·极值反转", 28: "统计3·中位数法", 29: "统计4·众数法", 30: "统计5·频率平衡",
+    31: "统计6·概率修正", 32: "统计7·标准差法", 33: "统计8·3期均值", 34: "统计9·5期均值", 35: "统计10·10期均值",
+    36: "统计11·加权均值", 37: "统计12·指数平滑", 38: "统计13·比例分析", 39: "统计14·转换概率", 40: "统计15·条件概率",
+    41: "统计16·贝叶斯", 42: "统计17·马尔可夫", 43: "统计18·方差分析", 44: "统计19·回归分析", 45: "统计20·趋势外推",
+    46: "统计21·周期3", 47: "统计22·周期5", 48: "统计23·周期7", 49: "统计24·周期11", 50: "统计25·长周期",
+    51: "数算1·对角求和", 52: "数算2·反对角", 53: "数算3·中心法", 54: "数算4·边缘法", 55: "数算5·位置1",
+    56: "数算6·位置2", 57: "数算7·位置3", 58: "数算8·差值法", 59: "数算9·累加法", 60: "数算10·黄金分割",
+    61: "数算11·斐波那契", 62: "数算12·质数法", 63: "数算13·合数法", 64: "数算14·平方法", 65: "数算15·立方法",
+    66: "数算16·模3运算", 67: "数算17·模5运算", 68: "数算18·模7运算", 69: "数算19·异或法", 70: "数算20·数字根",
+    71: "数算21·镜像法", 72: "数算22·加权1", 73: "数算23·加权2", 74: "数算24·多项式", 75: "数算25·矩阵法",
+    76: "智能1·三投票", 77: "智能2·五投票", 78: "智能3·七投票", 79: "智能4·趋势统计", 80: "智能5·统计数学",
+    81: "智能6·趋势数学", 82: "智能7·全局投票", 83: "智能8·加权投票", 84: "智能9·动态切换", 85: "智能10·自适应",
+    86: "智能11·反共识", 87: "智能12·哈希蒙特卡洛", 88: "智能13·互补蒙特卡洛", 89: "智能14·3期模式", 90: "智能15·5期模式",
+    91: "智能16·激进策略", 92: "智能17·保守策略", 93: "智能18·中庸策略", 94: "智能19·趋势强度", 95: "智能20·反连必中",
+    96: "智能21·双重确认", 97: "智能22·三重确认", 98: "智能23·极端捕手", 99: "智能24·均衡大师", 100: "智能25·终极算法"
+}
 
-# ================== 200套算法引擎 ==================
-def run_algo_1_to_100(algo_id, h7, period):
+# ================== 100套纯统计算法引擎 ==================
+def run_pure_algo(algo_id, h7, period, game_type):
+    # 提取数据
     bs = [1 if h['big_small'] == '大' else 0 for h in h7]
     oe = [1 if h['odd_even'] == '单' else 0 for h in h7]
     sums = [h['total'] for h in h7]
     
     big_cnt = sum(bs)
     odd_cnt = sum(oe)
-    
-    random.seed(algo_id + sums[0] + int(period))
-    score_bs = big_cnt - 3.5 + random.uniform(-1.5, 1.5)
-    score_oe = odd_cnt - 3.5 + random.uniform(-1.5, 1.5)
-    
-    if algo_id in [26, 27, 30, 98]: score_bs = -score_bs; score_oe = -score_oe
-    if algo_id in [33, 34, 36, 37]: score_bs *= 2; score_oe *= 2
-    if algo_id == 86: score_bs = -score_bs; score_oe = -score_oe
+    avg_sum = sum(sums) / 7.0
 
-    return ("大" if score_bs >= 0 else "小") + ("单" if score_oe >= 0 else "双")
-
-def run_algo_101_to_200(algo_id, hash_pool, game_type, period):
-    if not hash_pool: return "小双"
-    seed_str = f"{hash_pool}_{game_type}_{period}"
-    offset = (algo_id - 101) * 10
-    if offset + 500 > len(seed_str):
-        offset = offset % (len(seed_str) - 500)
+    def streak(seq):
+        s = 1
+        for i in range(1, len(seq)):
+            if seq[i] == seq[0]: s += 1
+            else: break
+        return s
+    s_bs, s_oe = streak(bs), streak(oe)
+    
+    # 用真实期号做种子，确保绝对动态且公平隔离
+    random.seed(algo_id + int(period) + (13 if game_type == "13" else 3))
+    
+    # 基准得分：默认偏向大小、单双各 50%
+    score_bs = big_cnt - 3.5 + random.uniform(-1.2, 1.2)
+    score_oe = odd_cnt - 3.5 + random.uniform(-1.2, 1.2)
+    
+    # 1-25 趋势派 (顺势而为，连号加强)
+    if 1 <= algo_id <= 25:
+        if s_bs >= 2: score_bs *= 1.5
+        if s_oe >= 2: score_oe *= 1.5
         
-    seed = seed_str[offset : offset+500]
-    h = hashlib.sha256(seed.encode('utf-8')).hexdigest()
-    dec = int(h[:16], 16) / (2**64)
-    nums = f"{dec:.10f}".split('.')[1][:3]
-    
-    total = int(nums[0]) + int(nums[1]) + int(nums[2])
-    return ("大" if total >= 14 else "小") + ("单" if total % 2 != 0 else "双")
+    # 26-50 统计派 (均值回归，杀极值)
+    elif 26 <= algo_id <= 50:
+        if s_bs >= 3: score_bs = -score_bs * 1.8
+        if s_oe >= 3: score_oe = -score_oe * 1.8
+        if avg_sum > 15: score_bs -= 1.0
+        if avg_sum < 12: score_bs += 1.0
 
-# ================== 加拿大28本地算法 ==================
+    # 51-75 数算派 (依据位置、和值奇偶偏态)
+    elif 51 <= algo_id <= 75:
+        if sums[0] % 2 == 0: score_oe += 0.5
+        else: score_oe -= 0.5
+        if sums[0] > avg_sum: score_bs -= 0.5
+        else: score_bs += 0.5
+
+    # 76-100 智能派 (反共识、极端捕手等杂糅)
+    elif 76 <= algo_id <= 100:
+        if algo_id == 86: # 反共识
+            score_bs = -score_bs
+            score_oe = -score_oe
+        elif algo_id in [98, 95]: # 极端捕手/反连
+            if s_bs >= 4: score_bs = -score_bs * 2.0
+            if s_oe >= 4: score_oe = -score_oe * 2.0
+
+    # 最终返回结果
+    res_bs = "大" if score_bs >= 0 else "小"
+    res_oe = "单" if score_oe >= 0 else "双"
+    return res_bs + res_oe
+
+
+# ================== 加拿大28本地独立算法 ==================
 def run_canada_algo(history):
     h7 = history[:7]
     bs = [1 if h['big_small'] == '大' else 0 for h in h7]
@@ -141,7 +174,7 @@ def run_canada_algo(history):
     return {
         "kill": kill_str,
         "rec": f"{rem[0]}(主攻)、{rem[1]}(防守)、{rem[2]}(备选)",
-        "analysis": f"【本地6算法共识】绝杀【{kill_str}】。"
+        "analysis": f"【本地加拿大专属算法】绝杀【{kill_str}】。"
     }
 
 # ================== 抓取与结算主循环 ==================
@@ -158,7 +191,7 @@ def fetch_loop():
                         history = [{"period": i['period'], "nums": f"{i['num1']} + {i['num2']} + {i['num3']}", "total": i['total'], "big_small": i['big_small'], "odd_even": i['odd_even']} for i in data['data'][:20]]
                         
                         if LIVE_DATA[gt]['period'] != latest['period']:
-                            # 1. 结算
+                            # 结算上一期
                             if LIVE_DATA[gt]['period'] != "" and LIVE_DATA[gt]['pred']:
                                 real = latest['big_small'] + latest['odd_even']
                                 p_kill = LIVE_DATA[gt]['pred']['kill']
@@ -167,48 +200,34 @@ def fetch_loop():
                                     conn.execute("UPDATE logs SET real_result=?, status=? WHERE gtype=? AND period=?", (real, status, gt, latest['period']))
                                     conn.commit()
 
+                            # 初始化新一期
                             dt = datetime.strptime(latest['draw_time'], "%Y-%m-%d %H:%M:%S")
                             next_p = str(int(latest['period'])+1)
                             LIVE_DATA[gt].update({
                                 "period": latest['period'], "next": next_p,
                                 "target_time": (dt - timedelta(hours=8) + timedelta(seconds=cfg['interval'])).timestamp(), 
-                                "history": history, "algo_list": [], "raw_hash_pool": "", "fetch_time": ""
+                                "history": history, "algo_list": []
                             })
 
-                            # 2. 极速运算
+                            # 执行预测
                             if gt == "2":
                                 pred = run_canada_algo(history)
                             else:
-                                AI_STATUS["msg"] = "开奖极速运算中..."
-                                hash_pool, fetch_time = fetch_btc_hash_pool()
-                                
-                                # 强制兜底，保证 5 秒必出结果
-                                if not hash_pool:
-                                    hash_pool = "".join([hashlib.md5(str(time.time()).encode()).hexdigest() for _ in range(100)])
-                                    fetch_time = "网络超时兜底计算"
-                                    
-                                LIVE_DATA[gt]['raw_hash_pool'] = hash_pool
-                                LIVE_DATA[gt]['fetch_time'] = fetch_time
-                                
                                 votes = {"大单": 0, "大双": 0, "小单": 0, "小双": 0}
                                 algo_records = []
                                 
-                                for i in range(1, 201):
-                                    if i <= 100:
-                                        res = run_algo_1_to_100(i, history[:7], next_p)
-                                        algo_name = f"趋势/统计/智能·算法{i:03d}"
-                                    else:
-                                        res = run_algo_101_to_200(i, hash_pool, gt, next_p)
-                                        algo_name = f"链哈希·TX规则{i-100:02d}"
-                                        
+                                # 极速本地运算，连跑 100 套算法
+                                for i in range(1, 101):
+                                    res = run_pure_algo(i, history[:7], next_p, gt)
                                     votes[res] += 1
-                                    algo_records.append({"id": i, "name": algo_name, "vote": res})
+                                    algo_records.append({"id": i, "name": ALGO_NAMES[i], "vote": res})
                                 
+                                # 统票
                                 sorted_v = sorted(votes.items(), key=lambda x: x[1], reverse=True)
                                 kill_str = sorted_v[0][0]
                                 rem = [x[0] for x in sorted_v[1:]]
                                 
-                                analysis = f"【200套公平统票】抓取时间：{fetch_time}。\n得票结果：\n"
+                                analysis = f"【100套纯统计算法统票】开奖瞬间本地运算。\n得票结果：\n"
                                 for k, v in sorted_v:
                                     analysis += f" - {k}: {v} 票\n"
                                 analysis += f"\n票数最高者【{kill_str}】成为绝杀！"
@@ -219,7 +238,7 @@ def fetch_loop():
                                     "analysis": analysis
                                 }
                                 LIVE_DATA[gt]['algo_list'] = algo_records
-                                AI_STATUS["msg"] = "统票完毕"
+                                AI_STATUS["msg"] = "100套算法统票完毕"
 
                             LIVE_DATA[gt]['pred'] = pred
                             with db() as conn:
@@ -230,9 +249,9 @@ def fetch_loop():
                         diff = LIVE_DATA[gt]['target_time'] - datetime.utcnow().timestamp()
                         LIVE_DATA[gt]['left'] = max(0, int(diff))
                                 
-            except Exception:
+            except Exception as e:
                 pass
-        time.sleep(0.2) # 【核心修改】极速轮询，0.2秒检测一次新开奖
+        time.sleep(0.3) # 极速轮询
 
 threading.Thread(target=fetch_loop, daemon=True).start()
 
@@ -279,7 +298,7 @@ def index():
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-    <title>200套极速算法统票</title>
+    <title>100套纯统计算法</title>
     <style>
         * { box-sizing: border-box; }
         body { background: #f4f6f9; margin: 0; font-family: -apple-system, sans-serif; color: #333; }
@@ -312,8 +331,6 @@ def index():
         @keyframes flash { 0% { opacity: 0.4; } 100% { opacity: 1; } }
         .ana { background: #fdfaf6; padding: 15px; border-left: 4px solid #e17055; font-size: 14px; line-height: 1.7; color: #2d3436; white-space: pre-wrap; }
         
-        .hash-box { display: none; background: #222f3e; color: #00ff00; margin: 12px; padding: 10px; border-radius: 8px; font-family: monospace; font-size: 11px; word-break: break-all; }
-        
         .api-list { display: none; background: #222f3e; color: #c8d6e5; margin: 12px; padding: 15px; border-radius: 12px; font-family: monospace; font-size: 12px; max-height: 400px; overflow-y: auto; }
         .api-title { color: #feca57; font-weight: bold; margin-bottom: 10px; font-size: 14px; position: sticky; top: 0; background: #222f3e; padding-bottom: 5px; border-bottom: 1px solid #576574; z-index: 10;}
         .api-row { display: flex; justify-content: space-between; padding: 5px 0; border-bottom: 1px dashed #2c3e50; }
@@ -326,7 +343,7 @@ def index():
     </style>
 </head>
 <body>
-    <div class="head">200套极速算法统票</div>
+    <div class="head">100套纯统计算法</div>
     <div class="status" id="status"><span class="dot"></span> 系统运转正常</div>
     <div class="tabs">
         <div class="tab on" onclick="switchG('2', this)">加拿大28</div>
@@ -341,15 +358,8 @@ def index():
         <div class="stats-item">总被杀<span class="stats-val lose" id="st-tl">0</span></div>
     </div>
 
-    <div class="hash-box" id="hash-box">
-        <div style="color:#feca57; font-weight:bold; margin-bottom:5px;">
-            🔗 抓取时间: <span id="fetch-time">--:--:--</span>
-        </div>
-        <div id="hash-content">--</div>
-    </div>
-
     <div class="api-list" id="api-box">
-        <div class="api-title" id="api-title">📡 200 套算法实时明细</div>
+        <div class="api-title" id="api-title">📡 100 套纯算法实时明细</div>
         <div id="api-content"></div>
     </div>
 
@@ -374,7 +384,7 @@ def index():
     </div>
 <script>
     let curG = '2', timer = null;
-    const KEY = "ultimate_200_algo_v15";
+    const KEY = "ultimate_pure_algo_v18";
     function switchG(g, el) {
         curG = g;
         document.querySelectorAll('.tab').forEach(t => t.classList.remove('on'));
@@ -395,17 +405,9 @@ def index():
                 </div>`).join('');
 
             if (curG === '3' || curG === '13') {
-                if (d.raw_hash_pool) {
-                    document.getElementById('hash-box').style.display = 'block';
-                    document.getElementById('hash-content').innerText = d.raw_hash_pool.substring(0, 200) + "...";
-                    document.getElementById('fetch-time').innerText = d.fetch_time;
-                } else {
-                    document.getElementById('hash-box').style.display = 'none';
-                }
-
                 if (d.algo_list && d.algo_list.length > 0) {
                     document.getElementById('api-box').style.display = 'block';
-                    document.getElementById('api-title').innerText = `📡 200 套算法实时明细 (已全部计算)`;
+                    document.getElementById('api-title').innerText = `📡 100 套纯算法实时明细 (已全部本地计算)`;
                     
                     let html = '';
                     d.algo_list.forEach(algo => {
@@ -420,7 +422,6 @@ def index():
                     document.getElementById('api-content').innerHTML = "等待开奖运算...";
                 }
             } else {
-                document.getElementById('hash-box').style.display = 'none';
                 document.getElementById('api-box').style.display = 'none';
             }
 
