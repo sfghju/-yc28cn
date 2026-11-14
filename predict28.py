@@ -1,223 +1,162 @@
-import urllib.request
-import ssl
-import json
-import time
-import threading
-import os
-import re
-import sqlite3
-import hashlib
-import statistics
-import random
-from flask import Flask, request, jsonify, render_template_string
-from datetime import datetime, timedelta
+进口urllib.request
+进口SSL
+进口JSON
+进口时间
+进口穿线
+进口操作系统
+进口再
+进口sqlite3
+进口Hashlib
+进口随机
+从……起烧瓶进口烧瓶，请求，jsonify，render_template_string
+从……起datetime进口datetime，timedelta
 
-app = Flask(__name__)
+app=烧瓶(__name__)
 
-# ================== 【5层防御盾配置】 ==================
-SIGN_SECRET = "captain_predict_v3_secure_2026"
-TIME_WINDOW = 2.0 
+#==================[核心配置]==================
+sign_SECRET="captain_ai_predict_v5_secure"
+time_WINDOW=2.0 
+DEEPSEEK_API_KEY="sk-43c18b39aeb346fc841937b30cade25b"
+DEEPSEEK_API_URL="https://api.deepseek.com/chat/completions"
 
-GAMES = {
-    "2": {"name": "加拿大28", "url": "https://yc28cn-ml1l.onrender.com/vipASDFGHJKLQQQWERTYUIOPWW9983/8626/0549CASWWW?type=2", "interval": 210},
-    "3": {"name": "分分28", "url": "https://yc28cn-ml1l.onrender.com/vipASDFGHJKLQQASDFGHJKLWW9986/8626/0549CFKFGH?type=3", "interval": 60},
-    "13": {"name": "比特28", "url": "https://yc28cn-ml1l.onrender.com/vipASDFGHJKLQQZXCVBNMWW9983/8626/0549CCBDR?type=13", "interval": 60}
+游戏={
+    "2": {"名称": "加拿大28", "URL": "https://yc28cn-ml1l.onrender.com/vipASDFGHJKLQQQWERTYUIOPWW9983/8626/0549CASWWW?type=2", "间隔": 210},
+    "3": {"名称": "分分28", "URL": "https://yc28cn-ml1l.onrender.com/vipASDFGHJKLQQASDFGHJKLWW9986/8626/0549CFKFGH?type=3", "间隔": 60},
+    "13": {"名称": "比特28", "URL": "https://yc28cn-ml1l.onrender.com/vipASDFGHJKLQQZXCVBNMWW9983/8626/0549CCBDR?type=13", "间隔": 60}
 }
 
-# 全局实时数据缓存
-LIVE_DATA = {
-    "2": {"period": "", "next_period": "", "left_time": 0, "history": [], "current_prediction": None},
-    "3": {"period": "", "next_period": "", "left_time": 0, "history": [], "current_prediction": None},
-    "13": {"period": "", "next_period": "", "left_time": 0, "history": [], "current_prediction": None}
+# 全局实时数据与状态缓存
+system_STATUS={
+    "ai_connected": 假的,
+    "last_ping": "未连接",
+    "型号名称": "DeepSeek-V3(聊天)"
 }
 
-# ================== 数据库 ==================
-def get_db():
-    conn = sqlite3.connect('prediction.db', timeout=30)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL;")
-    return conn
+live_DATA={
+    "2": {"句号": "", "next_period": "", "left_time": 0, "历史记录": [], "current_prediction": 没有一个, "ai_status": "等待同步"},
+    "3": {"句号": "", "next_period": "", "left_time": 0, "历史记录": [], "current_prediction": 没有一个, "ai_status": "等待同步"},
+    "13": {"句号": "", "next_period": "", "left_time": 0, "历史记录": [], "current_prediction": 没有一个, "ai_status": "等待同步"}
+}
 
-def init_db():
-    with get_db() as conn:
-        conn.execute('''CREATE TABLE IF NOT EXISTS predictions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT, game_type TEXT, period TEXT,
-            kill_item TEXT, recommend_items TEXT, analysis TEXT, actual_result TEXT DEFAULT '',
-            result TEXT DEFAULT 'pending', created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+#==================数据库==================
+定义 get_db():
+Conn=sqlite3。连接('prediction.db'，timeout=30)
+Conn.row_factory=sqlite3。行
+Conn.执行("PRAGMA journal_mode=WAL；")
+    返回Conn
+
+定义 init_db():
+    和……一起 get_db() 作为连接器：
+Conn.执行("'如果不存在预测，则创建表(
+ID整数主键自动增量，游戏类型文本，句点文本，
+kill_item TEXT，recommend_items TEXT，analysis TEXT，actual_result TEXT DEFAULT"，
+结果文本默认“挂起”，创建时间戳时默认当前时间戳
         )''')
-        conn.commit()
+Conn.犯罪()
 
 init_db()
 
-# ================== 70套核心独立算法命名库 ==================
-ALGO_MATRIX = [
-    "斐波那契极值回撤", "葛兰碧均线共振", "布林带挤压突破", "抛物线SAR反转", "唐奇安通道阻力",
-    "动量指标MTM背离", "相对强弱RSI超载", "随机指标KDJ钝化", "乖离率BIAS回归", "顺势指标CCI追踪",
-    "马尔可夫转移矩阵", "泊松分布衰减率", "贝叶斯后验概率", "卡方分布拟合度", "蒙特卡洛树推演",
-    "高斯正态极值点", "偏度与峰度异动", "协方差矩阵特征", "曼-惠特尼U检验", "威尔科克森符号",
-    "庄家反向诱多盘", "散户跟风陷阱识别", "资金沉淀托底", "惯性动量跟随", "极端逼空洗盘",
-    "多空纳什均衡点", "主力底牌推演", "恐慌贪婪分歧", "量价背离暗盘", "联动砸盘概率",
-    "江恩时间共振", "艾略特波浪三浪", "斐波那契时间窗", "干支历法明暗", "星相天体共振",
-    "季节性周期回归", "高频变盘雷达", "黄金分割时间", "快慢周期嵌套", "滑动窗口动量",
-    "历史波动率衰减", "真实波幅ATR通道", "动态方差ANOVA", "协整均值回归", "跳跃扩散模型",
-    "波动率微笑曲线", "极值理论尾部", "赫斯特指数相关", "分形维数混沌", "李雅普诺夫异动",
-    "羊群效应风控", "锚定效应预期", "损失厌恶偏差", "赌徒谬误利用", "冷热手效应",
-    "心理支撑阻力", "过度反应纠错", "认知失调盘面", "代表性偏差", "禀赋效应",
-    "遗传算法变异", "随机森林投票", "支持向量机分类", "LSTM神经网络", "GRU门控循环",
-    "卷积网络特征", "孤立森林异常", "XGBoost提升", "隐马尔可夫模型", "深度Q网络强化"
-]
+#================== AI接口探测==================
+定义 Ping_deepseek():
+    """探测DeepSeek API连通性"""
+标题={"授权": F"轴承{DEEPSEEK_API_KEY}", "内容类型": "应用程序/json"}
+数据={
+        "型号": "deepseek-chat",
+        "消息": [{"角色": "用户", "内容": "ping"}],
+        "max_token": 1
+    }
+    尝试:
+req=urllib。请求.请求(DEEPSEEK_API_URL，数据=json。转储(数据).编码('UTF-8')，headers=headers)
+CTX=ssl._create_unverified_context()
+        和……一起urllib。请求.urlopen(req，timeout=10，context=ctx) 作为RESP：
+            如果RESP.状态==200:
+system_STATUS["ai_connected"]=正确
+system_STATUS["last_ping"]=日期时间。现在().strftime("%H：%M：%S")
+                返回 正确
+    除……之外例外：
+system_STATUS["ai_connected"]=假的
+system_STATUS["last_ping"]=F"连接失败{datetime。现在().strftime('%H：%M：%S')}"
+        返回 假的
 
-# ================== 核心预测引擎 (硬核计算) ==================
-def generate_prediction(game_type, history, next_period):
-    if len(history) < 7: return None
+#================== AI深度推演核心==================
+定义 询问以预测(游戏名称、历史数据、下期、上期预告):
+    """调用DeepSeek进行全权接管预测"""
+    # 构造历史数据
+history_str=""
+    为I，h在……内 列举(history_data[:7]):
+history_str+=F"第{7-I}期:{h['Nums']}={h['总计']} ({h['big_small']}{h['奇数(_even)']})\n"
     
-    last7 = history[:7]
-    combos = ["大单", "大双", "小单", "小双"]
-    
-    # 1. 提取特征向量
-    bs_seq = [h['big_small'] for h in last7]
-    oe_seq = [h['odd_even'] for h in last7]
-    
-    bs_bin = [1 if x == '大' else 0 for x in bs_seq]
-    oe_bin = [1 if x == '单' else 0 for x in oe_seq]
-    
-    # 2. 计算盘面状态 (极值 / 稳定 / 混沌)
-    bs_sum = sum(bs_bin)
-    oe_sum = sum(oe_bin)
-    
-    # 计算连续出现次数
-    def get_streak(seq):
-        streak = 1
-        for i in range(1, len(seq)):
-            if seq[i] == seq[0]: streak += 1
-            else: break
-        return streak
+    # 构造复盘逻辑
+过去结果=""
+    如果last_prediction和last_prediction['结果']=='输':
+过去结果=f"【紧急复盘】：上期预测大败，我们杀掉了[{last_prediction['终止项目(_item)']}]，但实际开出了[{last_prediction['actual_result']}]。 说明盘口诱多或长龙。 本次策略必须极度谨慎，或者立刻反杀/跟风！"
+    Eliflast_prediction和last_prediction['结果']=='赢':
+过去结果=f"【状态良好】：上期成功猎杀[{last_prediction['终止项目(_item)']}]。 请继续保持这种敏锐度。"
 
-    bs_streak = get_streak(bs_seq)
-    oe_streak = get_streak(oe_seq)
+提示=f"""
+你现在是全球顶级的博彩精算师、概率论大师和反博弈AI。 当前游戏盘口：{游戏名称}。
+    请根据下面最近 7 期的开奖结果，深度预测第 {next_period} 期的走势。
+
+    【近期开奖矩阵】
+    {history_str}
     
-    # 3. 检查上期结果 (复盘与防连杀)
-    with get_db() as conn:
-        last_preds = conn.execute("SELECT * FROM predictions WHERE game_type=? ORDER BY id DESC LIMIT 3", (game_type,)).fetchall()
+    【上期战况】
+    {past_result}
     
-    lose_streak = 0
-    for p in last_preds:
-        if p['result'] == 'lose': lose_streak += 1
-        else: break
-
-    # 4. 判定策略模式
-    mode = "normal"
-    kill_targets = []
+    【你的核心任务】
+    1. 从【大单、大双、小单、小双】中，精准推导并绝杀掉 1 个概率最低、最危险的选项。
+    2. 推荐剩下的 3 个选项作为安全防守区。
+    3. 生成一段 80 到 500 字之间的深度硬核分析（必须基于真实走势数据，不得使用废话模板，要求逻辑严密，像真正的人类精算师在分析盘口）。
     
-    # 【强制反杀机制】连续错2次以上，或者出现极值(>=5连)，强制变盘反向
-    if lose_streak >= 2 or bs_streak >= 5 or oe_streak >= 5:
-        mode = "reverse"
-        # 反向斩杀：杀热号属性
-        target_bs = '小' if bs_seq[0] == '大' else '大'
-        target_oe = '双' if oe_seq[0] == '单' else '单'
-        kill_targets.append(target_bs + target_oe)
-        # 如果单边极值，大小和单双都要反杀
-        if bs_streak >= 5 and oe_streak >= 5:
-            kill_targets = ["大单", "大双", "小单", "小双"] # 极端情况全杀(极少)
-        elif bs_streak >= 5:
-            kill_targets = [c for c in combos if c[0] == bs_seq[0]]
-        elif oe_streak >= 5:
-            kill_targets = [c for c in combos if c[1] == oe_seq[0]]
-    
-    # 【稳定跟随机制】连出3-4期，未达极值，顺势而为
-    elif bs_streak == 3 or bs_streak == 4 or oe_streak == 3 or oe_streak == 4:
-        mode = "follow"
-        # 顺势斩杀反向
-        target_bs = '小' if bs_seq[0] == '大' else '大'
-        target_oe = '双' if oe_seq[0] == '单' else '单'
-        kill_targets.append(target_bs + target_oe)
+    请直接输出纯JSON格式，不要使用 ```json 代码块，不要任何多余字符：
+    {{
+        "kill_item": "这里填杀掉的1项",
+        "recommend_items": "另外3项用顿号隔开",
+        "analysis": "【AI深度洞察】近期盘面呈现...（这里写分析内容）"
+    }}
+    """
 
-    # 5. 执行 70套 算法交叉验证打分
-    algo_scores = {c: 0 for c in combos}
-    
-    for c in combos:
-        c_bs_bin = 1 if c[0] == '大' else 0
-        c_oe_bin = 1 if c[1] == '单' else 0
-        
-        # 算法 1-10 (趋势均线类)
-        algo_scores[c] += abs(c_bs_bin - bs_bin[0]) * 15
-        algo_scores[c] += abs(c_oe_bin - oe_bin[0]) * 15
-        
-        # 算法 11-20 (概率分布类)
-        if bs_sum >= 5 and c_bs_bin == 1: algo_scores[c] += 40
-        if bs_sum <= 2 and c_bs_bin == 0: algo_scores[c] += 40
-        if oe_sum >= 5 and c_oe_bin == 1: algo_scores[c] += 40
-        if oe_sum <= 2 and c_oe_bin == 0: algo_scores[c] += 40
-        
-        # 算法 21-30 (博弈论-诱盘)
-        # 如果在反杀模式，给当前热号加分(加分最高者被杀)
-        if mode == "reverse":
-            if c_bs_bin == bs_bin[0]: algo_scores[c] += 50
-            if c_oe_bin == oe_bin[0]: algo_scores[c] += 50
-        elif mode == "follow":
-            # 跟随模式，给反向号加分(杀反向)
-            if c_bs_bin != bs_bin[0]: algo_scores[c] += 30
-            if c_oe_bin != oe_bin[0]: algo_scores[c] += 30
+    headers = {
+        "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
+        "Content-Type": "application/json"
+    }
+    data = {
+        "model": "deepseek-chat",
+        "messages": [
+            {"role": "system", "content": "你是一个直接输出 JSON 的预测系统，绝对不要带任何多余的废话和 markdown 标记。"},
+            {"role": "user", "content": prompt}
+        ],
+        "temperature": 0.8,
+        "max_tokens": 800
+    }
 
-        # 算法 41-50 (方差与波动)
-        try:
-            if statistics.variance(bs_bin) < 0.1 and c_bs_bin == bs_bin[0]: algo_scores[c] += 20
-            if statistics.variance(oe_bin) < 0.1 and c_oe_bin == oe_bin[0]: algo_scores[c] += 20
-        except: pass
-        
-        # 算法 61-70 (混沌因子)
-        seed_val = int(next_period[-3:]) if len(next_period) > 3 else 123
-        algo_scores[c] += (seed_val * (c_bs_bin + 1) * (c_oe_bin + 1)) % 10
+    try:
+        req = urllib.request.Request(DEEPSEEK_API_URL, data=json.dumps(data).encode('utf-8'), headers=headers)
+        ctx = ssl._create_unverified_context()
+        with urllib.request.urlopen(req, timeout=30, context=ctx) as resp:
+            res_data = json.loads(resp.read().decode('utf-8'))
+            content = res_data['choices'][0]['message']['content'].strip()
+            
+            # 清理可能的 Markdown 杂项
+            content = re.sub(r'```json', '', content)
+            content = re.sub(r'```', '', content).strip()
+            
+            result_json = json.loads(content)
+            SYSTEM_STATUS["ai_connected"] = True
+            return {
+                "period": next_period,
+                "kill_item": result_json['kill_item'],
+                "recommend_items": result_json['recommend_items'],
+                "analysis": result_json['analysis']
+            }
+    except Exception as e:
+        print(f"❌ {game_name} AI 接口异常: {e}")
+        SYSTEM_STATUS["ai_connected"] = False
+        return None
 
-    # 确定最终斩杀对象
-    if kill_targets:
-        # 如果前置逻辑已经锁定杀号
-        kill_item = kill_targets[0]
-    else:
-        # 纯算法博弈
-        max_score = max(algo_scores.values())
-        kill_candidates = [k for k, v in algo_scores.items() if v == max_score]
-        kill_item = kill_candidates[0]
-
-    recommend_items = [c for c in combos if c != kill_item]
-    rec_str = "、".join(recommend_items)
-
-    # 6. 生成深度高维复盘分析
-    recent_bs_str = "、".join(bs_seq)
-    recent_oe_str = "、".join(oe_seq)
-    
-    # 随机抽取3个算法做展示
-    active_algos = random.sample(ALGO_MATRIX, 3)
-    algo_str = "、".join(active_algos)
-
-    if mode == "reverse":
-        analysis = (
-            f"【极值变盘与强制纠偏】监测到盘面出现异动，大盘近7期开出：大小【{recent_bs_str}】，单双【{recent_oe_str}】。"
-            f"系统判定当前已触发连败保护或极值熔断机制！绝不可继续盲目跟风。通过调用【{algo_str}】等70套底层算法交叉测算，"
-            f"【{kill_item}】面临极端的诱多风险，随时可能断崖式暴跌。本期策略：坚决逆向斩杀【{kill_item}】，"
-            f"资金强制转移至【{rec_str}】。用反思维度打乱庄家节奏。"
-        )
-    elif mode == "follow":
-        analysis = (
-            f"【趋势护航与顺势跟随】盘面数据流显示，近期走势【{recent_bs_str}】与【{recent_oe_str}】呈现极强的单边惯性。"
-            f"由【{algo_str}】构成的智能矩阵推演发现，当前远未达到均值回归的临界点。此时逆势对抗无异于螳臂当车。"
-            f"系统执行【稳定跟随体系】，顺势绞杀反向诱饵【{kill_item}】，将筹码重仓布局于【{rec_str}】。"
-            f"只要多头趋势不断，即可依托胜率吃透这波红利。"
-        )
-    else:
-        analysis = (
-            f"【混沌博弈与独立解析】当前盘面处于高频震荡期，近7期形态为【{recent_bs_str}】。预测引擎深度调用了"
-            f"【{algo_str}】等70套独立算法，将大小与单双拆分，进行卡方检验与方差极值剥离。最终结论显示，"
-            f"【{kill_item}】的概率聚集度已极度透支，属于典型的低胜率高危区。本期实施精准防御斩首，绝杀【{kill_item}】，"
-            f"分散配置【{rec_str}】构建安全壁垒。"
-        )
-
-    return {"period": next_period, "kill_item": kill_item, "recommend_items": rec_str, "analysis": analysis}
-
-# ================== 数据抓取与结算 ==================
+# ================== 抓取与结算 ==================
 def settle_predictions(game_type, period, result_attr):
     with get_db() as conn:
-        # 将实开结果记录下来，并更新中奖状态
         preds = conn.execute("SELECT * FROM predictions WHERE game_type=? AND period=? AND result='pending'", (game_type, period)).fetchall()
         for p in preds:
             status = 'win' if result_attr != p['kill_item'] else 'lose'
@@ -226,6 +165,9 @@ def settle_predictions(game_type, period, result_attr):
 
 def fetch_loop():
     ctx = ssl._create_unverified_context()
+    # 启动时探测一次接口
+    ping_deepseek()
+    
     while True:
         for g_type, cfg in GAMES.items():
             try:
@@ -252,7 +194,16 @@ def fetch_loop():
                             draw_dt = datetime.strptime(latest['draw_time'], "%Y-%m-%d %H:%M:%S")
                             target_utc = draw_dt - timedelta(hours=8) + timedelta(seconds=cfg['interval'])
                             
-                            pred = generate_prediction(g_type, history, str(int(latest['period']) + 1))
+                            with get_db() as conn:
+                                last_pred = conn.execute("SELECT * FROM predictions WHERE game_type=? ORDER BY id DESC LIMIT 1", (g_type,)).fetchone()
+                            
+                            # 标记状态为正在请求 AI
+                            LIVE_DATA[g_type]['ai_status'] = "AI 演算中"
+                            
+                            # 异步请求 AI 预测
+                            print(f"🚀 正在请求 {cfg['name']} 的 AI 深度推演...")
+                            pred = ask_ai_to_predict(cfg['name'], history, str(int(latest['period']) + 1), last_pred)
+                            
                             if pred:
                                 with get_db() as conn:
                                     conn.execute('''INSERT INTO predictions (game_type, period, kill_item, recommend_items, analysis) 
@@ -260,7 +211,12 @@ def fetch_loop():
                                                  (g_type, pred['period'], pred['kill_item'], pred['recommend_items'], pred['analysis']))
                                     conn.commit()
                                 LIVE_DATA[g_type]['current_prediction'] = pred
-                            
+                                LIVE_DATA[g_type]['ai_status'] = "演算完成"
+                                print(f"✅ {cfg['name']} AI预测完成：绝杀{pred['kill_item']}")
+                            else:
+                                LIVE_DATA[g_type]['ai_status'] = "AI 接口异常"
+                                print(f"❌ {cfg['name']} 预测失败。")
+
                             LIVE_DATA[g_type]['period'] = latest['period']
                             LIVE_DATA[g_type]['next_period'] = str(int(latest['period']) + 1)
                             LIVE_DATA[g_type]['target_utc'] = target_utc.timestamp()
@@ -274,7 +230,7 @@ def fetch_loop():
 
 threading.Thread(target=fetch_loop, daemon=True).start()
 
-# ================== API 防护 ==================
+# ================== API 防护与状态接口 ==================
 def verify_request():
     referer = request.headers.get('Referer', '')
     user_agent = request.headers.get('User-Agent', '')
@@ -311,18 +267,28 @@ def hacker_trap():
     <body><div class="msg">人机你这个 fw<br>学好计算机技术才有资格来套取我的 API 接口😂😂😂😂😂😂</div></body></html>
     """
 
-# ================== 路由 ==================
 @app.route('/')
 def index():
     return render_template_string(HTML_PAGE)
 
-@app.route('/api/v9/sys/core_sync/live/<g_type>')
+@app.route('/api/v10/sys/ai_sync/status')
+def api_status():
+    if not verify_request():
+        return hacker_trap(), 200, {'Content-Type': 'text/html; charset=utf-8'}
+    # 返回全局状态
+    return jsonify({
+        "connected": SYSTEM_STATUS["ai_connected"],
+        "last_ping": SYSTEM_STATUS["last_ping"],
+        "model": SYSTEM_STATUS["model_name"]
+    })
+
+@app.route('/api/v10/sys/ai_sync/live/<g_type>')
 def api_live(g_type):
     if not verify_request():
         return hacker_trap(), 200, {'Content-Type': 'text/html; charset=utf-8'}
     return jsonify(LIVE_DATA.get(g_type, {}))
 
-@app.route('/api/v9/sys/core_sync/records/<g_type>')
+@app.route('/api/v10/sys/ai_sync/records/<g_type>')
 def api_predictions(g_type):
     if not verify_request():
         return hacker_trap(), 200, {'Content-Type': 'text/html; charset=utf-8'}
@@ -330,7 +296,7 @@ def api_predictions(g_type):
         preds = conn.execute("SELECT * FROM predictions WHERE game_type=? ORDER BY id DESC LIMIT 30", (g_type,)).fetchall()
     return jsonify([dict(p) for p in preds])
 
-@app.route('/api/v9/sys/core_sync/delete/<g_type>', methods=['POST'])
+@app.route('/api/v10/sys/ai_sync/delete/<g_type>', methods=['POST'])
 def delete_preds(g_type):
     if not verify_request():
         return hacker_trap(), 200, {'Content-Type': 'text/html; charset=utf-8'}
@@ -339,21 +305,28 @@ def delete_preds(g_type):
         conn.commit()
     return jsonify({"success": True})
 
-# ================== 纯白前端 UI ==================
+# ================== 纯白 AI 控制台前端 ==================
 HTML_PAGE = """
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-    <title>绝密预测终端</title>
+    <title>AI 深度预测终端</title>
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; }
         body { background: #f5f7fa; color: #333; min-height: 100vh; padding-bottom: 30px; }
-        .header { text-align: center; padding: 20px 15px; background: #fff; box-shadow: 0 2px 10px rgba(0,0,0,0.05); margin-bottom: 15px; }
-        .title { font-size: 22px; font-weight: bold; color: #1a1a1a; letter-spacing: 1px; }
-        .subtitle { font-size: 13px; color: #888; margin-top: 5px; }
         
+        /* 顶部 AI 状态面板 */
+        .ai-header { background: #fff; padding: 15px; border-bottom: 1px solid #e0e0e0; display: flex; justify-content: space-between; align-items: center; box-shadow: 0 2px 10px rgba(0,0,0,0.03); margin-bottom: 15px;}
+        .ai-info { display: flex; flex-direction: column; gap: 4px; }
+        .ai-model { font-size: 16px; font-weight: bold; color: #1a1a1a; display: flex; align-items: center; gap: 8px;}
+        .ai-model span { font-size: 10px; background: #e6f7ff; color: #1890ff; padding: 2px 6px; border-radius: 4px; border: 1px solid #91d5ff;}
+        .ai-status { font-size: 12px; color: #888; }
+        .status-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 5px; }
+        .status-dot.online { background: #52c41a; box-shadow: 0 0 5px #52c41a; }
+        .status-dot.offline { background: #ff4d4f; }
+
         .tabs { display: flex; padding: 0 15px; gap: 10px; margin-bottom: 15px; }
         .tab-btn { flex: 1; background: #fff; border: 1px solid #e0e0e0; color: #666; padding: 12px 0; text-align: center; cursor: pointer; transition: all 0.2s; font-size: 15px; font-weight: bold; border-radius: 8px; }
         .tab-btn.active { border-color: #1890ff; color: #fff; background: #1890ff; box-shadow: 0 4px 10px rgba(24,144,255,0.2); }
@@ -382,7 +355,7 @@ HTML_PAGE = """
         @keyframes redFlash { 0%, 100% { color: #ff4d4f; opacity: 1; } 50% { color: #cf1322; opacity: 0.5; } }
         .countdown.danger span { animation: redFlash 0.5s infinite; color: #ff4d4f; }
 
-        .analysis { text-align: left; font-size: 14px; line-height: 1.7; color: #444; background: #fcfcfc; padding: 15px; border-radius: 8px; border-left: 3px solid #1890ff; }
+        .analysis { text-align: left; font-size: 14px; line-height: 1.8; color: #333; background: #fcfcfc; padding: 15px; border-radius: 8px; border-left: 3px solid #1890ff; }
 
         .btn-del { background: #fff; border: 1px solid #ff4d4f; color: #ff4d4f; padding: 6px 12px; cursor: pointer; font-size: 12px; border-radius: 6px; float: right; margin-top: -28px;}
         .btn-del:active { background: #ff4d4f; color: #fff; }
@@ -403,11 +376,20 @@ HTML_PAGE = """
     </style>
 </head>
 <body>
-    <div class="header">
-        <div class="title">智能动态双轨预测终端</div>
-        <div class="subtitle">70套底层算法 · 独立特征推演</div>
+    <!-- 顶部 AI 监控 -->
+    <div class="ai-header">
+        <div class="ai-info">
+            <div class="ai-model">DeepSeek 算力中枢 <span>大模型</span></div>
+            <div class="ai-status" id="api-status">
+                <span class="status-dot offline"></span> 正在探测接口...
+            </div>
+        </div>
+        <div style="text-align:right; font-size:12px; color:#888;">
+            <div>API 握手:</div>
+            <div id="api-ping-time" style="font-weight:bold; color:#333;">--:--:--</div>
+        </div>
     </div>
-    
+
     <div class="tabs">
         <div class="tab-btn active" onclick="switchGame('2', this)">加拿大28</div>
         <div class="tab-btn" onclick="switchGame('3', this)">分分28</div>
@@ -421,10 +403,10 @@ HTML_PAGE = """
 
     <div class="card pred-box" id="pred-box" style="display:none;">
         <div class="target-period">目标拦截期号: <span id="target-period">--</span></div>
-        <div class="kill-item">🚫 绝杀: <span id="kill-item">--</span></div>
-        <div class="rec-items">✅ 推荐防守: <span id="rec-items">--</span></div>
+        <div class="kill-item">🚫 AI绝杀: <span id="kill-item">--</span></div>
+        <div class="rec-items">✅ AI推荐防守: <span id="rec-items">--</span></div>
         <div class="countdown" id="cd-box">距开奖结算: <span id="countdown">--:--</span></div>
-        <div class="analysis" id="analysis-text">正在计算动态数据流...</div>
+        <div class="analysis" id="analysis-text">DeepSeek 正在深度思考推演...</div>
     </div>
 
     <div class="card">
@@ -434,8 +416,8 @@ HTML_PAGE = """
     </div>
 
     <script>
-        const SECRET_KEY = "captain_predict_v3_secure_2026";
-        const API_BASE = "/api/v9/sys/core_sync"; 
+        const SECRET_KEY = "captain_ai_predict_v5_secure";
+        const API_BASE = "/api/v10/sys/ai_sync"; 
         let currentGame = '2';
         let liveData = null;
         let timer = null;
@@ -481,6 +463,20 @@ HTML_PAGE = """
             return temp.toLowerCase();
         }
 
+        function checkStatus() {
+            fetch(`${API_BASE}/status`, { headers: getHeaders() })
+            .then(r=>r.json()).then(d => {
+                let el = document.getElementById('api-status');
+                let pingEl = document.getElementById('api-ping-time');
+                if(d.connected) {
+                    el.innerHTML = `<span class="status-dot online"></span> 模型已连接 (${d.model})`;
+                    pingEl.innerText = d.last_ping;
+                } else {
+                    el.innerHTML = `<span class="status-dot offline"></span> 接口连接断开/异常`;
+                }
+            }).catch(e => {});
+        }
+
         function switchGame(type, btn) {
             if(currentGame === type) return;
             currentGame = type;
@@ -513,91 +509,96 @@ HTML_PAGE = """
                             <div style="color:#666; font-size:12px;">=${item.total}</div>
                             <div class="attr">${attr}</div>
                         </div>
-                    `;
-                });
-                document.getElementById('history-box').innerHTML = hHtml;
+主办=
+});
+</html>
                 
-                if(d.current_prediction) {
-                    document.getElementById('pred-box').style.display = 'block';
-                    document.getElementById('target-period').innerText = d.current_prediction.period;
-                    document.getElementById('kill-item').innerText = d.current_prediction.kill_item;
-                    document.getElementById('rec-items').innerText = d.current_prediction.recommend_items;
-                    document.getElementById('analysis-text').innerText = d.current_prediction.analysis;
+if(d.current_prediction){
+文件。getElementById('pred-box')。风格。显示='块'；
+文件。getElementById('target-period')。Inertext=d。current_prediction。周期；
+文件。getElementById('kill-item').inertext=d.current_prediction.kill_item；
+文件。getElementById('rec-items').inertext=d.current_prediction.commary_items；
+文件。getElementById('analysis-text')。inertext=d。current_prediction。分析；
+}else if(d.ai_status==="AI演算中"){
+文件。getElementById('pred-box')。风格。显示='块'；
+文件。getElementById('target-period')。内部文本=d.next_period||"--"；
+文件。getElementById('kill-item').inertext="算力读取中..."；
+文件。getElementById('rec-items').inertext="等待推导..."；
+文件。getElementById('analysis-text').inertext="DeepSeek大模型正在接管盘面，进行深度概率演算与博弈推演，请稍候..."；
                 }
                 
-                if(timer) clearInterval(timer);
-                let left = d.left_time;
-                let cdBox = document.getElementById('cd-box');
-                let cdSpan = document.getElementById('countdown');
+if(定时器)clearInterval(定时器)；
+let left=d.left_time；
+让CDBOX=document.getElementById('CD-box')；
+让cdSpan=document.getElementById('downstalization')；
                 
-                timer = setInterval(() => {
-                    if(left <= 0) { cdSpan.innerText = "结算中..."; return; }
-                    left--;
-                    let m = Math.floor(left / 60);
-                    let s = left % 60;
-                    cdSpan.innerText = `${m.toString().padStart(2,'0')}:${s.toString().padStart(2,'0')}`;
+timer=setInterval(()=>{
+if(left<=0){cdSpan.innerText="结算中..."；返回；}
+左--；
+设m=数学floor(左/60)；
+设s=左%60；
+cdSpan.inertext='${m。toString().padStart(2，"0")}：${s。toString().padStart(2，"0")}'；
                     
-                    if(left <= 10) {
-                        cdBox.classList.add('danger');
-                    } else {
-                        cdBox.classList.remove('danger');
-                    }
-                }, 1000);
+if(left<=10){cdBox.classList.add('danger')；}
+else{cdBox.classList.remove('danger')；}
+}, 1000);
             });
         }
 
-        function fetchRecords() {
-            fetch(`${API_BASE}/records/${currentGame}`, { headers: getHeaders() })
-            .then(r=>{
-                if(r.headers.get('Content-Type').includes('text/html')) return r.text();
-                return r.json();
-            }).then(data => {
-                if(typeof data === 'string') { document.body.innerHTML = data; return; }
-                let box = document.getElementById('record-list');
-                if(data.length === 0) { box.innerHTML = '<div style="padding:20px; text-align:center; color:#999;">暂无预测记录</div>'; return; }
+函数fetchRecords(){
+获取("${API_BASE}/records/${currentGame}"，{headers:getHeaders()})
+.then(r=>{
+if(r.标头。取得('Content-Type').包含('text/html'))return r.text()；
+return r.json()；
+}).then(data=>{
+if(typeof data==='string'){document。身体。innerHTML=数据；返回；}
+let box=document.getElementById('record-list')；
+if(data.length===0){box.innerHTML='<div style="填充：20px；文本对齐：居中；颜色：#999；">暂无预测记录</div>'；return；}
                 
-                let html = '';
-                data.forEach(p => {
-                    let cls = p.result === 'win' ? 'win' : (p.result === 'lose' ? 'lose' : '');
-                    let icon = p.result === 'win' ? '🀄 命中' : (p.result === 'lose' ? '💀 被杀' : '⏳ 等待');
-                    let color = p.result === 'win' ? '#52c41a' : (p.result === 'lose' ? '#ff4d4f' : '#999');
+让超文本标记语言="；
+data.forEach(p=>{
+让cls=p.结果==='win'？'win'：(p.结果==='lose'？'lose'：")；
+让图标=p.结果==='赢'？'🀄 命中'：(p.结果==='lose'？'💀 被杀'：'彷徨等待')；
+让颜色=p.结果==='win'？'#52c41a'：(p.结果==='损失’？'#ff4d4f'：'#999')；
+让actual_display=p.actual_result？'(实开：${p.actual_result})'："；
                     
-                    let actual_display = p.actual_result ? `(实开: ${p.actual_result})` : '';
-                    
-                    html += `
-                        <div class="record-item ${cls}">
-                            <div class="r-left">
-                                <div class="r-period">期号: ${p.period}</div>
-                                <div>绝杀: <span class="r-kill">${p.kill_item}</span> | 推荐: <span class="r-rec">${p.recommend_items}</span></div>
-                            </div>
-                            <div class="r-status" style="color:${color};">
-                                ${icon}
-                                <div class="sub-text">${actual_display}</div>
-                            </div>
-                        </div>
-                    `;
+超文本标记语言+='
+<div class="记录项${cls}">
+<div class="r-left">
+<div class="r-period">期号：${p.period}</div>
+<div>杀灭：<span class="r-kill">${p.kill_item}</span>|推荐：<span class="r-rec">${p.rammend_items}</span></div>
+</div>
+<div class="r-status"style="color：${color}；">
+${icon}
+<div class="sub-text">${actual_display}</div>
+</div>
+</div>
+`;
                 });
-                box.innerHTML = html;
+box.innerHTML=html；
             });
         }
 
-        function clearRecords() {
-            if(!confirm("确定要清空本游戏的预测记录吗？此操作无副作用。")) return;
-            fetch(`${API_BASE}/delete/${currentGame}`, { method: 'POST', headers: getHeaders() })
-            .then(r=>r.json()).then(d => {
-                if(d.success) fetchRecords();
+函数clearRecords(){
+if(！ 确认("确定要清空本游戏的预测记录吗？ 此操作无副作用。")) 返回；
+fetch('${API_BASE}/delete/${currentGame}'，{方法：'邮件'，标头：getHeaders()})
+.then(r=>r.json()).then(d=>{
+if(d.success)fetchRecords()；
             });
         }
 
-        fetchLive();
-        fetchRecords();
-        setInterval(fetchLive, 2000);
-        setInterval(fetchRecords, 5000);
-    </script>
+checkStatus()；
+fetchLive()；
+fetchRecords()；
+        
+setInterval(checkStatus，10000)；//每10秒探测一次API存活
+setInterval(fetchLive，2000)；
+setInterval(fetchRecords，5000)；
+</script>
 </body>
 </html>
 """
 
-if __name__ == '__main__':
-    port = int(os.environ.get("PORT", 8888))
-    app.run(host='0.0.0.0', port=port)
+如果__姓名__=='__main__'：__name__=='__main__'：App.Runrun(主机='0.0.0.0'，端口=端口'0.0.0.0'，端口=端口，端口=端口：__名称__=='__主要的__'：
+port=int(os.environ.get("PORT"，8888))int(os.环境。get("端口"，8888))
+应用程序.运行运行(主机='0.0.0.0'，端口=端口'0.0.0.0'，端口=端口，端口=端口
