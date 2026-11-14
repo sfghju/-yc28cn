@@ -11,7 +11,7 @@ from flask import Flask, request, jsonify
 from datetime import datetime, timedelta
 
 app = Flask(__name__)
-SECRET_KEY = "pure_formula_v33"
+SECRET_KEY = "pure_formula_v35"
 
 GAMES = {
     "2": {"name": "加拿大28", "url": "https://yc28cn-ml1l.onrender.com/vipASDFGHJKLQQQWERTYUIOPWW9983/8626/0549CASWWW?type=2", "interval": 210},
@@ -19,13 +19,11 @@ GAMES = {
     "13": {"name": "比特28", "url": "https://yc28cn-ml1l.onrender.com/vipASDFGHJKLQQZXCVBNMWW9983/8626/0549CCBDR?type=13", "interval": 60}
 }
 
-AI_STATUS = {"online": True, "msg": "三路核心公式交叉运算中..."}
+AI_STATUS = {"online": True, "msg": "三大核心公式推演中..."}
 LIVE_DATA = {gt: {"period": "", "next": "", "left": 0, "history": [], "pred": None, "algo_list": []} for gt in GAMES}
 
-LAST_KILL_STR = {"2": "", "3": "", "13": ""}
-
 def db():
-    conn = sqlite3.connect('predict_formula_v33.db', timeout=30)
+    conn = sqlite3.connect('predict_formula_v35.db', timeout=30)
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -36,28 +34,12 @@ with db() as conn:
     conn.commit()
 
 # ================== 核心三公式计算引擎 ==================
-def get_tail(x):
-    return x % 10
-
-def get_head_mid_tail(r):
-    if r in [0, 1, 2, 3]: return "头"
-    elif r in [4, 5, 6]: return "中"
-    else: return "尾"
-
-def get_bs_oe(r):
-    oe = "单" if r % 2 != 0 else "双"
-    bs = "大" if r >= 5 else "小"
-    return bs, oe
-
 def calculate_formulas(history):
-    # 构建期次位置字典
-    # 按照定义：A最新期，B上一期，C上上期，D上上上期(用于第4位)
     data = {}
     for i in range(4):
         if i < len(history):
             h = history[i]
             nums = h['nums'].split(' + ')
-            # 如果只有3个数字，第4个位置默认补0
             a = int(nums[0])
             b = int(nums[1])
             c = int(nums[2])
@@ -72,72 +54,60 @@ def calculate_formulas(history):
             for p in ['A', 'B', 'C', 'D']:
                 for j in range(1, 5): data[f'{p}{j}'] = 0
 
-    # 公式1：基础取尾
-    # R1 = t(A1+B3)
+    # 公式1：基础运算取尾
     S1 = data['A1'] + data['B3']
-    R1 = get_tail(S1)
+    R1 = S1 % 10
     
-    # 公式2：多位置组合
-    # R2 = t(X+X+Y+Z)
-    X = get_tail(data['C1'] + data['B3'])
-    Y = get_tail(data['A2'] + data['B4'] + data['C3'])
-    Z = get_tail(data['B3'] + data['C2'])
-    R2 = get_tail(X + X + Y + Z)
+    # 公式2：多位置组合运算
+    X = (data['C1'] + data['B3']) % 10
+    Y = (data['A2'] + data['B4'] + data['C3']) % 10
+    Z = (data['B3'] + data['C2']) % 10
+    S2 = X + X + Y + Z
+    R2 = S2 % 10
 
-    # 公式3：多期混合
-    # R3 = t(S1+S2+S3)
-    S_1 = get_tail(data['A2'] + data['B2'] + data['C2'])
-    S_2 = get_tail(data['B1'] + data['B2'] + data['B3'])
-    S_3 = get_tail(data['A4'] + data['C4'])
-    R3 = get_tail(S_1 + S_2 + S_3)
+    # 公式3：多期数据混合
+    S_1 = (data['A2'] + data['B2'] + data['C2']) % 10
+    S_2 = (data['B1'] + data['B2'] + data['B3']) % 10
+    S_3 = (data['A4'] + data['C4']) % 10
+    S3 = S_1 + S_2 + S_3
+    R3 = S3 % 10
 
-    # 结果整理
     results = []
-    for idx, r in enumerate([R1, R2, R3]):
-        bs, oe = get_bs_oe(r)
+    for idx, (r, detail) in enumerate([(R1, f"A1+B3={S1}"), (R2, f"X+X+Y+Z={S2}"), (R3, f"S1+S2+S3={S3}")]):
+        bs = "大" if r >= 5 else "小"
+        oe = "单" if r % 2 != 0 else "双"
         results.append({
             "id": idx + 1,
             "name": f"公式{idx + 1}",
             "R": r,
-            "hmt": get_head_mid_tail(r),
+            "detail": detail,
             "vote": bs + oe
         })
         
     return results
 
-# ================== 杀一推三与防重逻辑 ==================
+# ================== 统票与预测逻辑 ==================
 def calculate_prediction(gt, history, next_p):
     algo_list = calculate_formulas(history)
     
-    # 统计三路公式投票
     votes = {"大单": 0, "大双": 0, "小单": 0, "小双": 0}
     for a in algo_list:
         votes[a['vote']] += 1
 
-    # 排序：票数多的优先
+    # 纯按票数排序，允许并列，允许连续杀
     sorted_v = sorted(votes.items(), key=lambda x: x[1], reverse=True)
     
-    # 如果有两个结果并列 1 票，我们利用头中尾做二次裁决
-    # 为了强行“杀一推三”，我们把 4 个选项按得票排好
     main_atk = sorted_v[0][0] 
     defend = sorted_v[1][0]   
     backup = sorted_v[2][0]   
     kill_str = sorted_v[3][0] 
 
-    # 【防死磕机制】
-    if kill_str == LAST_KILL_STR[gt]:
-        kill_str = backup  
-        backup = sorted_v[3][0]
-        
-    LAST_KILL_STR[gt] = kill_str
-
-    # 生成解析
     f1, f2, f3 = algo_list[0], algo_list[1], algo_list[2]
-    analysis = f"【三路核心公式推演】已严格完成取尾与头中尾判定。\n"
-    analysis += f"- 公式1(基础取尾)：算出尾数 {f1['R']}，判定【{f1['hmt']}】，结果为 {f1['vote']}。\n"
-    analysis += f"- 公式2(多位置组合)：算出尾数 {f2['R']}，判定【{f2['hmt']}】，结果为 {f2['vote']}。\n"
-    analysis += f"- 公式3(多期混合)：算出尾数 {f3['R']}，判定【{f3['hmt']}】，结果为 {f3['vote']}。\n"
-    analysis += f"\n综合交叉验证，主攻指向【{main_atk}】。根据防重机制，本期绝杀【{kill_str}】！"
+    analysis = f"【三路纯正公式推演】已严格完成取尾推导。\n"
+    analysis += f"- 公式1(基础)：{f1['detail']}，尾数 {f1['R']}，判定 {f1['vote']}。\n"
+    analysis += f"- 公式2(组合)：{f2['detail']}，尾数 {f2['R']}，判定 {f2['vote']}。\n"
+    analysis += f"- 公式3(混合)：{f3['detail']}，尾数 {f3['R']}，判定 {f3['vote']}。\n"
+    analysis += f"\n综合交叉验证，主攻锁定【{main_atk}】。本期绝杀【{kill_str}】！"
 
     return {
         "kill": kill_str, 
@@ -146,7 +116,7 @@ def calculate_prediction(gt, history, next_p):
         "algo_list": algo_list
     }
 
-# ================== 抓取主循环 ==================
+# ================== 极速抓取主循环 ==================
 def fetch_loop():
     ctx = ssl._create_unverified_context()
     while True:
@@ -244,7 +214,7 @@ def index():
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-    <title>三路核心公式实战预测</title>
+    <title>三路纯正公式实战预测</title>
     <style>
         * { box-sizing: border-box; }
         body { background: #f4f6f9; margin: 0; font-family: -apple-system, sans-serif; color: #333; }
@@ -284,7 +254,6 @@ def index():
         .api-row { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px dashed #2c3e50; }
         .api-row span.red { color: #ff6b6b; font-weight: bold; }
         .api-row span.tail { color: #feca57; font-weight: bold; }
-        .api-row span.hmt { color: #48dbfb; font-weight: bold; }
 
         .log-item { border-bottom: 1px solid #f1f2f6; padding: 10px 0; font-size: 13px; display: flex; justify-content: space-between; }
         .win { color: #00b894; font-weight: bold; } .lose { color: #d63031; font-weight: bold; }
@@ -293,7 +262,7 @@ def index():
     </style>
 </head>
 <body>
-    <div class="head">三路核心公式实战</div>
+    <div class="head">三路纯正公式实战</div>
     <div class="status" id="status"><span class="dot"></span> 系统运转正常</div>
     <div class="tabs">
         <div class="tab on" onclick="switchG('2', this)">加拿大28</div>
@@ -309,7 +278,7 @@ def index():
     </div>
 
     <div class="api-list" id="api-box">
-        <div class="api-title" id="api-title">📡 三路公式明细 (取尾与头中尾验证)</div>
+        <div class="api-title" id="api-title">📡 三大核心公式详细运算明细</div>
         <div id="api-content"></div>
     </div>
 
@@ -334,7 +303,7 @@ def index():
     </div>
 <script>
     let curG = '2', timer = null;
-    const KEY = "pure_formula_v33";
+    const KEY = "pure_formula_v35";
     
     function switchG(g, el) {
         curG = g;
@@ -363,8 +332,8 @@ def index():
                 d.algo_list.forEach(algo => {
                     html += `<div class="api-row">
                         <div>
-                            <div>[公式${algo.id}] 尾数: <span class="tail">${algo.R}</span></div>
-                            <div>判定: <span class="hmt">${algo.hmt}</span></div>
+                            <div>[${algo.name}] ${algo.detail}</div>
+                            <div>算出尾数: <span class="tail">${algo.R}</span></div>
                         </div>
                         <div class="red">${algo.vote}</div>
                     </div>`;
