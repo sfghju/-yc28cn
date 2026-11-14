@@ -7,11 +7,12 @@ import os
 import sqlite3
 import re
 import random
+import math
 from flask import Flask, request, jsonify
 from datetime import datetime, timedelta
 
 app = Flask(__name__)
-SECRET_KEY = "precision_formula_v36"
+SECRET_KEY = "mean_reversion_v38"
 
 GAMES = {
     "2": {"name": "加拿大28", "url": "https://yc28cn-ml1l.onrender.com/vipASDFGHJKLQQQWERTYUIOPWW9983/8626/0549CASWWW?type=2", "interval": 210},
@@ -19,11 +20,11 @@ GAMES = {
     "13": {"name": "比特28", "url": "https://yc28cn-ml1l.onrender.com/vipASDFGHJKLQQZXCVBNMWW9983/8626/0549CCBDR?type=13", "interval": 60}
 }
 
-AI_STATUS = {"online": True, "msg": "精密振幅公式运算中..."}
+AI_STATUS = {"online": True, "msg": "近4期均值推演中..."}
 LIVE_DATA = {gt: {"period": "", "next": "", "left": 0, "history": [], "pred": None, "algo_list": []} for gt in GAMES}
 
 def db():
-    conn = sqlite3.connect('predict_precision_v36.db', timeout=30)
+    conn = sqlite3.connect('predict_v38.db', timeout=30)
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -33,100 +34,105 @@ with db() as conn:
         analysis TEXT, real_result TEXT DEFAULT '', status TEXT DEFAULT 'wait')''')
     conn.commit()
 
-# ================== 全新 3 大核心公式引擎 ==================
-def calculate_precision_formulas(history):
-    # 提取近4期的数据 (A1最新, B1上一期, C1上上期)
+# ================== 核心统计学推演引擎 (近4期) ==================
+def calculate_prediction(gt, history, next_p):
+    if len(history) < 4:
+        return {"kill": "数据不足", "rec": "数据不足", "analysis": "等待数据...", "algo_list": []}
+        
     h0 = history[0] # 最新
     h1 = history[1] # 上1
     h2 = history[2] # 上2
+    h3 = history[3] # 上3
     
     n0 = [int(x) for x in h0['nums'].split(' + ')]
     n1 = [int(x) for x in h1['nums'].split(' + ')]
-    n2 = [int(x) for x in h2['nums'].split(' + ')]
     
-    sum0, sum1, sum2 = h0['total'], h1['total'], h2['total']
-
-    # 公式1：位置惯性衰减 (预测下一期A/B/C位的落点，进而求和)
-    # 采用阻尼系数 0.65，防止预测值超出 0-9 范围
-    pred_A = int(n0[0] + (n0[0] - n1[0]) * 0.65)
-    pred_B = int(n0[1] + (n0[1] - n1[1]) * 0.65)
-    pred_C = int(n0[2] + (n0[2] - n1[2]) * 0.65)
+    s0, s1, s2, s3 = h0['total'], h1['total'], h2['total'], h3['total']
     
-    # 限制单个数在 0-9 之间
-    pred_A = max(0, min(9, pred_A))
-    pred_B = max(0, min(9, pred_B))
-    pred_C = max(0, min(9, pred_C))
+    # 1. 均值回归与标准差推演 (基于4期)
+    mean_sum = (s0 + s1 + s2 + s3) / 4.0
+    variance = ((s0 - mean_sum)**2 + (s1 - mean_sum)**2 + (s2 - mean_sum)**2 + (s3 - mean_sum)**2) / 4.0
+    std_dev = math.sqrt(variance)
     
-    pred_sum1 = pred_A + pred_B + pred_C
-    vote1_bs = "大" if pred_sum1 >= 14 else "小"
-    vote1_oe = "单" if pred_sum1 % 2 != 0 else "双"
-    vote1 = vote1_bs + vote1_oe
-    detail1 = f"位置惯性测算和值约:{pred_sum1}"
-
-    # 公式2：均值极值折返 (监控振幅，比如20跌到15，下一期预测反弹或继续跌)
-    # 振幅 = 上期总和 - 最新总和
-    amplitude = sum0 - sum1 
-    # 预测和值 = 最新和值 + 振幅 * 0.5 (预期振幅衰减一半)
-    pred_sum2 = int(sum0 + (amplitude * 0.5))
-    # 限制总和范围在 0-27
-    pred_sum2 = max(0, min(27, pred_sum2))
-    vote2_bs = "大" if pred_sum2 >= 14 else "小"
-    vote2_oe = "单" if pred_sum2 % 2 != 0 else "双"
-    vote2 = vote2_bs + vote2_oe
-    detail2 = f"振幅折返测算和值约:{pred_sum2}"
-
-    # 公式3：奇偶转换矩阵 (利用最近两期的状态跳变)
-    # 如果连续两期大单，大概率洗盘。如果连续极端偏态，也会反转。
-    last_bs, last_oe = h0['big_small'], h0['odd_even']
-    prev_bs, prev_oe = h1['big_small'], h1['odd_even']
+    # 检测连续极端走势 (4连大、4连小等)
+    is_big_streak = all(h['big_small'] == '大' for h in history[:4])
+    is_small_streak = all(h['big_small'] == '小' for h in history[:4])
+    is_odd_streak = all(h['odd_even'] == '单' for h in history[:4])
+    is_even_streak = all(h['odd_even'] == '双' for h in history[:4])
     
-    if last_bs == prev_bs and last_oe == prev_oe:
-        # 连续同属性，预测断点反转
-        vote3_bs = "小" if last_bs == "大" else "大"
-        vote3_oe = "双" if last_oe == "单" else "单"
+    # 2. 位置极值修正推演 (基于最近两期变化)
+    # 百位
+    if n0[0] - n1[0] <= -4:
+        pred_A = random.randint(4, 6) 
     else:
-        # 震荡期，杀最新一期的属性
-        vote3_bs = "小" if last_bs == "大" else "大"
-        vote3_oe = "双" if last_oe == "单" else "单"
+        pred_A = n0[0]
+    # 十位
+    if n0[1] - n1[1] >= 3:
+        pred_B = random.randint(2, 4)
+    else:
+        pred_B = n0[1]
+    # 个位
+    if n0[2] >= 7:
+        pred_C = random.randint(4, 6)
+    else:
+        pred_C = n0[2]
+        
+    # 3. 综合核心和值测算
+    # 利用标准差向中位回补，用4期标准差 * 1.2 作为下跌/反弹预期
+    target_sum = int(round(s0 - (std_dev * 1.2))) 
     
-    vote3 = vote3_bs + vote3_oe
-    detail3 = "连续形态断裂反转"
+    # 极端连开强制反转
+    if is_big_streak:
+        target_sum = min(target_sum, 13) # 连续4期大，强制拉回小
+    elif is_small_streak:
+        target_sum = max(target_sum, 14) # 连续4期小，强制拉回大
+        
+    target_sum = max(0, min(27, target_sum))
+    
+    # 单双极端连开强制反转
+    if is_odd_streak and target_sum % 2 != 0:
+        target_sum = target_sum - 1 if target_sum > 0 else target_sum + 1
+    elif is_even_streak and target_sum % 2 == 0:
+        target_sum = target_sum - 1 if target_sum > 0 else target_sum + 1
 
-    results = [
-        {"name": "惯性衰减公式", "vote": vote1, "detail": detail1},
-        {"name": "振幅折返公式", "vote": vote2, "detail": detail2},
-        {"name": "奇偶异动公式", "vote": vote3, "detail": detail3}
+    # 判定最终主攻方向
+    pred_bs = "大" if target_sum >= 14 else "小"
+    pred_oe = "单" if target_sum % 2 != 0 else "双"
+    main_vote = pred_bs + pred_oe
+    
+    # 4. 生成杀一推三策略
+    if is_big_streak:
+        kill_str = "大单" if is_odd_streak else "大双" # 绝杀连续出现的属性
+    elif is_small_streak:
+        kill_str = "小单" if is_odd_streak else "小双"
+    else:
+        kill_str = "大双" if main_vote == "小单" else "小单" 
+        
+    # 防守与备选
+    if pred_bs == "小":
+        defend = "大双" if pred_oe == "单" else "大单"
+        backup = "小双" if pred_oe == "单" else "小单"
+    else:
+        defend = "小单" if pred_oe == "双" else "小双"
+        backup = "大单" if pred_oe == "双" else "大双"
+
+    # 组装推演明细
+    streak_msg = "检测到4连极值，强制反转！" if (is_big_streak or is_small_streak or is_odd_streak or is_even_streak) else "走势处于震荡区间。"
+    
+    algo_list = [
+        {"name": "4期均值回归模型", "vote": main_vote, "detail": f"近4期均值{mean_sum:.1f}，推演核心和值约 {target_sum}"},
+        {"name": "标准差极值修正", "vote": main_vote, "detail": f"计算4期标准差 {std_dev:.2f}，触发 {streak_msg}"},
+        {"name": "位置振幅推演", "vote": main_vote, "detail": f"推演下期位置：百位{pred_A}，十位{pred_B}，个位{pred_C}"}
     ]
-    
-    return results
 
-# ================== 杀一推三推导 ==================
-def calculate_prediction(gt, history, next_p):
-    algo_list = calculate_precision_formulas(history)
-    
-    # 统票
-    votes = {"大单": 0, "大双": 0, "小单": 0, "小双": 0}
-    for a in algo_list:
-        votes[a['vote']] += 1
-
-    # 排序：票数多优先
-    sorted_v = sorted(votes.items(), key=lambda x: x[1], reverse=True)
-    
-    main_atk = sorted_v[0][0] 
-    defend = sorted_v[1][0]   
-    backup = sorted_v[2][0]   
-    kill_str = sorted_v[3][0] 
-
-    # 生成解析
-    analysis = f"【三大核心精密公式推演】\n"
-    for a in algo_list:
-        analysis += f"- {a['name']}：{a['detail']}，指向【{a['vote']}】\n"
-    
-    analysis += f"\n综合三维交叉验证，主攻锁定【{main_atk}】。经深度计算，坚决绝杀【{kill_str}】！"
+    analysis = f"【深度统计推演(4期版)】数据回归分析。\n"
+    analysis += f"- 近4期均值：{mean_sum:.2f}，当前标准差：{std_dev:.2f}。\n"
+    analysis += f"- 极值状态：{streak_msg}\n"
+    analysis += f"\n🔥 综合结论：主攻【{main_vote}】，坚决绝杀危险项【{kill_str}】！"
 
     return {
         "kill": kill_str, 
-        "rec": f"{main_atk}(主攻)、{defend}(防守)、{backup}(备选)", 
+        "rec": f"{main_vote}(主攻)、{defend}(防守)、{backup}(备选)", 
         "analysis": analysis, 
         "algo_list": algo_list
     }
@@ -229,7 +235,7 @@ def index():
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-    <title>精密振幅实战预测</title>
+    <title>4期深度推演引擎</title>
     <style>
         * { box-sizing: border-box; }
         body { background: #f4f6f9; margin: 0; font-family: -apple-system, sans-serif; color: #333; }
@@ -276,7 +282,7 @@ def index():
     </style>
 </head>
 <body>
-    <div class="head">精密振幅实战预测</div>
+    <div class="head">4期深度推演引擎</div>
     <div class="status" id="status"><span class="dot"></span> 系统运转正常</div>
     <div class="tabs">
         <div class="tab on" onclick="switchG('2', this)">加拿大28</div>
@@ -292,7 +298,7 @@ def index():
     </div>
 
     <div class="api-list" id="api-box">
-        <div class="api-title" id="api-title">📡 三大核心公式明细</div>
+        <div class="api-title" id="api-title">📡 核心推演逻辑明细</div>
         <div id="api-content"></div>
     </div>
 
@@ -317,7 +323,7 @@ def index():
     </div>
 <script>
     let curG = '2', timer = null;
-    const KEY = "precision_formula_v36";
+    const KEY = "mean_reversion_v38";
     
     function switchG(g, el) {
         curG = g;
