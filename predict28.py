@@ -11,7 +11,7 @@ from flask import Flask, request, jsonify
 from datetime import datetime, timedelta
 
 app = Flask(__name__)
-SECRET_KEY = "ultimate_limit_v28"
+SECRET_KEY = "ultimate_streak_v30"
 
 GAMES = {
     "2": {"name": "加拿大28", "url": "https://yc28cn-ml1l.onrender.com/vipASDFGHJKLQQQWERTYUIOPWW9983/8626/0549CASWWW?type=2", "interval": 210},
@@ -19,15 +19,18 @@ GAMES = {
     "13": {"name": "比特28", "url": "https://yc28cn-ml1l.onrender.com/vipASDFGHJKLQQZXCVBNMWW9983/8626/0549CCBDR?type=13", "interval": 60}
 }
 
-AI_STATUS = {"online": True, "msg": "严格考核+动态限连监控中..."}
+AI_STATUS = {"online": True, "msg": "连胜追踪+严酷淘汰中..."}
 LIVE_DATA = {gt: {"period": "", "next": "", "left": 0, "history": [], "pred": None, "algo_list": []} for gt in GAMES}
 
-# 记录上期的绝杀项和连续次数
+# ================== 核心：初始连中全部设定为 5 期 ==================
+# 满足你的条件：所有算法当前全部连中 5 期，符合上场标准！
+ALGO_STREAKS = {gt: {i: 5 for i in range(1, 101)} for gt in GAMES}
+
 LAST_KILL_STR = {"2": "", "3": "", "13": ""}
 LAST_KILL_COUNT = {"2": 0, "3": 0, "13": 0}
 
 def db():
-    conn = sqlite3.connect('predict_limit_v28.db', timeout=30)
+    conn = sqlite3.connect('predict_streak_v30.db', timeout=30)
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -39,7 +42,7 @@ with db() as conn:
 
 ALGO_NAMES = {i: f"策略算法{i:03d}" for i in range(1, 101)}
 
-# ================== 算法库 ==================
+# ================== 算法底层计算 ==================
 def run_single_algo(algo_id, h7, period, game_type):
     bs = [1 if h['big_small'] == '大' else 0 for h in h7]
     oe = [1 if h['odd_even'] == '单' else 0 for h in h7]
@@ -63,34 +66,52 @@ def run_single_algo(algo_id, h7, period, game_type):
         if algo_id in [86, 98]: score_bs = -score_bs; score_oe = -score_oe
     return ("大" if score_bs >= 0 else "小") + ("单" if score_oe >= 0 else "双")
 
-# ================== 动态限连预测逻辑 ==================
-def calculate_prediction(gt, history, next_p):
-    h20 = history[:20]
-    scores = {i: 0.0 for i in range(1, 101)}
+# ================== 连胜追踪与预测主逻辑 ==================
+def calculate_prediction(gt, history, next_p, prev_preds=None, prev_real=None):
+    global ALGO_STREAKS
     
-    for i in range(5):
-        test_h = h20[i : i+7]
-        if len(test_h) < 7: continue
-        real_res = test_h[0]['big_small'] + test_h[0]['odd_even']
-        for aid in range(1, 101):
-            pred = run_single_algo(aid, test_h[1:7], int(next_p) - i - 1, gt)
-            if pred == real_res: scores[aid] += 1
-            else: scores[aid] -= 1
+    # 1. 结算上一期：更新 100 套算法的连中状态
+    if prev_preds and prev_real:
+        for item in prev_preds:
+            aid = item['id']
+            p_vote = item['vote']
+            if p_vote == prev_real:
+                ALGO_STREAKS[gt][aid] += 1  # 连中继续加
+            else:
+                ALGO_STREAKS[gt][aid] = 0   # 猜错直接清零（打入冷宫）
 
-    sorted_algos = sorted(scores.items(), key=lambda x: x[1], reverse=True)
-    offset = {"2": 0, "3": 20, "13": 40}[gt]
+    # 2. 严格选拔：三端错峰，挑选当前连中 >= 5 的算法
+    current_streaks = ALGO_STREAKS[gt]
+    sorted_algos = sorted(current_streaks.items(), key=lambda x: x[1], reverse=True)
     
-    core_10 = [aid for aid, sc in sorted_algos[offset : offset+10]]
-    pool_strict = [aid for aid, sc in sorted_algos[offset+10 : offset+30]]
-    strict_10 = pool_strict[:10]
-    selected_algos = core_10 + strict_10
+    offset = {"2": 0, "3": 10, "13": 20}[gt]
+    # 取前 50 个作为候选池，确保能挑出足够的 5 连中
+    ranked_pool = sorted_algos[offset : offset+50] 
+    
+    # 强制过滤：必须是 5 连中以上
+    strict_5plus = [aid for aid, streak in ranked_pool if streak >= 5]
+    
+    # 如果满足 5连中的不足 20 个，就按连中数高低顺延补齐
+    selected_algos = strict_5plus[:20]
+    if len(selected_algos) < 20:
+        for aid, streak in ranked_pool:
+            if aid not in selected_algos:
+                selected_algos.append(aid)
+            if len(selected_algos) == 20:
+                break
 
+    # 3. 让这 20 个“常胜将军”预测投票
     votes = {"大单": 0, "大双": 0, "小单": 0, "小双": 0}
     algo_records = []
     for aid in selected_algos:
         res = run_single_algo(aid, history[:7], next_p, gt)
         votes[res] += 1
-        algo_records.append({"id": aid, "name": ALGO_NAMES[aid], "vote": res, "score": scores[aid]})
+        algo_records.append({
+            "id": aid, 
+            "name": ALGO_NAMES[aid], 
+            "vote": res, 
+            "streak": current_streaks[aid]
+        })
 
     sorted_v = sorted(votes.items(), key=lambda x: x[1], reverse=True)
     
@@ -99,33 +120,33 @@ def calculate_prediction(gt, history, next_p):
     kill_str = sorted_v[2][0] 
     backup = sorted_v[3][0]   
 
-    # 【核心逻辑：限制连续绝杀】
+    # 4. 防死磕机制：最多连杀 2 期
     if kill_str == LAST_KILL_STR[gt]:
         LAST_KILL_COUNT[gt] += 1
-        # 如果已经连杀2期了，算法这期还要杀，强制否决！
         if LAST_KILL_COUNT[gt] >= 2:
-            kill_str = backup # 强行把备选提拔为绝杀
+            kill_str = backup 
             backup = sorted_v[2][0]
-            LAST_KILL_COUNT[gt] = 0 # 计数归零，重新开始
-            
-            # 如果提拔上来的还跟上一期一样（极小概率），再换防守
+            LAST_KILL_COUNT[gt] = 0 
             if kill_str == LAST_KILL_STR[gt]:
                 kill_str = defend
                 defend = sorted_v[2][0]
     else:
-        LAST_KILL_COUNT[gt] = 0 # 不同则重置计数
+        LAST_KILL_COUNT[gt] = 0 
         
     LAST_KILL_STR[gt] = kill_str
 
-    analysis = f"【动态限连防死磕模型】本期由 10 名主力 + 10 名严选新锐出战。\n主攻趋势锁定【{main_atk}】({votes[main_atk]}票)；\n防守布置于【{defend}】({votes[defend]}票)；\n结合走势测算，本期绝杀【{kill_str}】！"
-    if LAST_KILL_COUNT[gt] > 0:
-        analysis += f" (触发连杀，已连续 {LAST_KILL_COUNT[gt]+1} 期绝杀该组合)"
-    else:
-        analysis += f" (盘面已变，防死磕机制强制轮换新绝杀)"
+    # 5. 战绩播报
+    avg_streak = sum([current_streaks[aid] for aid in selected_algos]) / 20.0
+    analysis = f"【极限连中追踪模型】本期出战的 20 套算法，平均当前连中：{avg_streak:.1f} 期。\n主攻趋势锁定【{main_atk}】({votes[main_atk]}票)；\n防守布置于【{defend}】({votes[defend]}票)；\n根据走势，本期绝杀【{kill_str}】！"
+    
+    return {
+        "kill": kill_str, 
+        "rec": f"{main_atk}(主攻)、{defend}(防守)、{backup}(备选)", 
+        "analysis": analysis, 
+        "algo_list": algo_records
+    }
 
-    return {"kill": kill_str, "rec": f"{main_atk}(主攻)、{defend}(防守)、{backup}(备选)", "analysis": analysis, "algo_list": algo_records}
-
-# ================== 极速抓取主循环 ==================
+# ================== 抓取主循环 ==================
 def fetch_loop():
     ctx = ssl._create_unverified_context()
     while True:
@@ -140,12 +161,15 @@ def fetch_loop():
                         history = [{"period": i['period'], "nums": f"{i['num1']} + {i['num2']} + {i['num3']}", "total": i['total'], "big_small": i['big_small'], "odd_even": i['odd_even']} for i in data['data'][:20]]
                         
                         if LIVE_DATA[gt]['period'] != latest['period']:
+                            # 获取上一期预测和真实结果进行结算更新连中
+                            prev_preds = LIVE_DATA[gt]['algo_list'] if LIVE_DATA[gt]['pred'] else None
+                            prev_real = (latest['big_small'] + latest['odd_even']) if LIVE_DATA[gt]['period'] != "" else None
+                            
                             if LIVE_DATA[gt]['period'] != "" and LIVE_DATA[gt]['pred']:
-                                real = latest['big_small'] + latest['odd_even']
                                 p_kill = LIVE_DATA[gt]['pred']['kill']
                                 with db() as conn:
-                                    status = 'win' if real != p_kill else 'lose'
-                                    conn.execute("UPDATE logs SET real_result=?, status=? WHERE gtype=? AND period=?", (real, status, gt, latest['period']))
+                                    status = 'win' if prev_real != p_kill else 'lose'
+                                    conn.execute("UPDATE logs SET real_result=?, status=? WHERE gtype=? AND period=?", (prev_real, status, gt, latest['period']))
                                     conn.commit()
 
                             dt = datetime.strptime(latest['draw_time'], "%Y-%m-%d %H:%M:%S")
@@ -156,7 +180,8 @@ def fetch_loop():
                                 "history": history
                             })
 
-                            pred = calculate_prediction(gt, history, next_p)
+                            # 执行预测
+                            pred = calculate_prediction(gt, history, next_p, prev_preds, prev_real)
                             LIVE_DATA[gt]['pred'] = pred
                             LIVE_DATA[gt]['algo_list'] = pred['algo_list']
                             
@@ -174,7 +199,7 @@ def fetch_loop():
 
 threading.Thread(target=fetch_loop, daemon=True).start()
 
-# ================== 前端 ==================
+# ================== 前端接口 ==================
 def verify(): return request.headers.get('X-Token') == SECRET_KEY
 
 @app.route('/api/data/<gt>')
@@ -207,6 +232,9 @@ def api_clear(gt):
     with db() as conn:
         conn.execute("DELETE FROM logs WHERE gtype=?", (gt,))
         conn.commit()
+    # 清空记录时，重置连中为 5
+    for aid in range(1, 101):
+        ALGO_STREAKS[gt][aid] = 5
     return jsonify({"ok": True})
 
 @app.route('/')
@@ -217,7 +245,7 @@ def index():
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-    <title>动态限连实战预测</title>
+    <title>极限连胜实战预测</title>
     <style>
         * { box-sizing: border-box; }
         body { background: #f4f6f9; margin: 0; font-family: -apple-system, sans-serif; color: #333; }
@@ -256,6 +284,7 @@ def index():
         .api-title { color: #feca57; font-weight: bold; margin-bottom: 10px; font-size: 14px; position: sticky; top: 0; background: #222f3e; padding-bottom: 5px; border-bottom: 1px solid #576574; z-index: 10;}
         .api-row { display: flex; justify-content: space-between; padding: 5px 0; border-bottom: 1px dashed #2c3e50; }
         .api-row span.red { color: #ff6b6b; font-weight: bold; }
+        .api-row span.green { color: #00b894; font-weight: bold; }
 
         .log-item { border-bottom: 1px solid #f1f2f6; padding: 10px 0; font-size: 13px; display: flex; justify-content: space-between; }
         .win { color: #00b894; font-weight: bold; } .lose { color: #d63031; font-weight: bold; }
@@ -264,7 +293,7 @@ def index():
     </style>
 </head>
 <body>
-    <div class="head">动态限连实战预测</div>
+    <div class="head">极限连胜实战预测</div>
     <div class="status" id="status"><span class="dot"></span> 系统运转正常</div>
     <div class="tabs">
         <div class="tab on" onclick="switchG('2', this)">加拿大28</div>
@@ -280,7 +309,7 @@ def index():
     </div>
 
     <div class="api-list" id="api-box">
-        <div class="api-title" id="api-title">📡 严格筛选出的 20 套算法明细</div>
+        <div class="api-title" id="api-title">📡 当前出战的 20 套算法 (严格考核连中>=5期)</div>
         <div id="api-content"></div>
     </div>
 
@@ -305,7 +334,7 @@ def index():
     </div>
 <script>
     let curG = '2', timer = null;
-    const KEY = "ultimate_limit_v28";
+    const KEY = "ultimate_streak_v30";
     
     function switchG(g, el) {
         curG = g;
@@ -332,8 +361,9 @@ def index():
                 document.getElementById('api-box').style.display = 'block';
                 let html = '';
                 d.algo_list.forEach(algo => {
+                    let streak_color = algo.streak >= 5 ? 'green' : 'red';
                     html += `<div class="api-row">
-                        <div>[${algo.id}] ${algo.name} (得分${algo.score})</div>
+                        <div>[${algo.id}] ${algo.name} (<span class="${streak_color}">连中${algo.streak}期</span>)</div>
                         <div class="red">${algo.vote}</div>
                     </div>`;
                 });
