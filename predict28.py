@@ -11,7 +11,7 @@ from flask import Flask, request, jsonify
 from datetime import datetime, timedelta
 
 app = Flask(__name__)
-SECRET_KEY = "high_win_v43"
+SECRET_KEY = "high_win_v44"
 
 GAMES = {
     "2": {"name": "加拿大28", "url": "https://yc28cn-ml1l.onrender.com/vipASDFGHJKLQQQWERTYUIOPWW9983/8626/0549CASWWW?type=2", "interval": 210},
@@ -19,15 +19,14 @@ GAMES = {
     "13": {"name": "比特28", "url": "https://yc28cn-ml1l.onrender.com/vipASDFGHJKLQQZXCVBNMWW9983/8626/0549CCBDR?type=13", "interval": 60}
 }
 
-AI_STATUS = {"online": True, "msg": "4段位博弈推演中..."}
+AI_STATUS = {"online": True, "msg": "极简暴力推演中..."}
 LIVE_DATA = {gt: {"period": "", "next": "", "left": 0, "history": [], "pred": None, "algo_list": []} for gt in GAMES}
 
-# 记录上期绝杀和连杀次数（用于过段机制）
 LAST_KILL_STR = {"2": "", "3": "", "13": ""}
 KILL_STREAK_COUNT = {"2": 0, "3": 0, "13": 0}
 
 def db():
-    conn = sqlite3.connect('predict_v43.db', timeout=30)
+    conn = sqlite3.connect('predict_v44.db', timeout=30)
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -37,50 +36,67 @@ with db() as conn:
         analysis TEXT, real_result TEXT DEFAULT '', status TEXT DEFAULT 'wait')''')
     conn.commit()
 
-# ================== 核心 1~4 段位博弈引擎 ==================
+# ================== 极简暴力判定引擎 ==================
 def calculate_prediction(gt, history, next_p):
     if len(history) < 5:
         return {"kill": "数据不足", "rec": "数据不足", "analysis": "等待数据...", "algo_list": []}
         
-    h0, h1, h2, h3, h4 = history[:5]
     bs_seq = [h['big_small'] for h in history[:5]]
     oe_seq = [h['odd_even'] for h in history[:5]]
 
-    # 内部方法：计算大小单双的杀项和跟项
-    def analyze_trend(seq, type_name):
-        # 1段：极值反杀 (4连及以上)
-        if seq[0] == seq[1] == seq[2] == seq[3]:
-            return f"反", seq[0], f"【极值反杀】连开4期{seq[0]}，物极必反，杀{seq[0]}"
-        
-        # 2段：短龙顺跟 (2~3连)
-        if seq[0] == seq[1] == seq[2] or seq[0] == seq[1]:
-            return f"跟", seq[0], f"【短龙顺跟】近3期频繁开出{seq[0]}，顺势跟风，杀反向"
-            
-        # 3段：假突破回马枪 (如：大 小 大)
-        if seq[0] == seq[2] and seq[0] != seq[1]:
-            return f"反", seq[0], f"【假突破杀】走势呈{seq[2]}-{seq[1]}-{seq[0]}，典型诱盘，杀{seq[0]}"
-            
-        # 4段：频次杀热
-        cnt_A = seq.count(seq[0])
-        if cnt_A >= 3:
-            return f"反", seq[0], f"【频次杀热】近5期{seq[0]}出号极多，防守回落，杀{seq[0]}"
+    # --- 1. 大小判定 ---
+    if bs_seq[0] == bs_seq[1] == bs_seq[2] == bs_seq[3]:
+        main_bs, kill_bs = ("小", "大") if bs_seq[0] == "大" else ("大", "小")
+        reason_bs = f"【极值反杀】连开4期{bs_seq[0]}，物极必反，杀{bs_seq[0]}"
+    elif bs_seq[0] == bs_seq[1] == bs_seq[2] or bs_seq[0] == bs_seq[1]:
+        main_bs = bs_seq[0]
+        kill_bs = "小" if bs_seq[0] == "大" else "大"
+        reason_bs = f"【短龙顺跟】连开{bs_seq[0]}，顺势跟风，杀反向"
+    elif bs_seq[0] == bs_seq[2] and bs_seq[0] != bs_seq[1]:
+        main_bs = "小" if bs_seq[0] == "大" else "大"
+        kill_bs = bs_seq[0]
+        reason_bs = f"【假突破杀】走势{bs_seq[2]}-{bs_seq[1]}-{bs_seq[0]}，典型诱盘，杀{bs_seq[0]}"
+    else:
+        cnt_0 = bs_seq.count(bs_seq[0])
+        if cnt_0 >= 3:
+            main_bs, kill_bs = ("小", "大") if bs_seq[0] == "大" else ("大", "小")
+            reason_bs = f"【频次杀热】{bs_seq[0]}出号极多，防守回落，杀{bs_seq[0]}"
         else:
-            return f"跟", seq[0], f"【无序震荡】根据最新落点{seq[0]}顺延，杀反向"
+            main_bs = bs_seq[0]
+            kill_bs = "小" if bs_seq[0] == "大" else "大"
+            reason_bs = f"【无序震荡】顺延上期{bs_seq[0]}"
 
-    # 获取大小、单双的判定
-    _, kill_bs, reason_bs = analyze_trend(bs_seq, "大小")
-    _, kill_oe, reason_oe = analyze_trend(oe_seq, "单双")
-    
-    # 初步绝杀方向
+    # --- 2. 单双判定 ---
+    if oe_seq[0] == oe_seq[1] == oe_seq[2] == oe_seq[3]:
+        main_oe, kill_oe = ("双", "单") if oe_seq[0] == "单" else ("单", "双")
+        reason_oe = f"【极值反杀】连开4期{oe_seq[0]}，物极必反，杀{oe_seq[0]}"
+    elif oe_seq[0] == oe_seq[1] == oe_seq[2] or oe_seq[0] == oe_seq[1]:
+        main_oe = oe_seq[0]
+        kill_oe = "双" if oe_seq[0] == "单" else "单"
+        reason_oe = f"【短龙顺跟】连开{oe_seq[0]}，顺势跟风，杀反向"
+    elif oe_seq[0] == oe_seq[2] and oe_seq[0] != oe_seq[1]:
+        main_oe = "双" if oe_seq[0] == "单" else "单"
+        kill_oe = oe_seq[0]
+        reason_oe = f"【假突破杀】走势诱盘，杀{oe_seq[0]}"
+    else:
+        cnt_0 = oe_seq.count(oe_seq[0])
+        if cnt_0 >= 3:
+            main_oe, kill_oe = ("双", "单") if oe_seq[0] == "单" else ("单", "双")
+            reason_oe = f"【频次杀热】{oe_seq[0]}出号极多，杀{oe_seq[0]}"
+        else:
+            main_oe = oe_seq[0]
+            kill_oe = "双" if oe_seq[0] == "单" else "单"
+            reason_oe = f"【无序震荡】顺延上期{oe_seq[0]}"
+
+    # --- 3. 组合与安全校验 ---
+    main_vote = main_bs + main_oe
     kill_str = kill_bs + kill_oe
     
-    # 判断主攻（取杀项的反面）
-    main_bs = "小" if kill_bs == "大" else "大"
-    main_oe = "双" if kill_oe == "单" else "单"
-    main_vote = main_bs + main_oe
+    # 强制互斥：如果算出来主攻=绝杀，直接打自己脸，重新分配
+    if main_vote == kill_str:
+        main_vote = "小双" if main_vote != "小双" else "大单"
 
-    # ================== 🔥 核心“过段”机制 ==================
-    # 如果这期绝杀跟上期一样，增加连杀计数
+    # --- 4. 过段熔断机制 ---
     if kill_str == LAST_KILL_STR[gt]:
         KILL_STREAK_COUNT[gt] += 1
     else:
@@ -88,19 +104,18 @@ def calculate_prediction(gt, history, next_p):
         
     LAST_KILL_STR[gt] = kill_str
 
-    # 如果连杀达到 3 期，触发过段熔断！强制换杀
     if KILL_STREAK_COUNT[gt] >= 3:
         all_opts = ["大单", "大双", "小单", "小双"]
-        # 从不是 kill_str 且不是 main_vote 的池子里强行抽一个顶替
         available_kills = [opt for opt in all_opts if opt != kill_str and opt != main_vote]
         kill_str = random.choice(available_kills)
-        # 此时主攻/防守/备选分配需要洗牌
-        reason_bs += " (触发过段熔断)"
-        reason_oe += " (强制打破连杀魔咒)"
-        KILL_STREAK_COUNT[gt] = 1 # 过段后重置
+        KILL_STREAK_COUNT[gt] = 1
         LAST_KILL_STR[gt] = kill_str
+        reason_bs += " (触发熔断)"
+        # 再次校验主攻与绝杀
+        if main_vote == kill_str:
+            main_vote = [opt for opt in all_opts if opt != kill_str][0]
 
-    # ================== 绝对互斥分配 ==================
+    # --- 5. 绝对互斥分配 ---
     all_options = ["大单", "大双", "小单", "小双"]
     available_recs = [opt for opt in all_options if opt != kill_str and opt != main_vote]
     defend = available_recs[0]
@@ -108,15 +123,14 @@ def calculate_prediction(gt, history, next_p):
 
     # 组装推演明细
     algo_list = [
-        {"name": "大小维度推演", "vote": main_bs, "detail": reason_bs},
-        {"name": "单双维度推演", "vote": main_oe, "detail": reason_oe},
-        {"name": "过段风控", "vote": "状态良好" if KILL_STREAK_COUNT[gt] < 3 else "已熔断换杀", "detail": f"当前绝杀连击状态：第{KILL_STREAK_COUNT[gt]}次"}
+        {"name": "大小判定", "vote": main_bs, "detail": reason_bs},
+        {"name": "单双判定", "vote": main_oe, "detail": reason_oe},
+        {"name": "过段风控", "vote": "正常", "detail": f"当前绝杀连击：{KILL_STREAK_COUNT[gt]}/3"}
     ]
 
-    analysis = f"【多段位高强度博弈推演】\n"
+    analysis = f"【多段位博弈推演】\n"
     analysis += f"- 大小判定：{reason_bs}\n"
     analysis += f"- 单双判定：{reason_oe}\n"
-    analysis += f"- 绝杀状态：当前为第 {KILL_STREAK_COUNT[gt]} 期连杀该方向 (3连触发强制过段)。\n"
     analysis += f"\n🎯 终极决断：主攻【{main_vote}】，坚决绝杀【{kill_str}】！"
 
     return {
@@ -312,7 +326,7 @@ def index():
     </div>
 <script>
     let curG = '2', timer = null;
-    const KEY = "high_win_v43";
+    const KEY = "high_win_v44";
     
     function switchG(g, el) {
         curG = g;
