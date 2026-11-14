@@ -12,7 +12,7 @@ from flask import Flask, request, jsonify
 from datetime import datetime, timedelta
 
 app = Flask(__name__)
-SECRET_KEY = "ultimate_blockchain_sniper"
+SECRET_KEY = "ultimate_blockchain_sniper_v3"
 
 GAMES = {
     "2": {"name": "加拿大28", "url": "https://yc28cn-ml1l.onrender.com/vipASDFGHJKLQQQWERTYUIOPWW9983/8626/0549CASWWW?type=2", "interval": 210},
@@ -21,12 +21,11 @@ GAMES = {
 }
 
 AI_STATUS = {"online": True, "msg": "系统运转中"}
-# 增加 snipe_done 状态标记，防止一期内重复压秒
 LIVE_DATA = {gt: {"period": "", "next": "", "left": 0, "history": [], "pred": None, "btc_hash": None, "snipe_done": False} for gt in GAMES}
 
 # ================== 数据库 ==================
 def db():
-    conn = sqlite3.connect('predict_sniper.db', timeout=30)
+    conn = sqlite3.connect('predict_sniper_v3.db', timeout=30)
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -41,45 +40,52 @@ with db() as conn:
             conn.execute("INSERT OR IGNORE INTO algo_pool (gtype, algo_id, streak) VALUES (?, ?, 0)", (gt, i))
     conn.commit()
 
-# ================== 区块链压秒狙击计算 ==================
+# ================== 区块链压秒狙击计算 (已修复加和逻辑) ==================
 def calculate_btc_hash_logic(seed_string):
     try:
         sha256_hash = hashlib.sha256(seed_string.encode('utf-8')).hexdigest()
         first_16 = sha256_hash[:16]
         dec_val = int(first_16, 16)
         result_float = dec_val / (2**64)
+        
+        # 提取小数点后3位字符串
         str_val = f"{result_float:.10f}"
         decimal_part = str_val.split('.')[1][:3]
+        
+        # 【核心修复】：拆分百位、十位、个位，然后相加
+        d1, d2, d3 = int(decimal_part[0]), int(decimal_part[1]), int(decimal_part[2])
+        total = d1 + d2 + d3
+        
+        # 严格按照真实规则：0-13为小，14-27为大；奇数单，偶数双
+        big_small = "大" if total >= 14 else "小"
+        odd_even = "单" if total % 2 != 0 else "双"
         
         return {
             "hash": sha256_hash,
             "first_16": first_16,
             "dec": dec_val,
             "float": result_float,
-            "result": int(decimal_part),
-            "combo": ("大" if int(decimal_part) >= 14 else "小") + ("单" if int(decimal_part) % 2 != 0 else "双")
+            "nums_str": f"{d1} + {d2} + {d3}", # 展示给前端看
+            "total": total,
+            "combo": big_small + odd_even
         }
-    except Exception:
+    except Exception as e:
         return None
 
-# 极速获取（使用 mempool.space 接口，比 blockchain.info 更快）
 def get_live_blockchain_prediction():
     ctx = ssl._create_unverified_context()
     try:
-        # 获取最近的交易，速度极快
         url = "https://mempool.space/api/mempool/recent"
         req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-        with urllib.request.urlopen(req, timeout=3, context=ctx) as resp:
+        # 缩短超时时间，确保3秒内完成抓取
+        with urllib.request.urlopen(req, timeout=2, context=ctx) as resp:
             data = json.loads(resp.read().decode('utf-8'))
-            # 按照平台的逻辑，将哈希字符串拼接
-            # mempool.space 返回格式: [{"txid": "...", "fee": ...}, ...]
             combined_str = "".join([tx['txid'] for tx in data])
             return calculate_btc_hash_logic(combined_str)
-    except Exception as e:
-        print("狙击抓取失败:", e)
+    except Exception:
         return None
 
-# ================== 6算法共识引擎 (保持不变) ==================
+# ================== 6算法共识引擎 ==================
 def run_single_algo(algo_id, h7):
     bs = [1 if h['big_small'] == '大' else 0 for h in h7]
     oe = [1 if h['odd_even'] == '单' else 0 for h in h7]
@@ -172,7 +178,7 @@ def calculate_consensus(gtype, history):
         "analysis": body + outro, "algo_ids": ",".join([str(a['id']) for a in algo_records])
     }
 
-# ================== 主循环 (加入压秒狙击) ==================
+# ================== 抓取与结算 ==================
 def fetch_loop():
     ctx = ssl._create_unverified_context()
     while True:
@@ -185,7 +191,6 @@ def fetch_loop():
                         latest = data['data'][0]
                         history = [{"period": i['period'], "nums": f"{i['num1']} + {i['num2']} + {i['num3']}", "total": i['total'], "big_small": i['big_small'], "odd_even": i['odd_even']} for i in data['data'][:20]]
                         
-                        # 发现新的一期开奖了
                         if LIVE_DATA[gt]['period'] != latest['period']:
                             if LIVE_DATA[gt]['period'] != "" and LIVE_DATA[gt]['pred']:
                                 real = latest['big_small'] + latest['odd_even']
@@ -205,8 +210,8 @@ def fetch_loop():
                                 "period": latest['period'], "next": str(int(latest['period'])+1),
                                 "target_time": (dt - timedelta(hours=8) + timedelta(seconds=cfg['interval'])).timestamp(), 
                                 "history": history,
-                                "snipe_done": False,  # 重置压秒状态
-                                "btc_hash": None      # 清空上期哈希
+                                "snipe_done": False,
+                                "btc_hash": None
                             })
                             
                             pred = calculate_consensus(gt, history)
@@ -217,16 +222,13 @@ def fetch_loop():
                                              (gt, LIVE_DATA[gt]['next'], pred["kill"], pred["rec"], pred["analysis"], pred["algo_ids"]))
                                 conn.commit()
                                 
-                        # 计算倒计时
                         diff = LIVE_DATA[gt]['target_time'] - datetime.utcnow().timestamp()
                         LIVE_DATA[gt]['left'] = max(0, int(diff))
                         
-                        # 🚨 核心：压秒狙击逻辑 (只针对比特和分分)
+                        # 【修改点】：改为倒计时 3 秒触发抓取
                         if gt in ("3", "13"):
-                            # 如果距离下期开奖只剩 4 秒，且还没压秒过，立即触发抓取
-                            if 0 < diff <= 4 and not LIVE_DATA[gt]['snipe_done']:
+                            if 0 < diff <= 3 and not LIVE_DATA[gt]['snipe_done']:
                                 AI_STATUS["msg"] = "压秒狙击触发！正在截胡..."
-                                print(f"⚡ {cfg['name']} 触发压秒狙击，正在极速抓取哈希...")
                                 btc_pred = get_live_blockchain_prediction()
                                 if btc_pred:
                                     LIVE_DATA[gt]["btc_hash"] = btc_pred
@@ -235,11 +237,11 @@ def fetch_loop():
                                 
             except Exception:
                 pass
-        time.sleep(0.5) # 稍微加快主循环频率
+        time.sleep(0.5)
 
 threading.Thread(target=fetch_loop, daemon=True).start()
 
-# ================== API 与 前端 (保持不变) ==================
+# ================== API 与 前端 ==================
 def verify(): return request.headers.get('X-Token') == SECRET_KEY
 
 @app.route('/api/data/<gt>')
@@ -313,7 +315,6 @@ def index():
         .cd-box { text-align: center; font-size: 14px; color: #636e72; margin-bottom: 10px;}
         .cd { font-size: 22px; color: #0984e3; font-weight: bold; }
         
-        /* 倒计时变红闪烁 */
         .cd.danger { color: #d63031; animation: flash 0.5s infinite alternate;}
         @keyframes flash { 0% { opacity: 0.4; } 100% { opacity: 1; } }
 
@@ -322,8 +323,9 @@ def index():
         .btc-box { display: none; background: #222f3e; color: #c8d6e5; margin: 12px; padding: 15px; border-radius: 12px; font-family: monospace; box-shadow: 0 4px 15px rgba(0,0,0,0.2); }
         .btc-title { color: #feca57; font-weight: bold; margin-bottom: 10px; font-size: 14px; display: flex; justify-content: space-between;}
         .btc-result { font-size: 36px; font-weight: bold; color: #1dd1a1; text-align: center; margin: 10px 0; text-shadow: 0 0 10px rgba(29, 209, 161, 0.5);}
-        .btc-detail { font-size: 11px; word-break: break-all; margin-bottom: 5px; color: #8395a7;}
-        .btc-detail span { color: #c8d6e5; }
+        .btc-nums { font-size: 18px; color: #feca57; text-align: center; margin-bottom: 10px; font-weight: bold; letter-spacing: 2px;}
+        .btc-detail { font-size: 12px; word-break: break-all; margin-bottom: 5px; color: #8395a7;}
+        .btc-detail span { color: #c8d6e5;}
 
         .log-item { border-bottom: 1px solid #f1f2f6; padding: 10px 0; font-size: 13px; display: flex; justify-content: space-between; }
         .win { color: #00b894; font-weight: bold; } .lose { color: #d63031; font-weight: bold; }
@@ -347,19 +349,19 @@ def index():
         <div class="stats-item">总被杀<span class="stats-val lose" id="st-tl">0</span></div>
     </div>
 
-    <!-- 压秒狙击面板 -->
     <div class="btc-box" id="btc-box">
         <div class="btc-title">
-            <span>⛓️ 压秒哈希狙击 (倒计时4秒触发)</span>
+            <span>⛓️ 压秒真实抓取 (倒计时3秒触发)</span>
             <span style="color:#ff6b6b;" id="btc-status">等待触发...</span>
         </div>
         <div class="btc-result" id="btc-res">--</div>
+        <div class="btc-nums" id="btc-nums">- + - + - = -</div>
         <div class="btc-detail">哈希头: <span id="btc-hash">--</span></div>
         <div class="btc-detail">前16位: <span id="btc-16">--</span></div>
         <div class="btc-detail">10进制: <span id="btc-dec">--</span></div>
         <div class="btc-detail">除以2^64: <span id="btc-float">--</span></div>
         <div style="color:#ff9f43; font-size:12px; margin-top:8px; border-top: 1px dashed #576574; padding-top: 8px;">
-            * 极速引擎会在开奖前 4 秒瞬间抓取比特币内存池，计算最终结果。与平台拼手速！
+            * 极速引擎会在开奖前 3 秒瞬间抓取真实比特币内存池，计算最终结果。与平台拼手速！
         </div>
     </div>
 
@@ -384,7 +386,7 @@ def index():
     </div>
 <script>
     let curG = '2', timer = null;
-    const KEY = "ultimate_blockchain_sniper";
+    const KEY = "ultimate_blockchain_sniper_v3";
     function switchG(g, el) {
         curG = g;
         document.querySelectorAll('.tab').forEach(t => t.classList.remove('on'));
@@ -404,21 +406,22 @@ def index():
                     <div>${h.big_small}${h.odd_even}</div>
                 </div>`).join('');
 
-            // 只在分分和比特显示区块链
             if (curG === '3' || curG === '13') {
                 if (d.btc_hash) {
                     document.getElementById('btc-box').style.display = 'block';
-                    document.getElementById('btc-res').innerText = d.btc_hash.result + " (" + d.btc_hash.combo + ")";
+                    document.getElementById('btc-res').innerText = d.btc_hash.total + " (" + d.btc_hash.combo + ")";
+                    document.getElementById('btc-nums').innerText = d.btc_hash.nums_str + " = " + d.btc_hash.total;
                     document.getElementById('btc-hash').innerText = d.btc_hash.hash.slice(0, 20) + "...";
                     document.getElementById('btc-16').innerText = d.btc_hash.first_16;
                     document.getElementById('btc-dec').innerText = d.btc_hash.dec;
                     document.getElementById('btc-float').innerText = d.btc_hash.float.toFixed(10);
-                    document.getElementById('btc-status').innerText = "压秒截胡成功！";
+                    document.getElementById('btc-status').innerText = "压秒抓取成功！";
                     document.getElementById('btc-status').style.color = "#1dd1a1";
                 } else {
                     document.getElementById('btc-box').style.display = 'block';
                     document.getElementById('btc-res').innerText = "--";
-                    document.getElementById('btc-status').innerText = "等待最后4秒...";
+                    document.getElementById('btc-nums').innerText = "- + - + - = -";
+                    document.getElementById('btc-status').innerText = "等待最后3秒...";
                     document.getElementById('btc-status').style.color = "#ff9f43";
                 }
             } else {
@@ -444,10 +447,11 @@ def index():
                 if(left <= 0) { cdEl.innerText = "开奖中..."; cdEl.classList.add('danger'); return; }
                 left--;
                 cdEl.innerText = `${Math.floor(left/60).toString().padStart(2,'0')}:${(left%60).toString().padStart(2,'0')}`;
-                if (left <= 5) cdEl.classList.add('danger'); else cdEl.classList.remove('danger');
+                if (left <= 3) cdEl.classList.add('danger'); else cdEl.classList.remove('danger'); // 倒计时3秒变红
             }, 1000);
         });
     }
+    
     function fetchLogs() {
         fetch(`/api/logs/${curG}`, { headers: {'X-Token': KEY} }).then(r => r.json()).then(res => {
             document.getElementById('st-cw').innerText = res.stats.current_win;
@@ -455,11 +459,12 @@ def index():
             document.getElementById('st-tw').innerText = res.stats.total_win;
             document.getElementById('st-tl').innerText = res.stats.total_lose;
             
+            // 恢复之前的全称格式
             document.getElementById('logs').innerHTML = res.logs.map(l => `
                 <div class="log-item">
                     <div>
                         <div style="color:#b2bec3; font-size:12px;">${l.period}</div>
-                        <div>绝杀:<span class="lose">${l.kill}</span> | 推荐:${l.rec.split('、')[0]}</div>
+                        <div>绝杀:<span class="lose">${l.kill}</span> | 推荐:${l.rec}</div>
                     </div>
                     <div style="text-align:right">
                         <div class="${l.status === 'win' ? 'win' : (l.status === 'lose' ? 'lose' : '')}">
@@ -475,7 +480,7 @@ def index():
         fetch(`/api/clear/${curG}`, { method: 'POST', headers: {'X-Token': KEY} }).then(() => fetchLogs());
     }
     fetchData(); fetchLogs();
-    setInterval(fetchData, 1000); // 加快前端刷新率，应对最后几秒
+    setInterval(fetchData, 1000);
     setInterval(fetchLogs, 5000);
 </script>
 </body>
