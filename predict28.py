@@ -6,13 +6,14 @@ import threading
 import os
 import sqlite3
 import re
+from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from flask import Flask, request, jsonify
 from datetime import datetime, timedelta
 
 app = Flask(__name__)
-SECRET_KEY = "ultimate_ai_only_v2"
+SECRET_KEY = "ultimate_ai_flash_v3"
 
-# ================== DeepSeek AI 核心配置 ==================
+# ================== DeepSeek 核心配置 ==================
 DEEPSEEK_API_KEY = "sk-43c18b39aeb346fc841937b30cade25b"
 DEEPSEEK_API_URL = "https://api.deepseek.com/chat/completions"
 
@@ -29,9 +30,12 @@ LIVE_DATA = {
     "13": {"period": "", "next": "", "left": 0, "history": [], "pred": None}
 }
 
+# 线程池执行器，保障10秒内极速响应
+executor = ThreadPoolExecutor(max_workers=5)
+
 # ================== 数据库 ==================
 def db():
-    conn = sqlite3.connect('predict_ai_v2.db', timeout=30)
+    conn = sqlite3.connect('predict_ai_flash.db', timeout=30)
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -43,16 +47,17 @@ with db() as conn:
     )''')
     conn.commit()
 
-# ================== 纯 AI 预测引擎 (注入50个目标) ==================
+# ================== 极速 AI 预测引擎 ==================
 def call_deepseek_ai(game_name, history, next_period):
+    # 严格只截取近 7 期数据
     history_text = ""
-    for i, h in enumerate(history[:10]):
+    for i, h in enumerate(history[:7]):
         history_text += f"期号{next_period}-{i+1}: {h['nums']} = {h['total']} ({h['big_small']}{h['odd_even']})\n"
 
     prompt = f"""
     【系统指令】
     你是一个顶级的数字盘口博弈论专家与量化推演模型。当前游戏：【{game_name}】 目标期号：【{next_period}】
-    近 10 期真实盘面数据如下：
+    近 7 期真实盘面数据如下：
     {history_text}
 
     【50项极度严苛的推演目标（必须逐一在后台逻辑中计算，并体现在最终分析中）】
@@ -72,7 +77,7 @@ def call_deepseek_ai(game_name, history, next_period):
     2. 必须在【大单、大双、小单、小双】四个选项中：
        - 斩杀 1 个（绝杀）
        - 推荐 3 个作为防守组合，分别标注为：【主攻】、【防守】、【备选】。
-    3. 必须写一段 150 - 500 字的深度推演分析（不包含标点符号）。字数必须严格控制在这个区间内！分析要犀利，且必须结合近 10 期的具体期号和开奖结果。
+    3. 必须写一段 150 - 500 字的深度推演分析（不包含标点符号）。字数必须严格控制在这个区间内！分析要犀利，且必须结合近 7 期的具体期号和开奖结果。
     4. 绝不能包含任何 Markdown 标记，必须返回纯 JSON 格式：
 
     {{
@@ -89,22 +94,25 @@ def call_deepseek_ai(game_name, history, next_period):
         "Content-Type": "application/json"
     }
     
+    # 开启深度思考模式（deepseek-flash + thinking: enabled + reasoning_effort: high）
     data = {
-        "model": "deepseek-chat",
+        "model": "deepseek-flash",
         "messages": [
             {"role": "system", "content": "你是AI预测机器，只输出纯JSON字符串，绝不带任何Markdown格式（如```json）。"},
             {"role": "user", "content": prompt}
         ],
-        "temperature": 0.7,
-        "max_tokens": 2000,
-        "response_format": {"type": "json_object"}
+        "reasoning_effort": "high",
+        "max_tokens": 2500,
+        "response_format": {"type": "json_object"},
+        "extra_body": {"thinking": {"type": "enabled"}}
     }
 
     try:
         req = urllib.request.Request(DEEPSEEK_API_URL, data=json.dumps(data).encode('utf-8'), headers=headers)
         ctx = ssl._create_unverified_context()
         
-        with urllib.request.urlopen(req, timeout=60, context=ctx) as resp:
+        # 将超时严格卡在 9.5 秒内，配合线程池实现开奖后10秒内响应
+        with urllib.request.urlopen(req, timeout=9.5, context=ctx) as resp:
             res_data = json.loads(resp.read().decode('utf-8'))
             content = res_data['choices'][0]['message']['content']
             parsed = json.loads(content)
@@ -112,17 +120,22 @@ def call_deepseek_ai(game_name, history, next_period):
             rec_str = f"{parsed['main']}(主攻)、{parsed['defend']}(防守)、{parsed['backup']}(备选)"
             
             AI_STATUS["online"] = True
-            AI_STATUS["msg"] = "DeepSeek-V3 深度推演完成"
+            AI_STATUS["msg"] = "DeepSeek-Flash 深度思考完成"
             
             return {
                 "kill": parsed['kill'],
                 "rec": rec_str,
                 "analysis": parsed['analysis']
             }
+    except TimeoutError:
+        print("AI Error: 请求超时（超过9.5秒）")
+        AI_STATUS["online"] = False
+        AI_STATUS["msg"] = "AI 响应超时"
+        return None
     except Exception as e:
         print(f"AI Error: {e}")
         AI_STATUS["online"] = False
-        AI_STATUS["msg"] = "AI 接口超时或被限制"
+        AI_STATUS["msg"] = "AI 接口异常"
         return None
 
 # ================== 抓取与结算引擎 ==================
@@ -139,6 +152,7 @@ def fetch_loop():
                         history = [{"period": i['period'], "nums": f"{i['num1']} + {i['num2']} + {i['num3']}", "total": i['total'], "big_small": i['big_small'], "odd_even": i['odd_even']} for i in data['data'][:20]]
                         
                         if LIVE_DATA[gt]['period'] != latest['period']:
+                            # 结算上一期
                             if LIVE_DATA[gt]['period'] != "" and LIVE_DATA[gt]['pred'] is not None:
                                 real = latest['big_small'] + latest['odd_even']
                                 with db() as conn:
@@ -156,11 +170,19 @@ def fetch_loop():
                                 "target_time": next_utc.timestamp(), "history": history
                             })
                             
-                            AI_STATUS["msg"] = "正在请求 DeepSeek-V3 执行50项推演..."
+                            AI_STATUS["msg"] = "DeepSeek-Flash 极速思考中..."
                             AI_STATUS["online"] = True
                             
-                            print(f"🚀 请求 DeepSeek 分析 {cfg['name']} 第 {LIVE_DATA[gt]['next']} 期...")
-                            pred = call_deepseek_ai(cfg['name'], history, LIVE_DATA[gt]['next'])
+                            print(f"🚀 请求 DeepSeek-Flash 分析 {cfg['name']} 第 {LIVE_DATA[gt]['next']} 期 (近7期数据)...")
+                            
+                            # 使用线程池非阻塞提交，配合 9.5 秒超时
+                            future = executor.submit(call_deepseek_ai, cfg['name'], history, LIVE_DATA[gt]['next'])
+                            try:
+                                pred = future.result(timeout=9.5)
+                            except TimeoutError:
+                                pred = None
+                                AI_STATUS["online"] = False
+                                AI_STATUS["msg"] = "AI 响应超时"
                             
                             if pred:
                                 LIVE_DATA[gt]['pred'] = pred
@@ -222,7 +244,7 @@ def index():
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-    <title>DeepSeek 纯 AI 预测</title>
+    <title>DeepSeek-Flash 极速纯 AI 预测</title>
     <style>
         * { box-sizing: border-box; }
         body { background: #f4f6f9; margin: 0; font-family: -apple-system, sans-serif; color: #333; }
@@ -269,7 +291,7 @@ def index():
     </style>
 </head>
 <body>
-    <div class="head">DeepSeek 纯 AI 预测</div>
+    <div class="head">DeepSeek-Flash 极速纯 AI 预测</div>
     <div class="status" id="status"><span class="dot off"></span> AI 接口未连接</div>
     
     <div class="tabs">
@@ -309,7 +331,7 @@ def index():
 
 <script>
     let curG = '2', timer = null;
-    const KEY = "ultimate_ai_only_v2";
+    const KEY = "ultimate_ai_flash_v3";
 
     function switchG(g, el) {
         curG = g;
@@ -374,7 +396,7 @@ def index():
                         <div class="${l.status === 'win' ? 'win' : (l.status === 'lose' ? 'lose' : '')}">
                             ${l.status === 'win' ? '🀄 命中' : (l.status === 'lose' ? '💀 被杀' : '⏳ 等待')}
                         </div>
-                        <div style="color:#b2bec3; font-size:12px;">${l.result ? `(实开:${l.result})` : (l.real_result ? `(实开:${l.real_result})` : '')}</div>
+                        <div style="color:#b2bec3; font-size:12px;">${l.real_result ? `(实开:${l.real_result})` : ''}</div>
                     </div>
                 </div>`).join('') || '<div style="text-align:center; padding:20px;">暂无记录</div>';
         });
