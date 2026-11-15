@@ -5,11 +5,12 @@ import time
 import threading
 import os
 import sqlite3
+from collections import Counter
 from flask import Flask, request, jsonify
 from datetime import datetime, timedelta
 
 app = Flask(__name__)
-SECRET_KEY = "simple_combo_v56"
+SECRET_KEY = "simple_combo_v57"
 
 GAMES = {
     "2": {"name": "加拿大28", "url": "https://yc28cn-ml1l.onrender.com/vipASDFGHJKLQQQWERTYUIOPWW9983/8626/0549CASWWW?type=2", "interval": 210},
@@ -17,11 +18,11 @@ GAMES = {
     "13": {"name": "比特28", "url": "https://yc28cn-ml1l.onrender.com/vipASDFGHJKLQQZXCVBNMWW9983/8626/0549CCBDR?type=13", "interval": 60}
 }
 
-AI_STATUS = {"online": True, "msg": "近40期多跟少反推演中..."}
+AI_STATUS = {"online": True, "msg": "近25期多跟少反推演中..."}
 LIVE_DATA = {gt: {"period": "", "next": "", "left": 0, "history": [], "pred": None, "algo_list": []} for gt in GAMES}
 
 def db():
-    conn = sqlite3.connect('predict_v56.db', timeout=30)
+    conn = sqlite3.connect('predict_v57.db', timeout=30)
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -31,9 +32,9 @@ with db() as conn:
         analysis TEXT, real_result TEXT DEFAULT '', status TEXT DEFAULT 'wait')''')
     conn.commit()
 
-# ================== 40期多跟少反推演引擎 ==================
-def calculate_prediction(gt, history, next_p):
-    h_len = min(40, len(history))
+# ================== 精简版 25期推演引擎 ==================
+def calculate_prediction(history, next_p):
+    h_len = min(25, len(history))
     if h_len < 10:
         return {"kill": "", "rec": "数据不足", "analysis": "等待数据...", "algo_list": []}
         
@@ -41,66 +42,41 @@ def calculate_prediction(gt, history, next_p):
     bs_list = [h['big_small'] for h in hx]
     oe_list = [h['odd_even'] for h in hx]
     
-    big_cnt = bs_list.count('大')
-    small_cnt = bs_list.count('小')
-    odd_cnt = oe_list.count('单')
-    even_cnt = oe_list.count('双')
+    bs_cnt = Counter(bs_list)
+    oe_cnt = Counter(oe_list)
     
-    # 【核心修改：多跟少反】谁多推谁，谁少杀谁
-    push_bs = "大" if big_cnt >= small_cnt else "小"
-    kill_bs = "小" if push_bs == "大" else "大"
-    
-    push_oe = "单" if odd_cnt >= even_cnt else "双"
-    kill_oe = "双" if push_oe == "单" else "单"
+    # 多跟少反
+    push_bs = "大" if bs_cnt['大'] >= bs_cnt['小'] else "小"
+    push_oe = "单" if oe_cnt['单'] >= oe_cnt['双'] else "双"
 
-    # 检测长龙 (>=6连)
+    # 长龙检测
     def check_dragon(seq):
         streak = 1
         for i in range(1, len(seq)):
             if seq[i] == seq[0]: streak += 1
             else: break
-        return streak >= 6, streak, seq[0]
+        return streak if streak >= 6 else 0, seq[0]
 
-    has_bs_dragon, bs_streak, bs_dragon_type = check_dragon(bs_list)
-    has_oe_dragon, oe_streak, oe_dragon_type = check_dragon(oe_list)
+    bs_streak, bs_type = check_dragon(bs_list)
+    oe_streak, oe_type = check_dragon(oe_list)
 
-    dragon_msg = ""
+    dragon_msg = []
+    if bs_streak: push_bs = bs_type; dragon_msg.append(f"大小连开{bs_streak}期{bs_type}")
+    if oe_streak: push_oe = oe_type; dragon_msg.append(f"单双连开{oe_streak}期{oe_type}")
     
-    # 长龙防回马枪逻辑：顺势跟长龙
-    if has_bs_dragon:
-        push_bs = bs_dragon_type 
-        kill_bs = "小" if push_bs == "大" else "大"
-        dragon_msg += f"【大小长龙】已连开 {bs_streak} 期【{bs_dragon_type}】，顺势跟进，防回马枪。\n"
-        
-    if has_oe_dragon:
-        push_oe = oe_dragon_type
-        kill_oe = "双" if push_oe == "单" else "单"
-        dragon_msg += f"【单双长龙】已连开 {oe_streak} 期【{oe_dragon_type}】，顺势跟进，防回马枪。\n"
+    msg = "【长龙防回马枪】" + "，".join(dragon_msg) + "。" if dragon_msg else "【盘面平稳】多跟少反原则。"
 
-    if not dragon_msg:
-        dragon_msg = "【盘面平稳】遵循多跟少反原则。\n"
-
-    # 组合
+    # 组合与反推击杀（用于后端判定胜负）
     push_combo = f"{push_bs} ➕ {push_oe}"
-    kill_combo = f"{kill_bs} ➕ {kill_oe}"
+    kill_combo = f"{'小' if push_bs == '大' else '大'} ➕ {'双' if push_oe == '单' else '单'}"
 
-    analysis = f"【近{h_len}期多跟少反推演】\n"
-    analysis += f"- 大小统计：大({big_cnt}) / 小({small_cnt})\n"
-    analysis += f"- 单双统计：单({odd_cnt}) / 双({even_cnt})\n"
-    analysis += f"- {dragon_msg}"
-    analysis += f"\n🎯 推出组合：{push_combo}\n"
-    analysis += f"注：只要开出包含推出属性的组合（如推大单，开大双或小单），均算中奖！"
-
-    algo_list = [
-        {"name": "大小风向", "vote": push_bs, "detail": f"大{big_cnt} 小{small_cnt}"},
-        {"name": "单双风向", "vote": push_oe, "detail": f"单{odd_cnt} 双{even_cnt}"}
-    ]
+    analysis = f"【近{h_len}期多跟少反推演】\n- 大小统计：大({bs_cnt['大']}) / 小({bs_cnt['小']})\n"
+    analysis += f"- 单双统计：单({oe_cnt['单']}) / 双({oe_cnt['双']})\n- {msg}\n\n"
+    analysis += f"🎯 推出组合：{push_combo}\n注：只要开出包含推出属性的组合均算中奖！"
 
     return {
-        "kill": kill_combo, 
-        "rec": push_combo, 
-        "analysis": analysis, 
-        "algo_list": algo_list
+        "kill": kill_combo, "rec": push_combo, "analysis": analysis, 
+        "algo_list": [{"name": "大小", "vote": push_bs, "detail": "多跟少反"}, {"name": "单双", "vote": push_oe, "detail": "多跟少反"}]
     }
 
 # ================== 极速抓取主循环 ==================
@@ -109,70 +85,47 @@ def fetch_loop():
     while True:
         for gt, cfg in GAMES.items():
             try:
-                req_url = f"{cfg['url']}&_={int(time.time()*1000)}"
-                req = urllib.request.Request(req_url, headers={'User-Agent': 'Mozilla/5.0'})
+                req = urllib.request.Request(f"{cfg['url']}&_={int(time.time()*1000)}", headers={'User-Agent': 'Mozilla/5.0'})
                 with urllib.request.urlopen(req, timeout=5, context=ctx) as resp:
-                    data = json.loads(resp.read().decode('utf-8'))
-                    if data.get('data'):
-                        raw_data = data['data'][:60] 
-                        latest = raw_data[0]
-                        
-                        history = [{
-                            "period": i['period'], 
-                            "nums": f"{i['num1']} + {i['num2']} + {i['num3']}", 
-                            "total": i['total'], 
-                            "big_small": i['big_small'], 
-                            "odd_even": i['odd_even']
-                        } for i in raw_data]
+                    data = json.loads(resp.read().decode('utf-8')).get('data')
+                    if data:
+                        latest = data[0]
+                        history = [{"period": i['period'], "nums": f"{i['num1']} + {i['num2']} + {i['num3']}", "total": i['total'], "big_small": i['big_small'], "odd_even": i['odd_even']} for i in data[:25]]
                         
                         if LIVE_DATA[gt]['period'] != latest['period']:
-                            # 发现新开奖，立刻修改状态
-                            AI_STATUS["msg"] = "发现新开奖，正在极速预测中..."
+                            AI_STATUS["msg"] = "正在极速预测中..."
                             
-                            # 结算逻辑
+                            # 结算
                             if LIVE_DATA[gt]['period'] != "" and LIVE_DATA[gt]['pred']:
                                 real = latest['big_small'] + latest['odd_even']
-                                p_kill_combo = LIVE_DATA[gt]['pred']['kill']
-                                
-                                if p_kill_combo:
-                                    k_bs, k_oe = p_kill_combo.replace(" ", "").split("➕")
-                                    # 这里依然严格遵守：开出击杀组合才算输，包含推出属性算赢
-                                    if real == (k_bs + k_oe):
-                                        status = 'lose'
-                                    else:
-                                        status = 'win' 
-                                else:
-                                    status = 'win'
-
+                                k_bs, k_oe = LIVE_DATA[gt]['pred']['kill'].split(" ➕ ")
+                                status = 'lose' if real == (k_bs + k_oe) else 'win'
                                 with db() as conn:
                                     conn.execute("UPDATE logs SET real_result=?, status=? WHERE gtype=? AND period=?", (real, status, gt, latest['period']))
                                     conn.commit()
 
+                            # 预测
                             dt = datetime.strptime(latest['draw_time'], "%Y-%m-%d %H:%M:%S")
                             next_p = str(int(latest['period'])+1)
                             LIVE_DATA[gt].update({
-                                "period": latest['period'], "next": next_p,
+                                "period": latest['period'], "next": next_p, 
                                 "target_time": (dt - timedelta(hours=8) + timedelta(seconds=cfg['interval'])).timestamp(), 
                                 "history": history
                             })
-
-                            pred = calculate_prediction(gt, history, next_p)
+                            
+                            pred = calculate_prediction(history, next_p)
                             LIVE_DATA[gt]['pred'] = pred
                             LIVE_DATA[gt]['algo_list'] = pred['algo_list']
                             
                             with db() as conn:
                                 conn.execute('''INSERT INTO logs (gtype, period, draw_time, kill, rec, analysis) VALUES (?,?,?,?,?,?)''', 
-                                             (gt, LIVE_DATA[gt]['next'], latest['draw_time'], pred["kill"], pred["rec"], pred["analysis"]))
+                                             (gt, next_p, latest['draw_time'], pred["kill"], pred["rec"], pred["analysis"]))
                                 conn.commit()
                                 
-                            # 预测完成，恢复状态
                             AI_STATUS["msg"] = "推演完毕，等待下一期..."
                                 
-                        diff = LIVE_DATA[gt]['target_time'] - datetime.utcnow().timestamp()
-                        LIVE_DATA[gt]['left'] = max(0, int(diff))
-                                
-            except Exception as e:
-                pass
+                        LIVE_DATA[gt]['left'] = max(0, int(LIVE_DATA[gt]['target_time'] - datetime.utcnow().timestamp()))
+            except Exception: pass
         time.sleep(0.1)
 
 threading.Thread(target=fetch_loop, daemon=True).start()
@@ -190,21 +143,16 @@ def api_logs(gt):
     if not verify(): return "<h1>Access Denied</h1>", 403
     with db() as conn:
         logs = conn.execute("SELECT * FROM logs WHERE gtype=? ORDER BY id DESC", (gt,)).fetchall()
-        stats = {"current_win": 0, "current_lose": 0, "total_win": 0, "total_lose": 0}
-        
         settled = [l['status'] for l in logs if l['status'] in ('win', 'lose')]
-        for st in settled:
-            if st == 'win': stats['total_win'] += 1
-            elif st == 'lose': stats['total_lose'] += 1
-            
+        stats = {"current_win": 0, "current_lose": 0, "total_win": settled.count('win'), "total_lose": settled.count('lose')}
+        
         for st in settled:
             if st == 'win': 
                 if stats['current_lose'] > 0: break 
                 stats['current_win'] += 1
-            elif st == 'lose':
+            else: 
                 if stats['current_win'] > 0: break
                 stats['current_lose'] += 1
-                
     return jsonify({"logs": [dict(l) for l in logs], "stats": stats})
 
 @app.route('/api/clear/<gt>', methods=['POST'])
@@ -228,38 +176,29 @@ def index():
         * { box-sizing: border-box; }
         body { background: #f4f6f9; margin: 0; font-family: -apple-system, sans-serif; color: #333; }
         .head { background: #0b0f19; color: #fff; padding: 15px; text-align: center; font-size: 20px; font-weight: bold; }
-        .status { text-align: center; padding: 10px; font-size: 14px; background: #fff; border-bottom: 1px solid #eaeaea; font-weight: bold; display: flex; justify-content: center; align-items: center; transition: all 0.3s;}
+        .status { text-align: center; padding: 10px; font-size: 14px; background: #fff; border-bottom: 1px solid #eaeaea; font-weight: bold; display: flex; justify-content: center; align-items: center;}
         .dot { width: 10px; height: 10px; border-radius: 50%; margin-right: 8px; background: #00b894; box-shadow: 0 0 8px #00b894; animation: p 1.5s infinite;} 
         @keyframes p { 0% { opacity: 1; } 50% { opacity: 0.4; } 100% { opacity: 1; } }
         .tabs { display: flex; padding: 10px; gap: 10px; background: #fff; border-bottom: 1px solid #f1f2f6;}
         .tab { flex: 1; padding: 10px; text-align: center; background: #f0f2f5; border-radius: 8px; font-weight: bold; font-size: 14px; cursor: pointer; }
         .tab.on { background: #0984e3; color: #fff; }
-        
         .stats-bar { display: flex; background: #fff; margin: 12px; padding: 12px 10px; border-radius: 12px; font-size: 13px; font-weight: bold; text-align: center; box-shadow: 0 2px 10px rgba(0,0,0,0.03);}
         .stats-item { flex: 1; border-right: 1px solid #f1f2f6;}
         .stats-item:last-child { border-right: none; }
         .stats-val { display: block; font-size: 20px; margin-top: 4px;}
-        
         .card { background: #fff; margin: 12px; padding: 15px; border-radius: 12px; box-shadow: 0 2px 10px rgba(0,0,0,0.05); }
         .title { font-size: 14px; font-weight: bold; margin-bottom: 10px; color: #2d3436;}
-        
         .history { display: flex; overflow-x: auto; gap: 10px; padding-bottom: 5px; }
         .h-item { background: #f8f9fa; padding: 10px; border-radius: 8px; min-width: 95px; text-align: center; border: 1px solid #eee;}
         .h-period { color: #b2bec3; font-size: 11px;}
         .h-nums { color: #636e72; font-size: 12px; margin: 4px 0; }
         .h-total { color: #d63031; font-weight: bold; font-size: 16px; }
-        
-        .result-box { display: flex; flex-direction: column; gap: 15px; margin-top: 10px; }
-        .res-push { padding: 25px; border-radius: 12px; text-align: center; font-size: 36px; font-weight: 900; letter-spacing: 2px; color: #0984e3; background: #e8f4f8; border: 1px solid #b2d8ef; box-shadow: 0 4px 15px rgba(9,132,227,0.1);}
-        
-        /* 强化分析中的倒计时样式 */
+        .res-push { padding: 25px; border-radius: 12px; text-align: center; font-size: 36px; font-weight: 900; letter-spacing: 2px; color: #0984e3; background: #e8f4f8; border: 1px solid #b2d8ef; margin-top: 10px; }
         .cd-box { text-align: center; font-size: 14px; color: #636e72; margin-bottom: 10px;}
         .cd { font-size: 22px; color: #0984e3; font-weight: bold; }
         .cd.analyzing { color: #d63031; font-size: 20px; animation: flash 0.5s infinite alternate;}
         @keyframes flash { 0% { opacity: 0.4; } 100% { opacity: 1; } }
-        
         .ana { background: #fdfaf6; padding: 15px; border-left: 4px solid #e17055; font-size: 14px; line-height: 1.7; color: #2d3436; white-space: pre-wrap; border-radius: 0 12px 12px 0; margin-top: 15px;}
-        
         .log-item { border-bottom: 1px solid #f1f2f6; padding: 12px 0; font-size: 13px; display: flex; justify-content: space-between; }
         .win { color: #00b894; font-weight: bold; } .lose { color: #d63031; font-weight: bold; }
         .btn-clear { float:right; font-size:12px; padding:5px 10px; border:1px solid #d63031; color:#d63031; border-radius:6px;}
@@ -283,17 +222,13 @@ def index():
     </div>
 
     <div class="card">
-        <div class="title">近 40 期 独立盘面</div>
+        <div class="title">近 25 期 独立盘面</div>
         <div class="history" id="history"></div>
     </div>
     
     <div class="card" id="pred-box" style="display:none">
         <div class="title">目标拦截: <span id="next-period" style="color:#0984e3;"></span></div>
-        
-        <div class="result-box">
-            <div class="res-push">🎯 推出：<span id="rec-item"></span></div>
-        </div>
-
+        <div class="res-push">🎯 推出：<span id="rec-item"></span></div>
         <div class="cd-box" style="margin-top:20px;">状态: <span class="cd" id="cd">--:--</span></div>
         <div class="ana" id="ana"></div>
     </div>
@@ -305,7 +240,7 @@ def index():
     
 <script>
     let curG = '2', timer = null;
-    const KEY = "simple_combo_v56";
+    const KEY = "simple_combo_v57";
     
     function switchG(g, el) {
         curG = g;
@@ -317,21 +252,14 @@ def index():
 
     function fetchData() {
         fetch(`/api/data/${curG}`, { headers: {'X-Token': KEY} }).then(r => r.json()).then(res => {
-            let d = res.data;
-            let st = res.status;
-            
-            // 实时更新顶部状态
+            let d = res.data, st = res.status;
             document.getElementById('status').innerHTML = `<span class="dot" style="background:${st.online ? '#00b894' : '#d63031'}"></span> ${st.msg}`;
-            
             if(!d.period) return;
             
-            document.getElementById('history').innerHTML = d.history.slice(0, 40).map(h => `
-                <div class="h-item">
-                    <div class="h-period">${h.period.slice(-4)}期</div>
-                    <div class="h-nums">${h.nums}</div>
-                    <div class="h-total">${h.total}</div>
-                    <div>${h.big_small}${h.odd_even}</div>
-                </div>`).join('');
+            document.getElementById('history').innerHTML = d.history.map(h => `
+                <div class="h-item"><div class="h-period">${h.period.slice(-4)}期</div>
+                <div class="h-nums">${h.nums}</div><div class="h-total">${h.total}</div>
+                <div>${h.big_small}${h.odd_even}</div></div>`).join('');
 
             if(d.pred) {
                 document.getElementById('pred-box').style.display = 'block';
@@ -341,14 +269,11 @@ def index():
             }
             
             if(timer) clearInterval(timer);
-            let left = d.left || 0;
-            let cdEl = document.getElementById('cd');
+            let left = d.left || 0, cdEl = document.getElementById('cd');
             
-            // 核心修改：开奖瞬间进入疯狂分析状态
             if(left <= 0) {
                 cdEl.innerText = "正在分析预测中...";
                 cdEl.className = 'cd analyzing';
-                // 100毫秒极速轰炸后端，4秒内必定出结果
                 setTimeout(fetchData, 100); 
                 return;
             } else {
@@ -356,16 +281,11 @@ def index():
             }
             
             timer = setInterval(() => {
-                if(left <= 0) { 
-                    clearInterval(timer); 
-                    fetchData(); 
-                    return; 
-                }
+                if(left <= 0) { clearInterval(timer); fetchData(); return; }
                 left--;
                 cdEl.innerText = `${Math.floor(left/60).toString().padStart(2,'0')}:${(left%60).toString().padStart(2,'0')}`;
                 if (left <= 3) cdEl.className = 'cd analyzing'; else cdEl.className = 'cd';
             }, 1000);
-            
         });
     }
     
