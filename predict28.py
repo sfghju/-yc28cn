@@ -12,7 +12,7 @@ from flask import Flask, request, jsonify
 from datetime import datetime, timedelta
 
 app = Flask(__name__)
-SECRET_KEY = "captain_strict_v76"
+SECRET_KEY = "captain_strict_v77"
 
 GAMES = {
     "2": {"name": "加拿大28", "url": "https://yc28cn-ml1l.onrender.com/vipASDFGHJKLQQQWERTYUIOPWW9983/8626/0549CASWWW?type=2", "interval": 210},
@@ -20,11 +20,11 @@ GAMES = {
     "13": {"name": "比特28", "url": "https://yc28cn-ml1l.onrender.com/vipASDFGHJKLQQZXCVBNMWW9983/8626/0549CCBDR?type=13", "interval": 60}
 }
 
-AI_STATUS = {"online": True, "msg": "严格十步漏斗筛选中(近10期回测)..."}
+AI_STATUS = {"online": True, "msg": "严格十步漏斗筛选中(近10期)..."}
 LIVE_DATA = {gt: {"period": "", "next": "", "left": 0, "history": [], "pred": None, "algo_list": []} for gt in GAMES}
 
 def db():
-    conn = sqlite3.connect('predict_strict_v76.db', timeout=30)
+    conn = sqlite3.connect('predict_strict_v77.db', timeout=30)
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -36,7 +36,7 @@ with db() as conn:
     )''')
     conn.commit()
 
-# ================== 200套真实算法引擎 ==================
+# ================== 200套真实算法引擎 (强制去重) ==================
 def run_single_algo(aid, history):
     if len(history) < 10: return "数据不足"
     sums = [h['total'] for h in history]
@@ -45,62 +45,77 @@ def run_single_algo(aid, history):
     
     is_follow = aid <= 100
     model_id = (aid % 10) if is_follow else ((aid - 100) % 10)
-    param = aid // 10
+    param = aid // 10 # 0 到 19 之间
     push_bs, push_oe = 1, 1 
     
-    if model_id == 0: # MA
-        w = 3 + (param % 4)
+    if model_id == 0: # MA移动平均
+        w = 3 + (param % 6) # 窗口3-8
         ma = sum(sums[:w]) / w
         push_bs = (1 if ma >= 13.5 else 0) if is_follow else (0 if ma >= 13.5 else 1)
         push_oe = (1 if ma % 2 >= 1 else 0) if is_follow else (0 if ma % 2 >= 1 else 1)
     elif model_id == 1: # 均值回归
-        ma = sum(sums[:5]) / 5
+        w = 3 + (param % 5)
+        ma = sum(sums[:w]) / w
         dev = sums[0] - ma
         push_bs = (1 if dev > 0 else 0) if is_follow else (0 if dev > 0 else 1)
         push_oe = oe[0] if is_follow else 1 - oe[0]
-    elif model_id == 2: # 连号
-        push_bs = bs[0] if is_follow else 1 - bs[0]
+    elif model_id == 2: # 连号极值
+        threshold = 2 + (param % 4) # 断龙阈值2-5
+        streak = 1
+        for i in range(1, threshold+1):
+            if bs[i] == bs[0]: streak += 1
+            else: break
+        pred = bs[0] if streak < threshold else 1 - bs[0]
+        push_bs = pred if is_follow else 1 - pred
         push_oe = oe[0]
-    elif model_id == 3: # MOM
-        mom = sums[0] - sums[3]
+    elif model_id == 3: # MOM动量
+        w = 2 + (param % 5)
+        mom = sums[0] - sums[w]
         pred = 1 if mom > 0 else 0
         push_bs = pred if is_follow else 1 - pred
         push_oe = pred 
-    elif model_id == 4: # RSI
-        ups = sum([1 for i in range(4) if sums[i] > sums[i+1]])
-        pred = 1 if ups >= 2 else 0
+    elif model_id == 4: # RSI强弱
+        w = 3 + (param % 5)
+        ups = sum([1 for i in range(w) if sums[i] > sums[i+1]])
+        pred = 1 if ups >= w/2 else 0
         push_bs = pred if is_follow else 1 - pred
-        push_oe = (0 if ups == 4 else (1 if ups == 0 else pred)) if is_follow else (1 if ups == 4 else (0 if ups == 0 else 1-pred))
+        push_oe = (0 if ups == w else (1 if ups == 0 else pred)) if is_follow else (1 if ups == w else (0 if ups == 0 else 1-pred))
     elif model_id == 5: # 布林带
-        ma = sum(sums[:10]) / 10
-        std = (sum([(x - ma)**2 for x in sums[:10]]) / 10) ** 0.5
-        if sums[0] > ma + std: pred = 0
-        elif sums[0] < ma - std: pred = 1
+        w = 5 + (param % 6) # 周期5-10
+        std_factor = 1.5 + (param % 5) * 0.2 # 标准差倍数1.5 - 2.3
+        ma = sum(sums[:w]) / w
+        std = (sum([(x - ma)**2 for x in sums[:w]]) / w) ** 0.5
+        if sums[0] > ma + std * std_factor: pred = 0
+        elif sums[0] < ma - std * std_factor: pred = 1
         else: pred = 1 if sums[0] > ma else 0
         push_bs = pred if is_follow else 1 - pred
         push_oe = oe[0] if is_follow else 1 - oe[0]
-    elif model_id == 6: # 矩阵
-        matrix = [bs[i]*2 + oe[i] for i in range(5)]
+    elif model_id == 6: # 矩阵交叉
+        w = 3 + (param % 4)
+        matrix = [bs[i]*2 + oe[i] for i in range(w)]
         freq = Counter(matrix).most_common(1)[0][0]
         push_bs, push_oe = freq // 2, freq % 2
         if not is_follow: push_bs, push_oe = 1 - push_bs, 1 - push_oe
     elif model_id == 7: # 斐波那契
-        high, low = max(sums[:3]), min(sums[:3])
+        w = 3 + (param % 4)
+        high, low = max(sums[:w]), min(sums[:w])
         fib = low + (high - low) * 0.618
         pred = 1 if fib >= 13.5 else 0
         push_bs = pred if is_follow else 1 - pred
         push_oe = pred if is_follow else 1 - pred
     elif model_id == 8: # 强哈希
-        h = int(hashlib.sha256(f"{aid}_{history[0]['period']}_{sums[0]}".encode()).hexdigest(), 16)
+        # 加入 param 彻底打乱
+        h = int(hashlib.sha256(f"{aid}_{history[0]['period']}_{sums[0]}_{param}".encode()).hexdigest(), 16)
         p_bs, p_oe = (h >> 1) & 1, h & 1
         push_bs = p_bs if is_follow else 1 - p_bs
         push_oe = p_oe if is_follow else 1 - p_oe
     else: # 马尔可夫
+        w = 5 + (param % 5)
         last = bs[1]*2 + oe[1]
         trans = {0:[0,0],1:[0,0],2:[0,0],3:[0,0]}
-        for i in range(len(bs)-1, 0, -1):
+        for i in range(min(w, len(bs)-1), 0, -1):
             trans[bs[i-1]*2 + oe[i-1]][(bs[i]*2 + oe[i]) % 2] += 1
-        pred_oe = 0 if trans[last][0] > trans[last][1] else 1
+        pred_oe = 0 if trans[last][0] >= trans[last][1] else 1
         push_bs = bs[0] if is_follow else 1 - bs[0]
         push_oe = pred_oe if is_follow else 1 - pred_oe
 
@@ -115,8 +130,7 @@ def calculate_matrix(gt, history, next_p):
         pred_now = run_single_algo(aid, history)
         win_cnt = 0; lose_cnt = 0; curr_streak = 0; curr_type = ""
         
-        # 严格回测近 10 期
-        for i in range(10):
+        for i in range(10): # 近10期回测
             if i+1 >= len(history): break
             p = run_single_algo(aid, history[i+1:])
             r_bs, r_oe = history[i]['big_small'], history[i]['odd_even']
@@ -130,9 +144,8 @@ def calculate_matrix(gt, history, next_p):
             "streak": curr_streak if curr_type == "win" else 0
         })
 
-    # 剔除连中0，优先提拔连中>=2的精英
+    # 剔除连中0，提拔连中>=2的
     elite_pool = [a for a in algo_stats if a['streak'] >= 2]
-    
     if len(elite_pool) < 5:
         elite_pool.extend([a for a in algo_stats if a['streak'] == 1])
 
@@ -142,12 +155,13 @@ def calculate_matrix(gt, history, next_p):
     else:
         algo_stats.sort(key=lambda x: x['win'], reverse=True)
         elite_pool = algo_stats[:10]
-        warning_msg = "【终极警告】全盘遭遇极限洗盘，确实无任何连中算法！强制按历史胜率提拔！"
+        warning_msg = "【终极警告】全盘遭遇极限洗盘，强制按历史胜率提拔！"
 
     final_pred = None
     top_5_final = []
     best_vote_count = 0
     
+    # 滑动窗口验证共识
     for i in range(len(elite_pool) - 4):
         current_group = elite_pool[i : i+5]
         votes = Counter([t['pred'] for t in current_group])
@@ -348,7 +362,7 @@ def index():
     
 <script>
     let curG = '2', timer = null;
-    const KEY = "captain_strict_v76";
+    const KEY = "captain_strict_v77";
     
     function switchG(g, el) {
         curG = g;
