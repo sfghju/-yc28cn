@@ -12,7 +12,7 @@ from flask import Flask, request, jsonify
 from datetime import datetime, timedelta
 
 app = Flask(__name__)
-SECRET_KEY = "algo_sample_20_v68"
+SECRET_KEY = "captain_top5_consensus_v69"
 
 GAMES = {
     "2": {"name": "加拿大28", "url": "https://yc28cn-ml1l.onrender.com/vipASDFGHJKLQQQWERTYUIOPWW9983/8626/0549CASWWW?type=2", "interval": 210},
@@ -20,11 +20,11 @@ GAMES = {
     "13": {"name": "比特28", "url": "https://yc28cn-ml1l.onrender.com/vipASDFGHJKLQQZXCVBNMWW9983/8626/0549CCBDR?type=13", "interval": 60}
 }
 
-AI_STATUS = {"online": True, "msg": "200套算法抽样中..."}
+AI_STATUS = {"online": True, "msg": "正在执行50选5巅峰共识..."}
 LIVE_DATA = {gt: {"period": "", "next": "", "left": 0, "history": [], "pred": None, "algo_list": []} for gt in GAMES}
 
 def db():
-    conn = sqlite3.connect('predict_v68.db', timeout=30)
+    conn = sqlite3.connect('predict_v69.db', timeout=30)
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -43,7 +43,6 @@ def run_single_algo(aid, history):
     bs_seq = [h['big_small'] for h in history]
     oe_seq = [h['odd_even'] for h in history]
     
-    # 1-100为顺势（跟），101-200为逆势（反）
     is_follow = aid <= 100
     mode = (aid % 10) if is_follow else ((aid - 100) % 10)
     param = aid // 10
@@ -106,7 +105,7 @@ def run_single_algo(aid, history):
 
     return push_bs + push_oe
 
-# ================== 20套算法抽样与统票引擎 ==================
+# ================== 50选5巅峰共识引擎 ==================
 def calculate_matrix(gt, history, next_p):
     if len(history) < 20: return None
 
@@ -115,16 +114,16 @@ def calculate_matrix(gt, history, next_p):
     follow_pool = list(range(1, 101))
     reverse_pool = list(range(101, 201))
     
-    sampled_follow = random.sample(follow_pool, 10)
-    sampled_reverse = random.sample(reverse_pool, 10)
+    # 1. 抽取 25 + 25 共 50 套算法
+    sampled_follow = random.sample(follow_pool, 25)
+    sampled_reverse = random.sample(reverse_pool, 25)
     selected_algos = sampled_follow + sampled_reverse
 
-    votes = Counter()
-    algo_list = []
+    algo_stats = []
     
+    # 2. 计算这 50 套算法的战绩
     for aid in selected_algos:
         pred_now = run_single_algo(aid, history)
-        votes[pred_now] += 1
         
         win_cnt = 0; lose_cnt = 0; curr_streak = 0; curr_type = ""
         for i in range(20):
@@ -142,38 +141,44 @@ def calculate_matrix(gt, history, next_p):
                 curr_streak = curr_streak + 1 if curr_type == "lose" else 1
                 curr_type = "lose"
 
-        algo_list.append({
-            "id": aid, 
-            "vote": f"{pred_now[0]} ➕ {pred_now[1]}", 
-            "win": win_cnt, 
-            "lose": lose_cnt, 
-            "streak": curr_streak, 
-            "type": curr_type,
-            "camp": "顺势" if aid <= 100 else "逆势"
+        algo_stats.append({
+            "id": aid, "pred": pred_now, "win": win_cnt, "lose": lose_cnt, 
+            "streak": curr_streak if curr_type == "win" else 0
         })
 
-    if not votes:
-        top_display = "数据不足"
-        kill_display = "数据不足"
-    else:
-        top_combo_raw = votes.most_common(1)[0][0]
-        kill_combo_raw = votes.most_common()[-1][0]
-        
-        top_display = f"{top_combo_raw[0]} ➕ {top_combo_raw[1]}"
-        kill_display = f"{kill_combo_raw[0]} ➕ {kill_combo_raw[1]}"
-        
-        if votes.most_common()[-1][1] == votes.most_common(1)[0][1]:
-             kill_display = f"{'小' if top_combo_raw[0]=='大' else '大'} ➕ {'双' if top_combo_raw[1]=='单' else '单'}"
+    # 3. 严格排序：先按【当前连中】降序，再按【总对】降序
+    algo_stats.sort(key=lambda x: (x['streak'], x['win']), reverse=True)
 
-    analysis = f"【20人陪审团抽样统票】\n"
-    analysis += f"本期抽取 10 套【顺势算法】+ 10 套【逆势算法】。\n"
-    analysis += f"顺势阵容：{', '.join(map(str, sampled_follow))}\n"
-    analysis += f"逆势阵容：{', '.join(map(str, sampled_reverse))}\n\n"
-    analysis += f"最高票指向：{top_display} ({votes[top_combo_raw] if votes else 0}票)\n"
+    # 4. 提取 Top 5
+    top_5 = algo_stats[:5]
+    
+    # 5. 共识判定
+    votes = Counter([t['pred'] for t in top_5])
+    top_combo, count = votes.most_common(1)[0]
+    
+    if count >= 3:
+        # 达到 3/5 强共识
+        final_pred = top_combo
+        consensus_msg = f"Top5算法达成 {count}/5 绝对高度共识！"
+    else:
+        # 分歧过大，强制采用 Top 5 中历史胜率最强的主将
+        final_pred = top_5[0]['pred']
+        consensus_msg = f"Top5算法意见分歧(最高仅{count}票)，强制启用主帅【算法{top_5[0]['id']}】决议！"
+
+    top_display = f"{final_pred[0]} ➕ {final_pred[1]}"
+    kill_display = f"{'小' if final_pred[0]=='大' else '大'} ➕ {'双' if final_pred[1]=='单' else '单'}"
+
+    # 组装战报
+    top5_details = " | ".join([f"算法{t['id']}(连中{t['streak']}/对{t['win']})推{t['pred']}" for t in top_5])
+
+    analysis = f"【舰长·巅峰共识机制】\n"
+    analysis += f"从50套严选算法中，过滤出最强 Top 5 巅峰算法：\n"
+    analysis += f"{top5_details}\n\n"
+    analysis += f"逻辑判定：{consensus_msg}\n"
     analysis += f"🎯 核心推出：{top_display}\n"
     analysis += f"注：开出包含推出属性即算中奖！"
 
-    return {"kill": kill_display, "rec": top_display, "analysis": analysis, "algo_list": algo_list}
+    return {"kill": kill_display, "rec": top_display, "analysis": analysis, "algo_list": top_5}
 
 # ================== 极速抓取主循环 ==================
 def fetch_loop():
@@ -189,7 +194,7 @@ def fetch_loop():
                         history = [{"period": i['period'], "nums": f"{i['num1']} + {i['num2']} + {i['num3']}", "total": i['total'], "big_small": i['big_small'], "odd_even": i['odd_even']} for i in data[:30]]
                         
                         if LIVE_DATA[gt]['period'] != latest['period']:
-                            AI_STATUS["msg"] = "舰长正在抽调算法统票..."
+                            AI_STATUS["msg"] = "舰长正在执行Top5共识..."
                             
                             if LIVE_DATA[gt]['period'] != "" and LIVE_DATA[gt]['pred']:
                                 real_bs, real_oe = latest['big_small'], latest['odd_even']
@@ -220,7 +225,7 @@ def fetch_loop():
                                                  (gt, next_p, latest['draw_time'], pred["kill"], pred["rec"], pred["analysis"]))
                                     conn.commit()
                                 
-                            AI_STATUS["msg"] = "舰长统票完毕，等待下一期..."
+                            AI_STATUS["msg"] = "Top5共识决议完毕..."
                                 
                         LIVE_DATA[gt]['left'] = max(0, int(LIVE_DATA[gt]['target_time'] - datetime.utcnow().timestamp()))
             except Exception: pass
@@ -235,20 +240,6 @@ def verify(): return request.headers.get('X-Token') == SECRET_KEY
 def api_data(gt):
     if not verify(): return "<h1>Access Denied</h1>", 403
     return jsonify({"status": AI_STATUS, "data": LIVE_DATA.get(gt, {})})
-
-@app.route('/api/filter/<gt>', methods=['POST'])
-def api_filter(gt):
-    if not verify(): return jsonify({"ok": False})
-    filter_type = request.json.get('filter_type')
-    if 'algo_list' not in LIVE_DATA[gt] or not LIVE_DATA[gt]['algo_list']: return jsonify({"algos": []})
-        
-    algos = LIVE_DATA[gt]['algo_list']
-    if filter_type == "current_win": result = sorted([a for a in algos if a['type'] == 'win' and a['streak'] >= 2], key=lambda x: x['streak'], reverse=True)
-    elif filter_type == "current_lose": result = sorted([a for a in algos if a['type'] == 'lose' and a['streak'] >= 2], key=lambda x: x['streak'], reverse=True)
-    elif filter_type == "highest_win": result = sorted(algos, key=lambda x: (x['win'], x['streak']), reverse=True)
-    elif filter_type == "highest_lose": result = sorted(algos, key=lambda x: x['lose'], reverse=True)
-    else: result = algos
-    return jsonify({"algos": result})
 
 @app.route('/api/logs/<gt>')
 def api_logs(gt):
@@ -316,16 +307,6 @@ def index():
         @keyframes flash { 0% { opacity: 0.4; } 100% { opacity: 1; } }
         .ana { background: #fdfaf6; padding: 15px; border-left: 4px solid #e17055; font-size: 14px; line-height: 1.7; color: #2d3436; white-space: pre-wrap; border-radius: 0 12px 12px 0; margin-top: 15px;}
         
-        .filter-bar { display: flex; gap: 8px; margin-bottom: 15px; }
-        .btn-filter { flex: 1; padding: 8px 0; text-align: center; font-size: 13px; font-weight: bold; border-radius: 6px; border: 1px solid #ddd; background: #fff; cursor: pointer; transition: 0.2s;}
-        .btn-filter:active { background: #f0f2f5; }
-        .btn-filter.on { background: #e8f4f8; color: #0984e3; border-color: #0984e3; }
-        
-        .algo-list { background: #222f3e; color: #c8d6e5; border-radius: 12px; padding: 15px; font-family: monospace; font-size: 13px; max-height: 400px; overflow-y: auto;}
-        .algo-row { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px dashed #2c3e50;}
-        .algo-row span.win { color: #00b894; } .algo-row span.lose { color: #d63031; }
-        .algo-row span.push { color: #feca57; font-weight: bold; font-size: 15px;}
-        
         .log-item { border-bottom: 1px solid #f1f2f6; padding: 12px 0; font-size: 13px; display: flex; justify-content: space-between; }
         .win { color: #00b894; font-weight: bold; } .lose { color: #d63031; font-weight: bold; }
         .btn-clear { float:right; font-size:12px; padding:5px 10px; border:1px solid #d63031; color:#d63031; border-radius:6px;}
@@ -362,34 +343,19 @@ def index():
     </div>
     
     <div class="card">
-        <div class="title">📊 当值算法大盘 (点击按钮筛选)</div>
-        <div class="filter-bar">
-            <div class="btn-filter" onclick="filterAlgos('current_win', this)">当前连中</div>
-            <div class="btn-filter" onclick="filterAlgos('current_lose', this)">当前连错</div>
-            <div class="btn-filter" onclick="filterAlgos('highest_win', this)">最高总对</div>
-            <div class="btn-filter" onclick="filterAlgos('highest_lose', this)">最高总错</div>
-        </div>
-        <div class="algo-list" id="algo-list">
-            <div style="text-align: center; color: #8395a7; margin-top: 20px;">请点击上方按钮加载算法数据</div>
-        </div>
-    </div>
-    
-    <div class="card">
         <div class="title">历史复盘 <button class="btn-clear" onclick="clearLogs()">清空</button></div>
         <div id="logs" class="log-scroll"></div>
     </div>
     
 <script>
     let curG = '2', timer = null;
-    const KEY = "algo_sample_20_v68";
+    const KEY = "captain_top5_consensus_v69";
     
     function switchG(g, el) {
         curG = g;
         document.querySelectorAll('.tab').forEach(t => t.classList.remove('on'));
         el.classList.add('on');
         document.getElementById('pred-box').style.display = 'none';
-        document.getElementById('algo-list').innerHTML = '<div style="text-align: center; color: #8395a7; margin-top: 20px;">请点击上方按钮加载算法数据</div>';
-        document.querySelectorAll('.btn-filter').forEach(b => b.classList.remove('on'));
         fetchData(); fetchLogs();
     }
 
@@ -429,34 +395,6 @@ def index():
                 cdEl.innerText = `${Math.floor(left/60).toString().padStart(2,'0')}:${(left%60).toString().padStart(2,'0')}`;
                 if (left <= 3) cdEl.className = 'cd analyzing'; else cdEl.className = 'cd';
             }, 1000);
-        });
-    }
-
-    function filterAlgos(type, btn) {
-        document.querySelectorAll('.btn-filter').forEach(b => b.classList.remove('on'));
-        btn.classList.add('on');
-        
-        fetch(`/api/filter/${curG}`, {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json', 'X-Token': KEY},
-            body: JSON.stringify({ filter_type: type })
-        }).then(r => r.json()).then(res => {
-            let algos = res.algos;
-            if (!algos || algos.length === 0) {
-                document.getElementById('algo-list').innerHTML = '<div style="text-align: center; color: #8395a7; margin-top: 20px;">未找到符合条件的算法</div>';
-                return;
-            }
-            
-            let html = '';
-            algos.forEach(a => {
-                let statusStr = a.type === 'win' ? `<span class="win">连中${a.streak}</span>` : `<span class="lose">连错${a.streak}</span>`;
-                if (a.streak === 0) statusStr = '<span style="color:#8395a7">平局</span>';
-                html += `<div class="algo-row">
-                    <div><span style="color:#8395a7">[算法${a.id}]</span> <span style="color:#f39c12">${a.camp}</span> | 近20期 <span class="win">对${a.win}</span> <span class="lose">错${a.lose}</span> | ${statusStr}</div>
-                    <div class="push">${a.vote}</div>
-                </div>`;
-            });
-            document.getElementById('algo-list').innerHTML = html;
         });
     }
     
