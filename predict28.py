@@ -9,7 +9,7 @@ from flask import Flask, request, jsonify
 from datetime import datetime, timedelta
 
 app = Flask(__name__)
-SECRET_KEY = "simple_combo_v53"
+SECRET_KEY = "simple_combo_v55"
 
 GAMES = {
     "2": {"name": "加拿大28", "url": "https://yc28cn-ml1l.onrender.com/vipASDFGHJKLQQQWERTYUIOPWW9983/8626/0549CASWWW?type=2", "interval": 210},
@@ -17,11 +17,11 @@ GAMES = {
     "13": {"name": "比特28", "url": "https://yc28cn-ml1l.onrender.com/vipASDFGHJKLQQZXCVBNMWW9983/8626/0549CCBDR?type=13", "interval": 60}
 }
 
-AI_STATUS = {"online": True, "msg": "20期极简推演中..."}
+AI_STATUS = {"online": True, "msg": "近40期极简推演中..."}
 LIVE_DATA = {gt: {"period": "", "next": "", "left": 0, "history": [], "pred": None, "algo_list": []} for gt in GAMES}
 
 def db():
-    conn = sqlite3.connect('predict_v53.db', timeout=30)
+    conn = sqlite3.connect('predict_v55.db', timeout=30)
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -31,25 +31,30 @@ with db() as conn:
         analysis TEXT, real_result TEXT DEFAULT '', status TEXT DEFAULT 'wait')''')
     conn.commit()
 
-# ================== 极简冷热推演引擎 ==================
+# ================== 40期极简冷热推演引擎 ==================
 def calculate_prediction(gt, history, next_p):
-    if len(history) < 20:
-        return {"kill": "", "rec": "数据不足", "analysis": "等待20期数据...", "algo_list": []}
+    # 采用近40期数据
+    h_len = min(40, len(history))
+    if h_len < 10:
+        return {"kill": "", "rec": "数据不足", "analysis": "等待数据...", "algo_list": []}
         
-    h20 = history[:20]
-    bs_list = [h['big_small'] for h in h20]
-    oe_list = [h['odd_even'] for h in h20]
+    hx = history[:h_len]
+    bs_list = [h['big_small'] for h in hx]
+    oe_list = [h['odd_even'] for h in hx]
     
     big_cnt = bs_list.count('大')
     small_cnt = bs_list.count('小')
     odd_cnt = oe_list.count('单')
     even_cnt = oe_list.count('双')
     
+    # 默认逻辑：谁多杀谁，谁少推谁
     kill_bs = "大" if big_cnt >= small_cnt else "小"
     push_bs = "小" if kill_bs == "大" else "大"
+    
     kill_oe = "单" if odd_cnt >= even_cnt else "双"
     push_oe = "双" if kill_oe == "单" else "单"
 
+    # 检测长龙 (>=6连)
     def check_dragon(seq):
         streak = 1
         for i in range(1, len(seq)):
@@ -61,21 +66,26 @@ def calculate_prediction(gt, history, next_p):
     has_oe_dragon, oe_streak, oe_dragon_type = check_dragon(oe_list)
 
     dragon_msg = ""
+    
+    # 长龙防回马枪逻辑：多的跟，少的反
     if has_bs_dragon:
-        push_bs = bs_dragon_type
+        push_bs = bs_dragon_type 
         kill_bs = "小" if push_bs == "大" else "大"
-        dragon_msg += f"【大小长龙】已连开 {bs_streak} 期【{bs_dragon_type}】，顺势跟进。\n"
+        dragon_msg += f"【大小长龙】已连开 {bs_streak} 期【{bs_dragon_type}】，顺势跟进，防回马枪。\n"
+        
     if has_oe_dragon:
         push_oe = oe_dragon_type
         kill_oe = "双" if push_oe == "单" else "单"
-        dragon_msg += f"【单双长龙】已连开 {oe_streak} 期【{oe_dragon_type}】，顺势跟进。\n"
+        dragon_msg += f"【单双长龙】已连开 {oe_streak} 期【{oe_dragon_type}】，顺势跟进，防回马枪。\n"
+
     if not dragon_msg:
         dragon_msg = "【盘面平稳】遵循少跟多反原则。\n"
 
+    # 组合
     push_combo = f"{push_bs} ➕ {push_oe}"
     kill_combo = f"{kill_bs} ➕ {kill_oe}"
 
-    analysis = f"【近20期冷热推演】\n"
+    analysis = f"【近{h_len}期冷热推演】\n"
     analysis += f"- 大小统计：大({big_cnt}) / 小({small_cnt})\n"
     analysis += f"- 单双统计：单({odd_cnt}) / 双({even_cnt})\n"
     analysis += f"- {dragon_msg}"
@@ -88,7 +98,7 @@ def calculate_prediction(gt, history, next_p):
     ]
 
     return {
-        "kill": kill_combo, # 后台依然计算击杀组合用于校验命中率
+        "kill": kill_combo, # 后台计算击杀组合用于校验命中率
         "rec": push_combo, 
         "analysis": analysis, 
         "algo_list": algo_list
@@ -105,7 +115,8 @@ def fetch_loop():
                 with urllib.request.urlopen(req, timeout=5, context=ctx) as resp:
                     data = json.loads(resp.read().decode('utf-8'))
                     if data.get('data'):
-                        raw_data = data['data'][:20]
+                        # 拉取60期数据，取前40期做分析，足以展示
+                        raw_data = data['data'][:60] 
                         latest = raw_data[0]
                         
                         history = [{
@@ -117,6 +128,7 @@ def fetch_loop():
                         } for i in raw_data]
                         
                         if LIVE_DATA[gt]['period'] != latest['period']:
+                            # 结算逻辑
                             if LIVE_DATA[gt]['period'] != "" and LIVE_DATA[gt]['pred']:
                                 real = latest['big_small'] + latest['odd_even']
                                 p_kill_combo = LIVE_DATA[gt]['pred']['kill']
@@ -128,7 +140,7 @@ def fetch_loop():
                                     else:
                                         status = 'win' 
                                 else:
-                                    status = 'win' # 数据不足时默认
+                                    status = 'win'
 
                                 with db() as conn:
                                     conn.execute("UPDATE logs SET real_result=?, status=? WHERE gtype=? AND period=?", (real, status, gt, latest['period']))
@@ -160,7 +172,7 @@ def fetch_loop():
 
 threading.Thread(target=fetch_loop, daemon=True).start()
 
-# ================== API 与 极简前端 ==================
+# ================== API 与 前端 ==================
 def verify(): return request.headers.get('X-Token') == SECRET_KEY
 
 @app.route('/api/data/<gt>')
@@ -174,10 +186,13 @@ def api_logs(gt):
     with db() as conn:
         logs = conn.execute("SELECT * FROM logs WHERE gtype=? ORDER BY id DESC", (gt,)).fetchall()
         stats = {"current_win": 0, "current_lose": 0, "total_win": 0, "total_lose": 0}
+        
+        # 完美统计，过滤掉等待状态
         settled = [l['status'] for l in logs if l['status'] in ('win', 'lose')]
         for st in settled:
             if st == 'win': stats['total_win'] += 1
             elif st == 'lose': stats['total_lose'] += 1
+            
         for st in settled:
             if st == 'win': 
                 if stats['current_lose'] > 0: break 
@@ -185,6 +200,7 @@ def api_logs(gt):
             elif st == 'lose':
                 if stats['current_win'] > 0: break
                 stats['current_lose'] += 1
+                
     return jsonify({"logs": [dict(l) for l in logs], "stats": stats})
 
 @app.route('/api/clear/<gt>', methods=['POST'])
@@ -214,6 +230,11 @@ def index():
         .tabs { display: flex; padding: 10px; gap: 10px; background: #fff; border-bottom: 1px solid #f1f2f6;}
         .tab { flex: 1; padding: 10px; text-align: center; background: #f0f2f5; border-radius: 8px; font-weight: bold; font-size: 14px; cursor: pointer; }
         .tab.on { background: #0984e3; color: #fff; }
+        
+        .stats-bar { display: flex; background: #fff; margin: 12px; padding: 12px 10px; border-radius: 12px; font-size: 13px; font-weight: bold; text-align: center; box-shadow: 0 2px 10px rgba(0,0,0,0.03);}
+        .stats-item { flex: 1; border-right: 1px solid #f1f2f6;}
+        .stats-item:last-child { border-right: none; }
+        .stats-val { display: block; font-size: 20px; margin-top: 4px;}
         
         .card { background: #fff; margin: 12px; padding: 15px; border-radius: 12px; box-shadow: 0 2px 10px rgba(0,0,0,0.05); }
         .title { font-size: 14px; font-weight: bold; margin-bottom: 10px; color: #2d3436;}
@@ -250,8 +271,16 @@ def index():
         <div class="tab" onclick="switchG('13', this)">比特28</div>
     </div>
     
+    <!-- 顶部统计恢复 -->
+    <div class="stats-bar">
+        <div class="stats-item">当前连中<span class="stats-val win" id="st-cw" style="color:#00b894;">0</span></div>
+        <div class="stats-item">当前连错<span class="stats-val lose" id="st-cl" style="color:#d63031;">0</span></div>
+        <div class="stats-item">总命中<span class="stats-val win" id="st-tw" style="color:#00b894;">0</span></div>
+        <div class="stats-item">总被杀<span class="stats-val lose" id="st-tl" style="color:#d63031;">0</span></div>
+    </div>
+
     <div class="card">
-        <div class="title">近 20 期 独立盘面</div>
+        <div class="title">近 40 期 独立盘面</div>
         <div class="history" id="history"></div>
     </div>
     
@@ -273,7 +302,7 @@ def index():
     
 <script>
     let curG = '2', timer = null;
-    const KEY = "simple_combo_v53";
+    const KEY = "simple_combo_v55";
     
     function switchG(g, el) {
         curG = g;
@@ -288,7 +317,8 @@ def index():
             let d = res.data;
             if(!d.period) return;
             
-            document.getElementById('history').innerHTML = d.history.slice(0, 10).map(h => `
+            // 展示 40 期数据
+            document.getElementById('history').innerHTML = d.history.slice(0, 40).map(h => `
                 <div class="h-item">
                     <div class="h-period">${h.period.slice(-4)}期</div>
                     <div class="h-nums">${h.nums}</div>
@@ -299,7 +329,6 @@ def index():
             if(d.pred) {
                 document.getElementById('pred-box').style.display = 'block';
                 document.getElementById('next-period').innerText = d.next;
-                // 前端不再展示击杀，只展示推出
                 document.getElementById('rec-item').innerText = d.pred.rec;
                 document.getElementById('ana').innerText = d.pred.analysis;
             }
@@ -331,6 +360,12 @@ def index():
     
     function fetchLogs() {
         fetch(`/api/logs/${curG}`, { headers: {'X-Token': KEY} }).then(r => r.json()).then(res => {
+            // 更新统计数字
+            document.getElementById('st-cw').innerText = res.stats.current_win;
+            document.getElementById('st-cl').innerText = res.stats.current_lose;
+            document.getElementById('st-tw').innerText = res.stats.total_win;
+            document.getElementById('st-tl').innerText = res.stats.total_lose;
+            
             document.getElementById('logs').innerHTML = res.logs.map(l => `
                 <div class="log-item">
                     <div>
