@@ -9,7 +9,7 @@ from flask import Flask, request, jsonify
 from datetime import datetime, timedelta
 
 app = Flask(__name__)
-SECRET_KEY = "captain_fusion_v88"
+SECRET_KEY = "captain_position_v89"
 
 GAMES = {
     "2": {"name": "加拿大28", "url": "https://yc28cn-ml1l.onrender.com/vipASDFGHJKLQQQWERTYUIOPWW9983/8626/0549CASWWW?type=2", "interval": 210},
@@ -17,11 +17,11 @@ GAMES = {
     "13": {"name": "比特28", "url": "https://yc28cn-ml1l.onrender.com/vipASDFGHJKLQQZXCVBNMWW9983/8626/0549CCBDR?type=13", "interval": 60}
 }
 
-AI_STATUS = {"online": True, "msg": "近3期特征拆解计算中..."}
+AI_STATUS = {"online": True, "msg": "逐位号码演算中..."}
 LIVE_DATA = {gt: {"period": "", "next": "", "left": 0, "history": [], "pred": None, "algo_list": []} for gt in GAMES}
 
 def db():
-    conn = sqlite3.connect('predict_fusion_v88.db', timeout=30)
+    conn = sqlite3.connect('predict_position_v89.db', timeout=30)
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -33,69 +33,65 @@ with db() as conn:
     )''')
     conn.commit()
 
-# ================== 核心：近3期特征拆解引擎 ==================
+# ================== 纯位置数字推演引擎 ==================
 def calculate_matrix(gt, history, next_p):
     if len(history) < 3: return None
 
+    # 提取近三期真实开奖位置数据
     h0, h1, h2 = history[0], history[1], history[2]
     n0 = [int(x) for x in h0['nums'].split(' + ')]
     n1 = [int(x) for x in h1['nums'].split(' + ')]
     n2 = [int(x) for x in h2['nums'].split(' + ')]
     
-    # 1. 特征值 1：近3期位移差量累加
-    diff0 = abs(n0[0]-n0[1]) + abs(n0[1]-n0[2]) + abs(n0[0]-n0[2])
-    diff1 = abs(n1[0]-n1[1]) + abs(n1[1]-n1[2]) + abs(n1[0]-n1[2])
-    diff2 = abs(n2[0]-n2[1]) + abs(n2[1]-n2[2]) + abs(n2[0]-n2[2])
-    diff_sum = diff0 + diff1 + diff2
+    last_bs = h0['big_small']
+    last_oe = h0['odd_even']
+    last_combo = last_bs + last_oe
 
-    # 2. 特征值 2：近3期相位偏移
-    total_sum = h0['total'] + h1['total'] + h2['total']
-    phase_val = int(total_sum * 0.618)
+    # 1. 推演 A 位 (百位)：利用差值演进
+    diffA = abs(n0[0] - n1[0]) + abs(n1[0] - n2[0])
+    pred_A = (n0[0] + diffA) % 10
 
-    # 3. 特征值 3：近3期同位交叉异或
-    cross_sum = (n0[0] + n1[0] + n2[0]) + (n0[1] + n1[1] + n2[1]) + (n0[2] + n1[2] + n2[2])
+    # 2. 推演 B 位 (十位)：利用中位极值偏移
+    pred_B = (n0[1] * 2 - n2[1]) % 10
+    if pred_B < 0: pred_B += 10
 
-    # 【核心融合】
-    total_fusion = diff_sum + phase_val + cross_sum
+    # 3. 推演 C 位 (个位)：利用三期尾数震荡回归
+    pred_C = int((n0[2] + n1[2] + n2[2]) / 3) 
+    if pred_C == n0[2]: # 如果均值等于上期，强制震荡
+        pred_C = (pred_C + 3) % 10
 
-    # ================== 特征拆解：0-4小，5-9大 ==================
-    fusion_str = str(total_fusion)
-    bs_count = {"大": 0, "小": 0}
-    oe_count = {"单": 0, "双": 0}
-    detail_breakdown = []
+    # 汇总推演出的三位新号码
+    pred_nums = [pred_A, pred_B, pred_C]
+    pred_total = sum(pred_nums)
 
-    for char in fusion_str:
-        digit = int(char)
-        bs = "大" if digit >= 5 else "小"
-        oe = "单" if digit % 2 != 0 else "双"
-        bs_count[bs] += 1
-        oe_count[oe] += 1
-        detail_breakdown.append(f"{digit}({bs}{oe})")
+    # 4. 判定大小单双
+    pred_bs = "大" if pred_total >= 14 else "小"
+    pred_oe = "单" if pred_total % 2 != 0 else "双"
+    final_combo = pred_bs + pred_oe
 
-    # 综合判定：谁多推谁，平局则按大、双优先
-    final_bs = "大" if bs_count["大"] >= bs_count["小"] else "小"
-    final_oe = "双" if oe_count["双"] >= oe_count["单"] else "单"
-    
-    final_combo = final_bs + final_oe
-    top_display = f"{final_bs} ➕ {final_oe}"
-    kill_display = f"{'小' if final_bs=='大' else '大'} ➕ {'双' if final_oe=='单' else '单'}"
+    # ================== 一跟一反纠偏 ==================
+    correction_msg = "正常推演"
+    if final_combo == last_combo:
+        final_combo = ("小" if final_combo[0] == "大" else "大") + final_combo[1]
+        correction_msg = "⚠️ 触发同轨死磕，强制打断反转！"
 
-    # 组装文案
-    trend_str = f"{h2['period'][-4:]}期({h2['big_small']}{h2['odd_even']}) -> {h1['period'][-4:]}期({h1['big_small']}{h1['odd_even']}) -> {h0['period'][-4:]}期({h0['big_small']}{h0['odd_even']})"
-    breakdown_str = " + ".join(detail_breakdown)
+    # 最终结果
+    top_bs, top_oe = final_combo[0], final_combo[1]
+    top_display = f"{top_bs} ➕ {top_oe}"
+    kill_display = f"{'小' if top_bs=='大' else '大'} ➕ {'双' if top_oe=='单' else '单'}"
 
-    analysis = f"【舰长·近3期拆解机制】\n"
-    analysis += f"近3期走势：{trend_str}\n"
-    analysis += f"- 位移差量：{diff_sum}\n"
-    analysis += f"- 相位偏移：{phase_val}\n"
-    analysis += f"- 交叉异或：{cross_sum}\n"
-    analysis += f"- 融合总值：{total_fusion}\n"
-    analysis += f"- 拆解明细：{breakdown_str}\n"
-    analysis += f"- 综合统计：大({bs_count['大']}) 小({bs_count['小']})，单({oe_count['单']}) 双({oe_count['双']})\n\n"
+    # 组装分析文案
+    analysis = f"【舰长·逐位号码深度推演】\n"
+    analysis += f"近3期真实开奖：{h2['nums']} / {h1['nums']} / {h0['nums']}\n"
+    analysis += f"- A位推演(差值演进)：预测下一期落点【{pred_A}】\n"
+    analysis += f"- B位推演(极值偏移)：预测下一期落点【{pred_B}】\n"
+    analysis += f"- C位推演(均值震荡)：预测下一期落点【{pred_C}】\n"
+    analysis += f"- 组合推演和值：{pred_A} + {pred_B} + {pred_C} = {pred_total}\n"
+    analysis += f"- 干预机制：{correction_msg}\n\n"
     analysis += f"🎯 核心推出：{top_display}\n"
     analysis += f"注：开出包含推出属性即算中奖！"
 
-    algo_list = [{"name": "融合拆解", "vote": top_display, "detail": "拆解每一位数字判定大小单双"}]
+    algo_list = [{"name": "逐位推演", "vote": top_display, "detail": f"推演组合：{pred_A}+{pred_B}+{pred_C}"}]
 
     return {"kill": kill_display, "rec": top_display, "analysis": analysis, "algo_list": algo_list}
 
@@ -113,7 +109,7 @@ def fetch_loop():
                         history = [{"period": i['period'], "nums": f"{i['num1']} + {i['num2']} + {i['num3']}", "total": i['total'], "big_small": i['big_small'], "odd_even": i['odd_even']} for i in data[:30]]
                         
                         if LIVE_DATA[gt]['period'] != latest['period']:
-                            AI_STATUS["msg"] = "执行特征拆解推演中..."
+                            AI_STATUS["msg"] = "执行逐位号码演算中..."
                             
                             if LIVE_DATA[gt]['period'] != "" and LIVE_DATA[gt]['pred']:
                                 real_bs, real_oe = latest['big_small'], latest['odd_even']
@@ -144,7 +140,7 @@ def fetch_loop():
                                                  (gt, next_p, latest['draw_time'], pred["kill"], pred["rec"], pred["analysis"]))
                                     conn.commit()
                                 
-                            AI_STATUS["msg"] = "拆解完成，等待开奖..."
+                            AI_STATUS["msg"] = "位置推演完成，等待开奖..."
                                 
                         LIVE_DATA[gt]['left'] = max(0, int(LIVE_DATA[gt]['target_time'] - datetime.utcnow().timestamp()))
             except Exception: pass
@@ -268,7 +264,7 @@ def index():
     
 <script>
     let curG = '2', timer = null;
-    const KEY = "captain_fusion_v88";
+    const KEY = "captain_position_v89";
     
     function switchG(g, el) {
         curG = g;
