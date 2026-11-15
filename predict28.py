@@ -11,7 +11,7 @@ from flask import Flask, request, jsonify
 from datetime import datetime, timedelta
 
 app = Flask(__name__)
-SECRET_KEY = "algo_rank_second_v66"
+SECRET_KEY = "algo_mid_streak_v67"
 
 GAMES = {
     "2": {"name": "加拿大28", "url": "https://yc28cn-ml1l.onrender.com/vipASDFGHJKLQQQWERTYUIOPWW9983/8626/0549CASWWW?type=2", "interval": 210},
@@ -19,15 +19,14 @@ GAMES = {
     "13": {"name": "比特28", "url": "https://yc28cn-ml1l.onrender.com/vipASDFGHJKLQQZXCVBNMWW9983/8626/0549CCBDR?type=13", "interval": 60}
 }
 
-AI_STATUS = {"online": True, "msg": "200套算法严格锁定期中..."}
+AI_STATUS = {"online": True, "msg": "正在筛选中等连中算法..."}
 LIVE_DATA = {gt: {"period": "", "next": "", "left": 0, "history": [], "pred": None, "algo_list": []} for gt in GAMES}
 
 def db():
-    conn = sqlite3.connect('predict_v66.db', timeout=30)
+    conn = sqlite3.connect('predict_v67.db', timeout=30)
     conn.row_factory = sqlite3.Row
     return conn
 
-# 【核心修复1：增加 UNIQUE 约束防重复】
 with db() as conn:
     conn.execute('''CREATE TABLE IF NOT EXISTS logs (
         id INTEGER PRIMARY KEY AUTOINCREMENT, gtype TEXT, period TEXT, draw_time TEXT, kill TEXT, rec TEXT, 
@@ -43,48 +42,62 @@ def run_single_algo(aid, history):
     bs_seq = [h['big_small'] for h in history]
     oe_seq = [h['odd_even'] for h in history]
     
-    mode = aid % 10
+    # 1-100为顺势阵营，101-200为逆势阵营
+    is_follow = aid <= 100
+    mode = (aid % 10) if is_follow else ((aid - 100) % 10)
     param = aid // 10
+    
     push_bs, push_oe = "大", "单"
     
-    if mode == 0:
+    if mode == 0: # 均线逻辑
         w = 5 + (param % 5)
         recent_bs, recent_oe = bs_seq[:w], oe_seq[:w]
-        push_bs = "小" if recent_bs.count('大') > len(recent_bs)/2 else "大"
-        push_oe = "双" if recent_oe.count('单') > len(recent_oe)/2 else "单"
-    elif mode == 1:
+        if is_follow: # 顺势：谁多推谁
+            push_bs = "大" if recent_bs.count('大') >= w/2 else "小"
+            push_oe = "单" if recent_oe.count('单') >= w/2 else "双"
+        else: # 逆势：反杀多数
+            push_bs = "小" if recent_bs.count('大') >= w/2 else "大"
+            push_oe = "双" if recent_oe.count('单') >= w/2 else "单"
+    elif mode == 1: # 极值逻辑
         w = 3 + (param % 4)
         recent_bs, recent_oe = bs_seq[:w], oe_seq[:w]
-        push_bs = "小" if recent_bs.count('大') == len(recent_bs) else ("大" if recent_bs.count('小') == len(recent_bs) else recent_bs[0])
-        push_oe = "双" if recent_oe.count('单') == len(recent_oe) else ("单" if recent_oe.count('双') == len(recent_oe) else recent_oe[0])
-    elif mode == 2:
+        if is_follow: # 顺势：跟着长龙
+            push_bs, push_oe = bs_seq[0], oe_seq[0]
+        else: # 逆势：抓断点
+            push_bs = "小" if recent_bs.count('大') == w else ("大" if recent_bs.count('小') == w else bs_seq[0])
+            push_oe = "双" if recent_oe.count('单') == w else ("单" if recent_oe.count('双') == w else oe_seq[0])
+    elif mode == 2: # 纯顺势
         push_bs, push_oe = bs_seq[0], oe_seq[0]
-    elif mode == 3:
+    elif mode == 3: # 纯交替
         push_bs = "小" if bs_seq[0] == "大" else "大"
         push_oe = "双" if oe_seq[0] == "单" else "单"
-    elif mode == 4:
+    elif mode == 4: # 尾数
         t = history[0]['total'] % 10
         push_bs = "大" if t >= 5 else "小"
         push_oe = "单" if t % 2 != 0 else "双"
-    elif mode == 5:
+    elif mode == 5: # 交叉
         n0 = [int(x) for x in history[0]['nums'].split(' + ')]
         n1 = [int(x) for x in history[1]['nums'].split(' + ')]
         val = n0[0] + n1[1]
         push_bs = "大" if val >= 10 else "小"
         push_oe = "单" if val % 2 != 0 else "双"
-    elif mode == 6:
+    elif mode == 6: # 哈希
         h = hashlib.md5(f"{aid}_{history[0]['period']}".encode()).hexdigest()
         v = int(h[:4], 16)
         push_bs = "大" if v % 2 == 0 else "小"
         push_oe = "单" if (v // 2) % 2 == 0 else "双"
-    elif mode == 7:
+    elif mode == 7: # 断点
         push_bs = ("小" if bs_seq[0] == "大" else "大") if (bs_seq[0] == bs_seq[1] == bs_seq[2]) else bs_seq[1]
         push_oe = ("双" if oe_seq[0] == "单" else "单") if (oe_seq[0] == oe_seq[1] == oe_seq[2]) else oe_seq[1]
-    elif mode == 8:
+    elif mode == 8: # 平滑
         c_bs, c_oe = bs_seq[:10].count('大'), oe_seq[:10].count('单')
-        push_bs = "大" if c_bs >= 5 else "小"
-        push_oe = "单" if c_oe >= 5 else "双"
-    else:
+        if is_follow:
+            push_bs = "大" if c_bs >= 5 else "小"
+            push_oe = "单" if c_oe >= 5 else "双"
+        else:
+            push_bs = "小" if c_bs >= 5 else "大"
+            push_oe = "双" if c_oe >= 5 else "单"
+    else: # 混沌
         h = hashlib.sha256(f"{aid}_{history[0]['period']}".encode()).hexdigest()
         v = int(h[:6], 16)
         push_bs = "大" if (v + param) % 3 == 0 else "小"
@@ -92,11 +105,13 @@ def run_single_algo(aid, history):
 
     return push_bs + push_oe
 
-# ================== 榜眼猎杀引擎 ==================
+# ================== 中等连中筛选引擎 ==================
 def calculate_matrix(gt, history, next_p):
     if len(history) < 20: return None
 
     algo_list = []
+    
+    # 1. 统计200套算法近20期战绩
     for aid in range(1, 201):
         win_cnt = 0; lose_cnt = 0; curr_streak = 0; curr_type = ""
         
@@ -118,23 +133,46 @@ def calculate_matrix(gt, history, next_p):
         pred_now = run_single_algo(aid, history)
         algo_list.append({
             "id": aid, "vote": f"{pred_now[0]} ➕ {pred_now[1]}", 
-            "win": win_cnt, "lose": lose_cnt, "streak": curr_streak, "type": curr_type
+            "win": win_cnt, "lose": lose_cnt, "streak": curr_streak, "type": curr_type,
+            "camp": "顺势" if aid <= 100 else "逆势"
         })
 
-    # 按胜场降序，胜场相同按连中降序
-    algo_list.sort(key=lambda x: (x['win'], x['streak']), reverse=True)
+    # 2. 筛选“当前连中”的算法
+    winners = [a for a in algo_list if a['type'] == 'win']
+    target_algo = None
+    select_msg = ""
 
-    # 锁定第 2 名（榜眼）
-    target_algo = algo_list[1] if len(algo_list) >= 2 else algo_list[0]
+    if winners:
+        # 提取所有正在连中的期数
+        streaks = sorted([a['streak'] for a in winners])
+        # 找中位数
+        mid_streak = streaks[len(streaks)//2]
+        
+        # 寻找连中数等于中位数，且胜率最高的
+        candidates = [a for a in winners if a['streak'] == mid_streak]
+        # 如果中位数没找到（极少情况），放宽到中位数附近
+        if not candidates:
+            candidates = [a for a in winners if abs(a['streak'] - mid_streak) <= 1]
+            
+        candidates.sort(key=lambda x: x['win'], reverse=True)
+        target_algo = candidates[0]
+        select_msg = f"锁定处于中等连中（{target_algo['streak']}期）的王者算法。"
+    else:
+        # 连中都断了（比如全在连错），那就直接找总对最高的
+        algo_list.sort(key=lambda x: x['win'], reverse=True)
+        target_algo = algo_list[0]
+        select_msg = "当前无连中算法，强制锁定总对最高算法。"
 
     top_display = target_algo['vote']
     k_bs = '小' if top_display[0] == '大' else '大'
     k_oe = '双' if top_display[2] == '单' else '单'
     kill_display = f"{k_bs} ➕ {k_oe}"
 
-    analysis = f"【最高总对·榜眼猎杀机制】\n"
-    analysis += f"经20期真实容错回测，锁定排名第 2 的顶级算法：【算法{target_algo['id']}】\n"
-    analysis += f"战绩：对({target_algo['win']})错({target_algo['lose']})，当前{('连中' if target_algo['type']=='win' else '连错')}{target_algo['streak']}期。\n\n"
+    analysis = f"【中等连中·猎杀机制】\n"
+    analysis += f"200套算法（100顺势，100逆势）已完成20期回测。\n"
+    analysis += f"当前锁定：【算法{target_algo['id']}】 ({target_algo['camp']})\n"
+    analysis += f"战绩：对({target_algo['win']})错({target_algo['lose']})，当前连中{target_algo['streak']}期。\n"
+    analysis += f"{select_msg}\n\n"
     analysis += f"🎯 核心推出：{top_display}\n"
     analysis += f"注：开出包含推出属性即算中奖！"
 
@@ -153,9 +191,8 @@ def fetch_loop():
                         latest = data[0]
                         history = [{"period": i['period'], "nums": f"{i['num1']} + {i['num2']} + {i['num3']}", "total": i['total'], "big_small": i['big_small'], "odd_even": i['odd_even']} for i in data[:30]]
                         
-                        # 【核心修复2】：如果内存里的期号不同，才去处理和入库
                         if LIVE_DATA[gt]['period'] != latest['period']:
-                            AI_STATUS["msg"] = "正在锁定榜眼算法..."
+                            AI_STATUS["msg"] = "正在锁定中等连中算法..."
                             
                             if LIVE_DATA[gt]['period'] != "" and LIVE_DATA[gt]['pred']:
                                 real_bs, real_oe = latest['big_small'], latest['odd_even']
@@ -181,7 +218,6 @@ def fetch_loop():
                                 LIVE_DATA[gt]['pred'] = pred
                                 LIVE_DATA[gt]['algo_list'] = pred['algo_list']
                                 
-                                # 【核心修复3】：使用 INSERT OR IGNORE，数据库层面强行防重
                                 with db() as conn:
                                     conn.execute('''INSERT OR IGNORE INTO logs (gtype, period, draw_time, kill, rec, analysis) VALUES (?,?,?,?,?,?)''', 
                                                  (gt, next_p, latest['draw_time'], pred["kill"], pred["rec"], pred["analysis"]))
@@ -221,10 +257,13 @@ def api_filter(gt):
 def api_logs(gt):
     if not verify(): return "<h1>Access Denied</h1>", 403
     with db() as conn:
-        # 【核心修复4】：查询时使用 GROUP BY period，绝对过滤掉任何脏数据
         logs = conn.execute("SELECT * FROM logs WHERE gtype=? GROUP BY period ORDER BY id DESC", (gt,)).fetchall()
         settled = [l['status'] for l in logs if l['status'] in ('win', 'lose')]
-        stats = {"current_win": 0, "current_lose": 0, "total_win": settled.count('win'), "total_lose": settled.count('lose')}
+        stats = {
+            "current_win": 0, "current_lose": 0, 
+            "total_win": settled.count('win'), "total_lose": settled.count('lose'),
+            "total_pred": len(logs)  # 总预测期数
+        }
         
         for st in settled:
             if st == 'win': 
@@ -251,7 +290,7 @@ def index():
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-    <title>200套算法·榜眼猎杀</title>
+    <title>中等连中·猎杀机制</title>
     <style>
         * { box-sizing: border-box; }
         body { background: #f4f6f9; margin: 0; font-family: -apple-system, sans-serif; color: #333; }
@@ -297,7 +336,7 @@ def index():
     </style>
 </head>
 <body>
-    <div class="head">200套算法·榜眼猎杀</div>
+    <div class="head">中等连中·猎杀机制</div>
     <div class="status" id="status"><span class="dot"></span> 系统运转正常</div>
     <div class="tabs">
         <div class="tab on" onclick="switchG('2', this)">加拿大28</div>
@@ -310,6 +349,7 @@ def index():
         <div class="stats-item">当前连错<span class="stats-val lose" id="st-cl" style="color:#d63031;">0</span></div>
         <div class="stats-item">总命中<span class="stats-val win" id="st-tw" style="color:#00b894;">0</span></div>
         <div class="stats-item">总被杀<span class="stats-val lose" id="st-tl" style="color:#d63031;">0</span></div>
+        <div class="stats-item">累计预测<span class="stats-val" id="st-tp" style="color:#0984e3;">0</span></div>
     </div>
 
     <div class="card">
@@ -344,7 +384,7 @@ def index():
     
 <script>
     let curG = '2', timer = null;
-    const KEY = "algo_rank_second_v66";
+    const KEY = "algo_mid_streak_v67";
     
     function switchG(g, el) {
         curG = g;
@@ -415,7 +455,7 @@ def index():
                 let statusStr = a.type === 'win' ? `<span class="win">连中${a.streak}</span>` : `<span class="lose">连错${a.streak}</span>`;
                 if (a.streak === 0) statusStr = '<span style="color:#8395a7">平局</span>';
                 html += `<div class="algo-row">
-                    <div><span style="color:#8395a7">[算法${a.id}]</span> 近20期 <span class="win">对${a.win}</span> <span class="lose">错${a.lose}</span> | ${statusStr}</div>
+                    <div><span style="color:#8395a7">[算法${a.id}]</span> <span style="color:#f39c12">${a.camp}</span> | 近20期 <span class="win">对${a.win}</span> <span class="lose">错${a.lose}</span> | ${statusStr}</div>
                     <div class="push">${a.vote}</div>
                 </div>`;
             });
@@ -429,6 +469,7 @@ def index():
             document.getElementById('st-cl').innerText = res.stats.current_lose;
             document.getElementById('st-tw').innerText = res.stats.total_win;
             document.getElementById('st-tl').innerText = res.stats.total_lose;
+            document.getElementById('st-tp').innerText = res.stats.total_pred;
             
             document.getElementById('logs').innerHTML = res.logs.map(l => `
                 <div class="log-item">
