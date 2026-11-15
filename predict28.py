@@ -9,7 +9,7 @@ from flask import Flask, request, jsonify
 from datetime import datetime, timedelta
 
 app = Flask(__name__)
-SECRET_KEY = "captain_fusion_v85"
+SECRET_KEY = "captain_fusion_v86"
 
 GAMES = {
     "2": {"name": "加拿大28", "url": "https://yc28cn-ml1l.onrender.com/vipASDFGHJKLQQQWERTYUIOPWW9983/8626/0549CASWWW?type=2", "interval": 210},
@@ -17,11 +17,11 @@ GAMES = {
     "13": {"name": "比特28", "url": "https://yc28cn-ml1l.onrender.com/vipASDFGHJKLQQZXCVBNMWW9983/8626/0549CCBDR?type=13", "interval": 60}
 }
 
-AI_STATUS = {"online": True, "msg": "多维特征融合计算中..."}
+AI_STATUS = {"online": True, "msg": "近4期多维特征融合计算中..."}
 LIVE_DATA = {gt: {"period": "", "next": "", "left": 0, "history": [], "pred": None, "algo_list": []} for gt in GAMES}
 
 def db():
-    conn = sqlite3.connect('predict_fusion_v85.db', timeout=30)
+    conn = sqlite3.connect('predict_fusion_v86.db', timeout=30)
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -33,80 +33,94 @@ with db() as conn:
     )''')
     conn.commit()
 
-# ================== 核心：多维特征融合引擎 ==================
+# ================== 核心：近4期特征融合引擎 ==================
 def calculate_matrix(gt, history, next_p):
-    if len(history) < 3: return None
+    if len(history) < 4: return None
 
-    # 基础数据准备
+    # 提取近 4 期基础数据
     n0 = [int(x) for x in history[0]['nums'].split(' + ')]
     n1 = [int(x) for x in history[1]['nums'].split(' + ')]
+    n2 = [int(x) for x in history[2]['nums'].split(' + ')]
+    n3 = [int(x) for x in history[3]['nums'].split(' + ')]
+    
     last_bs = history[0]['big_small']
     last_oe = history[0]['odd_even']
     last_combo = last_bs + last_oe
 
-    # 1. 提取特征值 1：位移差量
-    diff_sum = abs(n0[0] - n0[1]) + abs(n0[1] - n0[2]) + abs(n0[0] - n0[2])
-    
-    # 2. 提取特征值 2：相位偏移 (和值 * 0.618)
-    phase_val = int(history[0]['total'] * 0.618)
-    
-    # 3. 提取特征值 3：交叉异或 (上期与上上期同位交叉相加)
-    cross_sum = n0[0] + n1[1] + n0[2] + n1[0]
+    # 1. 特征值 1：近4期位移差量累加
+    # 分别计算每期内部三位数的差值，然后4期求和
+    diff0 = abs(n0[0]-n0[1]) + abs(n0[1]-n0[2]) + abs(n0[0]-n0[2])
+    diff1 = abs(n1[0]-n1[1]) + abs(n1[1]-n1[2]) + abs(n1[0]-n1[2])
+    diff2 = abs(n2[0]-n2[1]) + abs(n2[1]-n2[2]) + abs(n2[0]-n2[2])
+    diff3 = abs(n3[0]-n3[1]) + abs(n3[1]-n3[2]) + abs(n3[0]-n3[2])
+    diff_sum = diff0 + diff1 + diff2 + diff3
+
+    # 2. 特征值 2：近4期相位偏移 (4期总和的黄金分割)
+    total_sum = history[0]['total'] + history[1]['total'] + history[2]['total'] + history[3]['total']
+    phase_val = int(total_sum * 0.618)
+
+    # 3. 特征值 3：近4期同位交叉异或 (百十个位分别累加)
+    cross_sum = (n0[0] + n1[0] + n2[0] + n3[0]) + \
+                (n0[1] + n1[1] + n2[1] + n3[1]) + \
+                (n0[2] + n1[2] + n2[2] + n3[2])
 
     # 【核心融合】：将三大特征值强力合并！
     total_fusion = diff_sum + phase_val + cross_sum
-    
-    # 取最终尾数 (0-9)
     final_tail = total_fusion % 10
     
-    # 根据最终尾数判定大小单双
+    # 初步判定
     pred_bs = "大" if final_tail >= 5 else "小"
     pred_oe = "单" if final_tail % 2 != 0 else "双"
     final_combo = pred_bs + pred_oe
 
-    logic_msgs = [
-        f"位移差量特征值: {diff_sum}",
-        f"相位偏移特征值: {phase_val}",
-        f"交叉异或特征值: {cross_sum}",
-        f"融合总值: {total_fusion}，取尾数: {final_tail}",
-        f"初步判定: {pred_bs} {pred_oe}"
-    ]
-
-    # ================== 断点公式干预 ==================
-    # 检测是否触发长龙极值 (假设3连以上强制反杀)
+    # ================== 断点极值干预 ==================
     streak_bs = 1
     for i in range(1, len(history)):
         if history[i]['big_small'] == last_bs: streak_bs += 1
         else: break
-
-    if streak_bs >= 4:
-        # 强制反转
-        pred_bs = "小" if pred_bs == "大" else "大"
-        pred_oe = "双" if pred_oe == "单" else "单"
-        final_combo = pred_bs + pred_oe
-        logic_msgs.append(f"⚠️ 触发 {streak_bs} 连断点极值，强制反转！")
     
+    streak_oe = 1
+    for i in range(1, len(history)):
+        if history[i]['odd_even'] == last_oe: streak_oe += 1
+        else: break
+
+    interrupt_msg = "无断点极值"
+    if streak_bs >= 4 or streak_oe >= 4:
+        # 强制反转
+        final_combo = ("小" if final_combo[0] == "大" else "大") + ("双" if final_combo[1] == "单" else "单")
+        interrupt_msg = f"⚠️ 触发极值(连大/连单 {max(streak_bs, streak_oe)}期)，强制反转！"
+
     # ================== 一跟一反纠偏 ==================
+    correction_msg = "未触发"
     if final_combo == last_combo:
         final_combo = ("小" if final_combo[0] == "大" else "大") + final_combo[1]
-        logic_msgs.append("⚠️ 触发防死磕机制，强制打断上期同轨！")
+        correction_msg = "⚠️ 触发防死磕，强制打断同轨！"
 
     # 最终结果
-    top_bs = final_combo[0]
-    top_oe = final_combo[1]
+    top_bs, top_oe = final_combo[0], final_combo[1]
     top_display = f"{top_bs} ➕ {top_oe}"
     kill_display = f"{'小' if top_bs=='大' else '大'} ➕ {'双' if top_oe=='单' else '单'}"
 
-    # 组装文案
-    analysis = f"【舰长·多维特征融合计算】\n"
-    analysis += f"上期开奖：{last_bs} {last_oe}\n"
-    for msg in logic_msgs:
-        analysis += f"- {msg}\n"
-    analysis += f"\n🎯 核心推出：{top_display}\n"
+    # 历史数据展示格式化
+    hist_str = f"{history[3]['period'][-4:]}期({history[3]['big_small']}{history[3]['odd_even']}) -> " \
+               f"{history[2]['period'][-4:]}期({history[2]['big_small']}{history[2]['odd_even']}) -> " \
+               f"{history[1]['period'][-4:]}期({history[1]['big_small']}{history[1]['odd_even']}) -> " \
+               f"{history[0]['period'][-4:]}期({history[0]['big_small']}{history[0]['odd_even']})"
+
+    analysis = f"【舰长·近4期多维融合计算】\n"
+    analysis += f"近期走势：{hist_str}\n"
+    analysis += f"- 位移差量特征值(4期累加)：{diff_sum}\n"
+    analysis += f"- 相位偏移特征值(4期和值分割)：{phase_val}\n"
+    analysis += f"- 交叉异或特征值(4期同位累加)：{cross_sum}\n"
+    analysis += f"- 融合总值：{total_fusion}，取尾数：{final_tail}\n"
+    analysis += f"- 初步判定：{pred_bs} {pred_oe}\n"
+    analysis += f"- 断点干预：{interrupt_msg}\n"
+    analysis += f"- 纠偏机制：{correction_msg}\n\n"
+    analysis += f"🎯 核心推出：{top_display}\n"
     analysis += f"注：开出包含推出属性即算中奖！"
 
-    # 为了保持前端结构不变，将 messages 塞给 algo_list
-    algo_list = [{"name": "融合计算明细", "vote": top_display, "detail": m} for m in logic_msgs]
+    # 保持前端结构
+    algo_list = [{"name": "近4期融合运算", "vote": top_display, "detail": "结合位移/相位/交叉及4期走势"}]
 
     return {"kill": kill_display, "rec": top_display, "analysis": analysis, "algo_list": algo_list}
 
@@ -124,7 +138,7 @@ def fetch_loop():
                         history = [{"period": i['period'], "nums": f"{i['num1']} + {i['num2']} + {i['num3']}", "total": i['total'], "big_small": i['big_small'], "odd_even": i['odd_even']} for i in data[:30]]
                         
                         if LIVE_DATA[gt]['period'] != latest['period']:
-                            AI_STATUS["msg"] = "执行特征融合推演中..."
+                            AI_STATUS["msg"] = "执行4期特征融合推演中..."
                             
                             if LIVE_DATA[gt]['period'] != "" and LIVE_DATA[gt]['pred']:
                                 real_bs, real_oe = latest['big_small'], latest['odd_even']
@@ -279,7 +293,7 @@ def index():
     
 <script>
     let curG = '2', timer = null;
-    const KEY = "captain_fusion_v85";
+    const KEY = "captain_fusion_v86";
     
     function switchG(g, el) {
         curG = g;
