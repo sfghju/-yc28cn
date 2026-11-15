@@ -5,13 +5,12 @@ import time
 import threading
 import os
 import sqlite3
-import hashlib
 from collections import Counter
 from flask import Flask, request, jsonify
 from datetime import datetime, timedelta
 
 app = Flask(__name__)
-SECRET_KEY = "captain_formula_v83"
+SECRET_KEY = "captain_formula_v84"
 
 GAMES = {
     "2": {"name": "加拿大28", "url": "https://yc28cn-ml1l.onrender.com/vipASDFGHJKLQQQWERTYUIOPWW9983/8626/0549CASWWW?type=2", "interval": 210},
@@ -23,7 +22,7 @@ AI_STATUS = {"online": True, "msg": "纯身法公式演算中..."}
 LIVE_DATA = {gt: {"period": "", "next": "", "left": 0, "history": [], "pred": None, "algo_list": []} for gt in GAMES}
 
 def db():
-    conn = sqlite3.connect('predict_formula_v83.db', timeout=30)
+    conn = sqlite3.connect('predict_formula_v84.db', timeout=30)
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -37,7 +36,6 @@ with db() as conn:
 
 # ================== 四大核心身法公式 ==================
 def formula_1_diff(history):
-    """位移差量公式：利用最新一期的三位数内部差值"""
     if len(history) < 1: return "大单"
     nums = [int(x) for x in history[0]['nums'].split(' + ')]
     diff = abs(nums[0] - nums[1]) + abs(nums[1] - nums[2]) + abs(nums[0] - nums[2])
@@ -45,7 +43,6 @@ def formula_1_diff(history):
     return ("大" if tail >= 5 else "小") + ("单" if tail % 2 != 0 else "双")
 
 def formula_2_phase(history):
-    """相位偏移公式：和值黄金分割"""
     if len(history) < 1: return "大单"
     total = history[0]['total']
     val = int(total * 0.618)
@@ -53,7 +50,6 @@ def formula_2_phase(history):
     return ("大" if tail >= 5 else "小") + ("单" if tail % 2 != 0 else "双")
 
 def formula_3_cross(history):
-    """交叉异或公式：最新期与上一期位置相加"""
     if len(history) < 2: return "大单"
     n0 = [int(x) for x in history[0]['nums'].split(' + ')]
     n1 = [int(x) for x in history[1]['nums'].split(' + ')]
@@ -62,7 +58,6 @@ def formula_3_cross(history):
     return ("大" if tail >= 5 else "小") + ("单" if tail % 2 != 0 else "双")
 
 def formula_4_streak(history):
-    """连号断点公式"""
     if len(history) < 2: return "大单"
     last_bs = history[0]['big_small']
     last_oe = history[0]['odd_even']
@@ -72,19 +67,18 @@ def formula_4_streak(history):
         else: break
     
     if streak >= 3:
-        # 连号极值，必反
         return ("小" if last_bs == "大" else "大") + ("双" if last_oe == "单" else "单")
     else:
-        # 顺势
         return last_bs + last_oe
 
 # ================== 执行预测与去重 ==================
 def calculate_matrix(gt, history, next_p):
     if len(history) < 10: return None
 
-    # 获取上期真实结果
+    # 上期真实结果
     last_bs = history[0]['big_small']
     last_oe = history[0]['odd_even']
+    last_combo = last_bs + last_oe
 
     # 1. 运行 4 大公式
     f1 = formula_1_diff(history)
@@ -103,15 +97,14 @@ def calculate_matrix(gt, history, next_p):
     votes = Counter([f['vote'] for f in formulas])
     top_combo, count = votes.most_common(1)[0]
 
-    # 3. 【强制一跟一反】核心逻辑
-    # 只要这期算出来的组合，跟上一期完全一样，就强行打断
-    if top_combo == (last_bs + last_oe):
-        # 强行翻转大小
+    logic_msg = f"四大公式达成 {count} 票共识。"
+
+    # 3. 【一跟一反纠偏】核心逻辑
+    # 只有当这期算出来的结论，跟上一期开奖完全一模一样时，才强制打断
+    if top_combo == last_combo:
         new_bs = '小' if top_combo[0] == '大' else '大'
         top_combo = new_bs + top_combo[1]
-        logic_msg = "检测到与上期重复，强制启动一跟一反纠偏！"
-    else:
-        logic_msg = f"四大公式达成 {count} 票共识。"
+        logic_msg = "检测到与上期开奖完全重复，启动一跟一反纠偏！"
 
     top_display = f"{top_combo[0]} ➕ {top_combo[1]}"
     kill_display = f"{'小' if top_combo[0]=='大' else '大'} ➕ {'双' if top_combo[1]=='单' else '单'}"
@@ -297,7 +290,7 @@ def index():
     
 <script>
     let curG = '2', timer = null;
-    const KEY = "captain_formula_v83";
+    const KEY = "captain_formula_v84";
     
     function switchG(g, el) {
         curG = g;
