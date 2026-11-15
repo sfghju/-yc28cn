@@ -10,7 +10,7 @@ from flask import Flask, request, jsonify
 from datetime import datetime, timedelta
 
 app = Flask(__name__)
-SECRET_KEY = "dual_engine_v61"
+SECRET_KEY = "auto_switch_v62"
 
 GAMES = {
     "2": {"name": "加拿大28", "url": "https://yc28cn-ml1l.onrender.com/vipASDFGHJKLQQQWERTYUIOPWW9983/8626/0549CASWWW?type=2", "interval": 210},
@@ -18,11 +18,11 @@ GAMES = {
     "13": {"name": "比特28", "url": "https://yc28cn-ml1l.onrender.com/vipASDFGHJKLQQZXCVBNMWW9983/8626/0549CCBDR?type=13", "interval": 60}
 }
 
-AI_STATUS = {"online": True, "msg": "双引擎严格推演中..."}
+AI_STATUS = {"online": True, "msg": "双引擎自动轮换推演中..."}
 LIVE_DATA = {gt: {"period": "", "next": "", "left": 0, "history": [], "pred": None, "algo_list": []} for gt in GAMES}
 
 def db():
-    conn = sqlite3.connect('predict_v61.db', timeout=30)
+    conn = sqlite3.connect('predict_v62.db', timeout=30)
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -32,93 +32,100 @@ with db() as conn:
         analysis TEXT, real_result TEXT DEFAULT '', status TEXT DEFAULT 'wait')''')
     conn.commit()
 
-# ================== 双引擎动态推演核心 ==================
+# ================== 双引擎自动轮换 + 防回马枪引擎 ==================
 def calculate_prediction(history, next_p):
     if len(history) < 50:
         return {"kill": "", "rec": "数据不足", "analysis": "等待数据...", "algo_list": []}
 
-    # 提取近5期、15期、50期数据
     h5 = history[:5]
-    h15 = history[:15]
+    h10 = history[:10]
     h50 = history[:50]
     
-    bs_5 = [h['big_small'] for h in h5]
-    oe_5 = [h['odd_even'] for h in h5]
+    # 提取序列
+    bs_seq = [h['big_small'] for h in h10]
+    oe_seq = [h['odd_even'] for h in h10]
     
-    # 检测长龙 (>=4连)
-    def check_dragon(seq, length=4):
-        streak = 1
-        for i in range(1, len(seq)):
-            if seq[i] == seq[0]: streak += 1
-            else: break
-        return streak >= length, streak, seq[0]
+    # ================== 1. 模式自动轮换 ==================
+    # 利用期号末位，强制奇偶期切换两套逻辑
+    is_odd_period = int(next_p) % 2 != 0
     
-    has_bs_dragon, bs_streak, bs_type = check_dragon(bs_5, 4)
-    has_oe_dragon, oe_streak, oe_type = check_dragon(oe_5, 4)
+    if is_odd_period:
+        mode_bs = "少跟多反(震荡回补)"
+        mode_oe = "少跟多反(震荡回补)"
+    else:
+        mode_bs = "多跟少反(顺势追击)"
+        mode_oe = "多跟少反(顺势追击)"
 
-    # 统计热态 (近5期极热)
-    bs_cnt5 = Counter(bs_5)
-    oe_cnt5 = Counter(oe_5)
-    
-    # 趋势判定开关
-    mode_bs = "少跟多反" # 默认震荡模式
-    mode_oe = "少跟多反"
-    
-    if has_bs_dragon or bs_cnt5['大'] >= 4 or bs_cnt5['小'] >= 4:
-        mode_bs = "多跟少反" # 极热或长龙，切换顺势模式
-    if has_oe_dragon or oe_cnt5['单'] >= 4 or oe_cnt5['双'] >= 4:
-        mode_oe = "多跟少反"
+    # ================== 2. 防回马枪核心检测 ==================
+    # 诱盘形态：前3期一致，最新1期反转 (如：大大大 小)
+    def check_ambush(seq):
+        if seq[0] != seq[1] and seq[1] == seq[2] == seq[3]:
+            return True, seq[1], seq[0] # 触发回马枪，长龙属性，最新诱饵属性
+        return False, "", ""
 
-    # 计算多周期统计
+    ambush_bs, long_bs, bait_bs = check_ambush(bs_seq)
+    ambush_oe, long_oe, bait_oe = check_ambush(oe_seq)
+
+    # ================== 3. 多周期统计 ==================
     def get_counts(h_data, attr):
         return Counter([h[attr] for h in h_data])
 
-    # ------------------ 大小维度推演 ------------------
-    if mode_bs == "多跟少反":
-        # 顺势：谁多推谁，谁少杀谁
-        push_bs = "大" if bs_cnt5['大'] >= bs_cnt5['小'] else "小"
-        reason_bs = f"近5期热态触发【多跟少反】。顺势推【{push_bs}】"
-        if has_bs_dragon: reason_bs = f"防长龙【多跟少反】。连开{bs_streak}期【{bs_type}】，强推【{bs_type}】"
-    else:
-        # 震荡：层级打分找最少的
+    # ------------------ 大小维度 ------------------
+    push_bs = ""
+    reason_bs = ""
+
+    if ambush_bs:
+        # 触发回马枪防御，无视模式，强制杀诱饵
+        push_bs = long_bs
+        reason_bs = f"⚠️【防回马枪触发】前3期开{long_bs}，上期诱饵开{bait_bs}。坚决反杀诱饵，顺势推{push_bs}！"
+    elif "少跟多反" in mode_bs:
         score_bs = {"大": 0, "小": 0}
-        for h_data, weight in [(h50, 1), (h15, 2), (h5, 3)]:
+        for h_data, weight in [(h50, 1), (h10, 2), (h5, 3)]:
             c = get_counts(h_data, 'big_small')
             if c['大'] < c['小']: score_bs['大'] += weight
             elif c['小'] < c['大']: score_bs['小'] += weight
         push_bs = max(score_bs, key=score_bs.get)
-        reason_bs = f"盘面震荡触发【少跟多反】。多周期回补推【{push_bs}】"
-
-    # ------------------ 单双维度推演 ------------------
-    if mode_oe == "多跟少反":
-        push_oe = "单" if oe_cnt5['单'] >= oe_cnt5['双'] else "双"
-        reason_oe = f"近5期热态触发【多跟少反】。顺势推【{push_oe}】"
-        if has_oe_dragon: reason_oe = f"防长龙【多跟少反】。连开{oe_streak}期【{oe_type}】，强推【{oe_type}】"
+        reason_bs = f"【{mode_bs}】多周期低频回补，主推【{push_bs}】"
     else:
+        c = get_counts(h5, 'big_small')
+        push_bs = "大" if c['大'] >= c['小'] else "小"
+        reason_bs = f"【{mode_bs}】近期高频热态，顺势推【{push_bs}】"
+
+    # ------------------ 单双维度 ------------------
+    push_oe = ""
+    reason_oe = ""
+
+    if ambush_oe:
+        push_oe = long_oe
+        reason_oe = f"⚠️【防回马枪触发】前3期开{long_oe}，上期诱饵开{bait_oe}。坚决反杀诱饵，顺势推{push_oe}！"
+    elif "少跟多反" in mode_oe:
         score_oe = {"单": 0, "双": 0}
-        for h_data, weight in [(h50, 1), (h15, 2), (h5, 3)]:
+        for h_data, weight in [(h50, 1), (h10, 2), (h5, 3)]:
             c = get_counts(h_data, 'odd_even')
             if c['单'] < c['双']: score_oe['单'] += weight
             elif c['双'] < c['单']: score_oe['双'] += weight
         push_oe = max(score_oe, key=score_oe.get)
-        reason_oe = f"盘面震荡触发【少跟多反】。多周期回补推【{push_oe}】"
+        reason_oe = f"【{mode_oe}】多周期低频回补，主推【{push_oe}】"
+    else:
+        c = get_counts(h5, 'odd_even')
+        push_oe = "单" if c['单'] >= c['双'] else "双"
+        reason_oe = f"【{mode_oe}】近期高频热态，顺势推【{push_oe}】"
 
-    # ------------------ 组合与输出 ------------------
+    # ================== 4. 最终组合 ==================
     push_combo = f"{push_bs} ➕ {push_oe}"
-    # 击杀组合是为了防止反向全中，只要不全中击杀项，就算命中
     kill_combo = f"{'小' if push_bs == '大' else '大'} ➕ {'双' if push_oe == '单' else '单'}"
 
-    analysis = f"【双引擎严格推演】\n"
-    analysis += f"- 大小逻辑：{reason_bs}\n"
-    analysis += f"- 单双逻辑：{reason_oe}\n"
-    analysis += f"\n🎯 最终严格推出：{push_combo}\n"
-    analysis += f"注：基于当前状态机，只要不双杀反属性即算中奖！"
+    analysis = f"【第 {next_p} 期双引擎推演】\n"
+    analysis += f"- 大小维度：{reason_bs}\n"
+    analysis += f"- 单双维度：{reason_oe}\n"
+    analysis += f"\n🎯 严格推出组合：{push_combo}\n"
+    analysis += f"注：只要开出包含推出属性的组合均算中奖！"
 
     return {
         "kill": kill_combo, "rec": push_combo, "analysis": analysis, 
         "algo_list": [
-            {"name": f"大小模式({mode_bs})", "vote": push_bs, "detail": reason_bs},
-            {"name": f"单双模式({mode_oe})", "vote": push_oe, "detail": reason_oe}
+            {"name": "大小引擎", "vote": push_bs, "detail": reason_bs},
+            {"name": "单双引擎", "vote": push_oe, "detail": reason_oe}
         ]
     }
 
@@ -136,12 +143,17 @@ def fetch_loop():
                         history = [{"period": i['period'], "nums": f"{i['num1']} + {i['num2']} + {i['num3']}", "total": i['total'], "big_small": i['big_small'], "odd_even": i['odd_even']} for i in data[:50]]
                         
                         if LIVE_DATA[gt]['period'] != latest['period']:
-                            AI_STATUS["msg"] = "正在极速预测中..."
+                            AI_STATUS["msg"] = "双引擎极速推演中..."
                             
+                            # 结算逻辑
                             if LIVE_DATA[gt]['period'] != "" and LIVE_DATA[gt]['pred']:
                                 real = latest['big_small'] + latest['odd_even']
                                 k_bs, k_oe = LIVE_DATA[gt]['pred']['kill'].split(" ➕ ")
-                                status = 'lose' if real == (k_bs + k_oe) else 'win'
+                                # 只要开出的结果不包含绝杀的两个属性，即算中奖
+                                if real == (k_bs + k_oe):
+                                    status = 'lose'
+                                else:
+                                    status = 'win'
                                 with db() as conn:
                                     conn.execute("UPDATE logs SET real_result=?, status=? WHERE gtype=? AND period=?", (real, status, gt, latest['period']))
                                     conn.commit()
@@ -163,7 +175,7 @@ def fetch_loop():
                                              (gt, next_p, latest['draw_time'], pred["kill"], pred["rec"], pred["analysis"]))
                                 conn.commit()
                                 
-                            AI_STATUS["msg"] = "双引擎推演完毕，等待下一期..."
+                            AI_STATUS["msg"] = "推演完毕，等待下一期..."
                                 
                         LIVE_DATA[gt]['left'] = max(0, int(LIVE_DATA[gt]['target_time'] - datetime.utcnow().timestamp()))
             except Exception: pass
@@ -212,7 +224,7 @@ def index():
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-    <title>双引擎严格推演</title>
+    <title>双引擎自动轮换推演</title>
     <style>
         * { box-sizing: border-box; }
         body { background: #f4f6f9; margin: 0; font-family: -apple-system, sans-serif; color: #333; }
@@ -247,7 +259,7 @@ def index():
     </style>
 </head>
 <body>
-    <div class="head">双引擎严格推演</div>
+    <div class="head">双引擎自动轮换推演</div>
     <div class="status" id="status"><span class="dot"></span> 系统运转正常</div>
     <div class="tabs">
         <div class="tab on" onclick="switchG('2', this)">加拿大28</div>
@@ -281,7 +293,7 @@ def index():
     
 <script>
     let curG = '2', timer = null;
-    const KEY = "dual_engine_v61";
+    const KEY = "auto_switch_v62";
     
     function switchG(g, el) {
         curG = g;
