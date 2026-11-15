@@ -10,7 +10,7 @@ from flask import Flask, request, jsonify
 from datetime import datetime, timedelta
 
 app = Flask(__name__)
-SECRET_KEY = "simple_combo_v59"
+SECRET_KEY = "layer_predict_v60"
 
 GAMES = {
     "2": {"name": "加拿大28", "url": "https://yc28cn-ml1l.onrender.com/vipASDFGHJKLQQQWERTYUIOPWW9983/8626/0549CASWWW?type=2", "interval": 210},
@@ -18,11 +18,11 @@ GAMES = {
     "13": {"name": "比特28", "url": "https://yc28cn-ml1l.onrender.com/vipASDFGHJKLQQZXCVBNMWW9983/8626/0549CCBDR?type=13", "interval": 60}
 }
 
-AI_STATUS = {"online": True, "msg": "近15期多跟少反推演中..."}
+AI_STATUS = {"online": True, "msg": "多层级递进推演中..."}
 LIVE_DATA = {gt: {"period": "", "next": "", "left": 0, "history": [], "pred": None, "algo_list": []} for gt in GAMES}
 
 def db():
-    conn = sqlite3.connect('predict_v59.db', timeout=30)
+    conn = sqlite3.connect('predict_v60.db', timeout=30)
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -32,42 +32,42 @@ with db() as conn:
         analysis TEXT, real_result TEXT DEFAULT '', status TEXT DEFAULT 'wait')''')
     conn.commit()
 
-# ================== 极简 15期推演引擎 ==================
+# ================== 多层级递进推演引擎 ==================
 def calculate_prediction(history, next_p):
-    h_len = min(15, len(history))
-    if h_len < 10:
+    if len(history) < 10:
         return {"kill": "", "rec": "数据不足", "analysis": "等待数据...", "algo_list": []}
+
+    # 1. 定义分析周期与权重 (越近权重越高)
+    periods = [(50, 1), (30, 2), (10, 3), (5, 4)]
+    
+    score_bs = {"大": 0, "小": 0}
+    score_oe = {"单": 0, "双": 0}
+    reason_logs = []
+
+    # 2. 层级遍历统计
+    for p_len, weight in periods:
+        hx = history[:min(p_len, len(history))]
+        bs_list = [h['big_small'] for h in hx]
+        oe_list = [h['odd_even'] for h in hx]
+        bs_cnt, oe_cnt = Counter(bs_list), Counter(oe_list)
         
-    hx = history[:h_len]
-    bs_list = [h['big_small'] for h in hx]
-    oe_list = [h['odd_even'] for h in hx]
-    
-    bs_cnt = Counter(bs_list)
-    oe_cnt = Counter(oe_list)
-    
-    # --- 大小平局破局逻辑 ---
-    if bs_cnt['大'] > bs_cnt['小']:
-        push_bs = "大"
-        bs_reason = f"大({bs_cnt['大']}) > 小({bs_cnt['小']})，主推大"
-    elif bs_cnt['小'] > bs_cnt['大']:
-        push_bs = "小"
-        bs_reason = f"小({bs_cnt['小']}) > 大({bs_cnt['大']})，主推小"
-    else:
-        push_bs = hx[0]['big_small']
-        bs_reason = f"大({bs_cnt['大']}) = 小({bs_cnt['小']})平局，顺延上期【{push_bs}】"
+        # 大小判定: 谁少给谁加分
+        if bs_cnt['大'] < bs_cnt['小']: score_bs['大'] += weight
+        elif bs_cnt['小'] < bs_cnt['大']: score_bs['小'] += weight
+        
+        # 单双判定: 谁少给谁加分
+        if oe_cnt['单'] < oe_cnt['双']: score_oe['单'] += weight
+        elif oe_cnt['双'] < oe_cnt['单']: score_oe['双'] += weight
 
-    # --- 单双平局破局逻辑 ---
-    if oe_cnt['单'] > oe_cnt['双']:
-        push_oe = "单"
-        oe_reason = f"单({oe_cnt['单']}) > 双({oe_cnt['双']})，主推单"
-    elif oe_cnt['双'] > oe_cnt['单']:
-        push_oe = "双"
-        oe_reason = f"双({oe_cnt['双']}) > 单({oe_cnt['单']})，主推双"
-    else:
-        push_oe = hx[0]['odd_even']
-        oe_reason = f"单({oe_cnt['单']}) = 双({oe_cnt['双']})平局，顺延上期【{push_oe}】"
+    # 基础推演结果：得分最高的属性
+    push_bs = max(score_bs, key=score_bs.get)
+    push_oe = max(score_oe, key=score_oe.get)
+    reason_logs.append(f"多周期少跟得分：大小[{push_bs}胜({score_bs['大']}vs{score_bs['小']})] | 单双[{push_oe}胜({score_oe['单']}vs{score_oe['双']})]")
 
-    # 长龙检测
+    # 3. 长龙防范强制干预 (检测近10期内是否 >= 6连)
+    recent_10_bs = [h['big_small'] for h in history[:10]]
+    recent_10_oe = [h['odd_even'] for h in history[:10]]
+    
     def check_dragon(seq):
         streak = 1
         for i in range(1, len(seq)):
@@ -75,29 +75,26 @@ def calculate_prediction(history, next_p):
             else: break
         return streak if streak >= 6 else 0, seq[0]
 
-    bs_streak, bs_type = check_dragon(bs_list)
-    oe_streak, oe_type = check_dragon(oe_list)
+    bs_streak, bs_type = check_dragon(recent_10_bs)
+    oe_streak, oe_type = check_dragon(recent_10_oe)
 
-    dragon_msg = []
-    if bs_streak: push_bs = bs_type; dragon_msg.append(f"大小连开{bs_streak}期{bs_type}")
-    if oe_streak: push_oe = oe_type; dragon_msg.append(f"单双连开{oe_streak}期{oe_type}")
-    
-    msg = "【长龙防回马枪】" + "，".join(dragon_msg) + "。" if dragon_msg else ""
+    if bs_streak:
+        push_bs = bs_type
+        reason_logs.append(f"⚠️ 大小长龙（{bs_streak}连{bs_type}），强制跟龙")
+    if oe_streak:
+        push_oe = oe_type
+        reason_logs.append(f"⚠️ 单双长龙（{oe_streak}连{oe_type}），强制跟龙")
 
-    # 组合与反推击杀（用于后端判定胜负）
+    # 4. 最终组合与后端击杀校验
     push_combo = f"{push_bs} ➕ {push_oe}"
     kill_combo = f"{'小' if push_bs == '大' else '大'} ➕ {'双' if push_oe == '单' else '单'}"
 
-    analysis = f"【近{h_len}期多跟少反推演】\n"
-    analysis += f"- 大小维度：{bs_reason}\n"
-    analysis += f"- 单双维度：{oe_reason}\n"
-    if msg: analysis += f"- {msg}\n"
-    analysis += f"\n🎯 推出组合：{push_combo}\n"
-    analysis += f"注：只要开出包含推出属性的组合均算中奖！"
+    analysis = f"【多周期层级推演】\n" + "\n".join(f"- {r}" for r in reason_logs)
+    analysis += f"\n\n🎯 最终推出：{push_combo}\n注：只要开出包含推出属性的组合均算中奖！"
 
     return {
         "kill": kill_combo, "rec": push_combo, "analysis": analysis, 
-        "algo_list": [{"name": "大小", "vote": push_bs, "detail": "多跟少反/平局顺延"}, {"name": "单双", "vote": push_oe, "detail": "多跟少反/平局顺延"}]
+        "algo_list": [{"name": "大小递进", "vote": push_bs, "detail": "少跟多反"}, {"name": "单双递进", "vote": push_oe, "detail": "少跟多反"}]
     }
 
 # ================== 极速抓取主循环 ==================
@@ -111,13 +108,12 @@ def fetch_loop():
                     data = json.loads(resp.read().decode('utf-8')).get('data')
                     if data:
                         latest = data[0]
-                        # 切片为15期数据
-                        history = [{"period": i['period'], "nums": f"{i['num1']} + {i['num2']} + {i['num3']}", "total": i['total'], "big_small": i['big_small'], "odd_even": i['odd_even']} for i in data[:15]]
+                        # 拉取足够的数据用于分析50期
+                        history = [{"period": i['period'], "nums": f"{i['num1']} + {i['num2']} + {i['num3']}", "total": i['total'], "big_small": i['big_small'], "odd_even": i['odd_even']} for i in data[:50]]
                         
                         if LIVE_DATA[gt]['period'] != latest['period']:
                             AI_STATUS["msg"] = "正在极速预测中..."
                             
-                            # 结算
                             if LIVE_DATA[gt]['period'] != "" and LIVE_DATA[gt]['pred']:
                                 real = latest['big_small'] + latest['odd_even']
                                 k_bs, k_oe = LIVE_DATA[gt]['pred']['kill'].split(" ➕ ")
@@ -126,7 +122,6 @@ def fetch_loop():
                                     conn.execute("UPDATE logs SET real_result=?, status=? WHERE gtype=? AND period=?", (real, status, gt, latest['period']))
                                     conn.commit()
 
-                            # 预测
                             dt = datetime.strptime(latest['draw_time'], "%Y-%m-%d %H:%M:%S")
                             next_p = str(int(latest['period'])+1)
                             LIVE_DATA[gt].update({
@@ -193,7 +188,7 @@ def index():
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-    <title>极简推出组合</title>
+    <title>多层级递进推演</title>
     <style>
         * { box-sizing: border-box; }
         body { background: #f4f6f9; margin: 0; font-family: -apple-system, sans-serif; color: #333; }
@@ -228,7 +223,7 @@ def index():
     </style>
 </head>
 <body>
-    <div class="head">极简推出组合</div>
+    <div class="head">多层级递进推演</div>
     <div class="status" id="status"><span class="dot"></span> 系统运转正常</div>
     <div class="tabs">
         <div class="tab on" onclick="switchG('2', this)">加拿大28</div>
@@ -244,7 +239,7 @@ def index():
     </div>
 
     <div class="card">
-        <div class="title">近 15 期 独立盘面</div>
+        <div class="title">近 50 期 独立盘面 (滑动查看)</div>
         <div class="history" id="history"></div>
     </div>
     
@@ -262,7 +257,7 @@ def index():
     
 <script>
     let curG = '2', timer = null;
-    const KEY = "simple_combo_v59";
+    const KEY = "layer_predict_v60";
     
     function switchG(g, el) {
         curG = g;
