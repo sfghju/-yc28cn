@@ -6,13 +6,12 @@ import threading
 import os
 import sqlite3
 import hashlib
-import random
 from collections import Counter
 from flask import Flask, request, jsonify
 from datetime import datetime, timedelta
 
 app = Flask(__name__)
-SECRET_KEY = "captain_final_v81"
+SECRET_KEY = "captain_formula_v83"
 
 GAMES = {
     "2": {"name": "加拿大28", "url": "https://yc28cn-ml1l.onrender.com/vipASDFGHJKLQQQWERTYUIOPWW9983/8626/0549CASWWW?type=2", "interval": 210},
@@ -20,14 +19,11 @@ GAMES = {
     "13": {"name": "比特28", "url": "https://yc28cn-ml1l.onrender.com/vipASDFGHJKLQQZXCVBNMWW9983/8626/0549CCBDR?type=13", "interval": 60}
 }
 
-AI_STATUS = {"online": True, "msg": "双向强制变化推演中..."}
+AI_STATUS = {"online": True, "msg": "纯身法公式演算中..."}
 LIVE_DATA = {gt: {"period": "", "next": "", "left": 0, "history": [], "pred": None, "algo_list": []} for gt in GAMES}
 
-# 记录上期的预测，用于防死板
-LAST_PRED_STR = {"2": "", "3": "", "13": ""}
-
 def db():
-    conn = sqlite3.connect('predict_final_v81.db', timeout=30)
+    conn = sqlite3.connect('predict_formula_v83.db', timeout=30)
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -39,126 +35,98 @@ with db() as conn:
     )''')
     conn.commit()
 
-# ================== 50套算法引擎 ==================
-def run_single_algo(aid, history):
-    if len(history) < 10: return "数据不足"
-    sums = [h['total'] for h in history]
-    bs = [1 if h['big_small'] == '大' else 0 for h in history]
-    oe = [1 if h['odd_even'] == '单' else 0 for h in history]
+# ================== 四大核心身法公式 ==================
+def formula_1_diff(history):
+    """位移差量公式：利用最新一期的三位数内部差值"""
+    if len(history) < 1: return "大单"
+    nums = [int(x) for x in history[0]['nums'].split(' + ')]
+    diff = abs(nums[0] - nums[1]) + abs(nums[1] - nums[2]) + abs(nums[0] - nums[2])
+    tail = diff % 10
+    return ("大" if tail >= 5 else "小") + ("单" if tail % 2 != 0 else "双")
+
+def formula_2_phase(history):
+    """相位偏移公式：和值黄金分割"""
+    if len(history) < 1: return "大单"
+    total = history[0]['total']
+    val = int(total * 0.618)
+    tail = val % 10
+    return ("大" if tail >= 5 else "小") + ("单" if tail % 2 != 0 else "双")
+
+def formula_3_cross(history):
+    """交叉异或公式：最新期与上一期位置相加"""
+    if len(history) < 2: return "大单"
+    n0 = [int(x) for x in history[0]['nums'].split(' + ')]
+    n1 = [int(x) for x in history[1]['nums'].split(' + ')]
+    val = n0[0] + n1[1] + n0[2] + n1[0]
+    tail = val % 10
+    return ("大" if tail >= 5 else "小") + ("单" if tail % 2 != 0 else "双")
+
+def formula_4_streak(history):
+    """连号断点公式"""
+    if len(history) < 2: return "大单"
+    last_bs = history[0]['big_small']
+    last_oe = history[0]['odd_even']
+    streak = 1
+    for i in range(1, len(history)):
+        if history[i]['big_small'] == last_bs: streak += 1
+        else: break
     
-    is_follow = aid <= 25
-    model_id = (aid % 5) if is_follow else ((aid - 25) % 5)
-    param = aid // 5
-    
-    push_bs, push_oe = 1, 1 
-    
-    if model_id == 0:
-        w = 3 + (param % 5)
-        ma = sum(sums[:w]) / w
-        push_bs = (1 if ma >= 13.5 else 0) if is_follow else (0 if ma >= 13.5 else 1)
-        push_oe = (1 if ma % 2 >= 1 else 0) if is_follow else (0 if ma % 2 >= 1 else 1)
-    elif model_id == 1:
-        w = 3 + (param % 4)
-        ma = sum(sums[:w]) / w
-        dev = sums[0] - ma
-        push_bs = (1 if dev > 0 else 0) if is_follow else (0 if dev > 0 else 1)
-        push_oe = oe[0] if is_follow else 1 - oe[0]
-    elif model_id == 2:
-        threshold = 2 + (param % 3)
-        streak = 1
-        for i in range(1, threshold+1):
-            if bs[i] == bs[0]: streak += 1
-            else: break
-        pred = bs[0] if streak < threshold else 1 - bs[0]
-        push_bs = pred if is_follow else 1 - pred
-        push_oe = oe[0]
-    elif model_id == 3:
-        w = 2 + (param % 4)
-        mom = sums[0] - sums[w]
-        pred = 1 if mom > 0 else 0
-        push_bs = pred if is_follow else 1 - pred
-        push_oe = pred 
+    if streak >= 3:
+        # 连号极值，必反
+        return ("小" if last_bs == "大" else "大") + ("双" if last_oe == "单" else "单")
     else:
-        w = 3 + (param % 3)
-        ups = sum([1 for i in range(w) if sums[i] > sums[i+1]])
-        pred = 1 if ups >= w/2 else 0
-        push_bs = pred if is_follow else 1 - pred
-        push_oe = (0 if ups == w else (1 if ups == 0 else pred)) if is_follow else (1 if ups == w else (0 if ups == 0 else 1-pred))
+        # 顺势
+        return last_bs + last_oe
 
-    return ("大" if push_bs == 1 else "小") + ("单" if push_oe == 1 else "双")
-
-# ================== 强制变向与共识引擎 ==================
+# ================== 执行预测与去重 ==================
 def calculate_matrix(gt, history, next_p):
     if len(history) < 10: return None
 
-    # 使用真实毫秒级时间作为种子
-    random.seed(int(time.time() * 1000) + int(next_p))
+    # 获取上期真实结果
+    last_bs = history[0]['big_small']
+    last_oe = history[0]['odd_even']
+
+    # 1. 运行 4 大公式
+    f1 = formula_1_diff(history)
+    f2 = formula_2_phase(history)
+    f3 = formula_3_cross(history)
+    f4 = formula_4_streak(history)
     
-    algo_stats = []
-    for aid in range(1, 51):
-        pred_now = run_single_algo(aid, history)
-        win_cnt = 0; curr_streak = 0; curr_type = ""
-        
-        for i in range(10):
-            if i+1 >= len(history): break
-            p = run_single_algo(aid, history[i+1:])
-            r_bs, r_oe = history[i]['big_small'], history[i]['odd_even']
-            if (r_bs == p[0] or r_oe == p[1]):
-                win_cnt += 1; curr_streak = curr_streak + 1 if curr_type == "win" else 1; curr_type = "win"
-            else:
-                curr_streak = 0; curr_type = "lose"
+    formulas = [
+        {"name": "位移差量公式", "vote": f1, "detail": "计算三位数内部差值取尾"},
+        {"name": "相位偏移公式", "vote": f2, "detail": "和值乘0.618黄金分割取尾"},
+        {"name": "交叉异或公式", "vote": f3, "detail": "两期同位数字交叉相加取尾"},
+        {"name": "连号断点公式", "vote": f4, "detail": "检测极值连号顺势或反杀"}
+    ]
 
-        algo_stats.append({
-            "id": aid, "pred": pred_now, "win": win_cnt, 
-            "streak": curr_streak if curr_type == "win" else 0
-        })
-
-    # 排序并强制去重（允许算法连续出场，但预测属性必须不同）
-    algo_stats.sort(key=lambda x: (x['streak'], x['win']), reverse=True)
-    
-    unique_pool = []
-    seen_preds = set()
-    for a in algo_stats:
-        if a['pred'] not in seen_preds:
-            unique_pool.append(a)
-            seen_preds.add(a['pred'])
-
-    final_group = unique_pool[:5]
-    if len(final_group) < 5:
-        for a in algo_stats:
-            if a not in final_group:
-                final_group.append(a)
-                if len(final_group) == 5: break
-
-    # 共识裁决
-    votes = Counter([a['pred'] for a in final_group])
+    # 2. 统票选出最高频
+    votes = Counter([f['vote'] for f in formulas])
     top_combo, count = votes.most_common(1)[0]
+
+    # 3. 【强制一跟一反】核心逻辑
+    # 只要这期算出来的组合，跟上一期完全一样，就强行打断
+    if top_combo == (last_bs + last_oe):
+        # 强行翻转大小
+        new_bs = '小' if top_combo[0] == '大' else '大'
+        top_combo = new_bs + top_combo[1]
+        logic_msg = "检测到与上期重复，强制启动一跟一反纠偏！"
+    else:
+        logic_msg = f"四大公式达成 {count} 票共识。"
+
+    top_display = f"{top_combo[0]} ➕ {top_combo[1]}"
+    kill_display = f"{'小' if top_combo[0]=='大' else '大'} ➕ {'双' if top_combo[1]=='单' else '单'}"
+
+    # 分析文案
+    f_details = "\n".join([f"- 【{f['name']}】: {f['detail']}，推【{f['vote']}】" for f in formulas])
     
-    final_pred = top_combo if count >= 3 else final_group[0]['pred']
-    consensus_msg = f"【{count}票共识】" if count >= 3 else "【强制主帅裁决】"
-
-    # 【核心逻辑：强制变化防死板】
-    # 如果这期推出来的组合跟上期一模一样，强行把大小或单双翻转
-    if final_pred == LAST_PRED_STR[gt]:
-        # 翻转大小
-        flipped_bs = '小' if final_pred[0] == '大' else '大'
-        final_pred = flipped_bs + final_pred[1]
-        consensus_msg += " (检测到连续重复，强制反向纠偏)"
-
-    LAST_PRED_STR[gt] = final_pred
-
-    top_display = f"{final_pred[0]} ➕ {final_pred[1]}"
-    kill_display = f"{'小' if final_pred[0]=='大' else '大'} ➕ {'双' if final_pred[1]=='单' else '单'}"
-
-    top5_details = "\n".join([f"- 算法{a['id']}: 连中{a['streak']}期，近10对{a['win']}，推【{a['pred']}】" for a in final_group])
-
-    analysis = f"【舰长·终极结论机制】\n"
-    analysis += f"严格筛选 50 套算法，本期出战阵容：\n{top5_details}\n\n"
-    analysis += f"逻辑判定：{consensus_msg}\n"
-    analysis += f"🎯 最终结论：坚决主推【{top_display}】\n"
+    analysis = f"【舰长·纯身法公式推演】\n"
+    analysis += f"上期开奖：{last_bs} {last_oe}\n"
+    analysis += f"{f_details}\n\n"
+    analysis += f"逻辑判定：{logic_msg}\n"
+    analysis += f"🎯 核心推出：{top_display}\n"
     analysis += f"注：开出包含推出属性即算中奖！"
 
-    return {"kill": kill_display, "rec": top_display, "analysis": analysis, "algo_list": final_group}
+    return {"kill": kill_display, "rec": top_display, "analysis": analysis, "algo_list": formulas}
 
 # ================== 极速抓取主循环 ==================
 def fetch_loop():
@@ -174,7 +142,7 @@ def fetch_loop():
                         history = [{"period": i['period'], "nums": f"{i['num1']} + {i['num2']} + {i['num3']}", "total": i['total'], "big_small": i['big_small'], "odd_even": i['odd_even']} for i in data[:30]]
                         
                         if LIVE_DATA[gt]['period'] != latest['period']:
-                            AI_STATUS["msg"] = "双向强制变化演算中..."
+                            AI_STATUS["msg"] = "执行身法公式推演中..."
                             
                             if LIVE_DATA[gt]['period'] != "" and LIVE_DATA[gt]['pred']:
                                 real_bs, real_oe = latest['big_small'], latest['odd_even']
@@ -205,7 +173,7 @@ def fetch_loop():
                                                  (gt, next_p, latest['draw_time'], pred["kill"], pred["rec"], pred["analysis"]))
                                     conn.commit()
                                 
-                            AI_STATUS["msg"] = "结论已出，等待开奖..."
+                            AI_STATUS["msg"] = "公式推导完成，等待开奖..."
                                 
                         LIVE_DATA[gt]['left'] = max(0, int(LIVE_DATA[gt]['target_time'] - datetime.utcnow().timestamp()))
             except Exception: pass
@@ -248,7 +216,6 @@ def api_clear(gt):
     with db() as conn:
         conn.execute("DELETE FROM logs WHERE gtype=?", (gt,))
         conn.commit()
-    LAST_PRED_STR[gt] = ""
     return jsonify({"ok": True})
 
 @app.route('/')
@@ -330,7 +297,7 @@ def index():
     
 <script>
     let curG = '2', timer = null;
-    const KEY = "captain_final_v81";
+    const KEY = "captain_formula_v83";
     
     function switchG(g, el) {
         curG = g;
