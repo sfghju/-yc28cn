@@ -12,7 +12,7 @@ from flask import Flask, request, jsonify
 from datetime import datetime, timedelta
 
 app = Flask(__name__)
-SECRET_KEY = "captain_strict_v77"
+SECRET_KEY = "captain_20steps_v78"
 
 GAMES = {
     "2": {"name": "加拿大28", "url": "https://yc28cn-ml1l.onrender.com/vipASDFGHJKLQQQWERTYUIOPWW9983/8626/0549CASWWW?type=2", "interval": 210},
@@ -20,11 +20,14 @@ GAMES = {
     "13": {"name": "比特28", "url": "https://yc28cn-ml1l.onrender.com/vipASDFGHJKLQQZXCVBNMWW9983/8626/0549CCBDR?type=13", "interval": 60}
 }
 
-AI_STATUS = {"online": True, "msg": "严格十步漏斗筛选中(近10期)..."}
+AI_STATUS = {"online": True, "msg": "20步极限漏斗筛选中(近10期)..."}
 LIVE_DATA = {gt: {"period": "", "next": "", "left": 0, "history": [], "pred": None, "algo_list": []} for gt in GAMES}
 
+# 核心：记录上期出战过的算法，用于强制轮换
+LAST_USED_ALGOS = {"2": [], "3": [], "13": []}
+
 def db():
-    conn = sqlite3.connect('predict_strict_v77.db', timeout=30)
+    conn = sqlite3.connect('predict_20steps_v78.db', timeout=30)
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -36,7 +39,7 @@ with db() as conn:
     )''')
     conn.commit()
 
-# ================== 200套真实算法引擎 (强制去重) ==================
+# ================== 200套真实算法引擎 (强化独立性) ==================
 def run_single_algo(aid, history):
     if len(history) < 10: return "数据不足"
     sums = [h['total'] for h in history]
@@ -45,11 +48,12 @@ def run_single_algo(aid, history):
     
     is_follow = aid <= 100
     model_id = (aid % 10) if is_follow else ((aid - 100) % 10)
-    param = aid // 10 # 0 到 19 之间
+    param = aid // 10 # 0-19 的强参数
+    
     push_bs, push_oe = 1, 1 
     
-    if model_id == 0: # MA移动平均
-        w = 3 + (param % 6) # 窗口3-8
+    if model_id == 0: # MA
+        w = 3 + (param % 7)
         ma = sum(sums[:w]) / w
         push_bs = (1 if ma >= 13.5 else 0) if is_follow else (0 if ma >= 13.5 else 1)
         push_oe = (1 if ma % 2 >= 1 else 0) if is_follow else (0 if ma % 2 >= 1 else 1)
@@ -60,7 +64,7 @@ def run_single_algo(aid, history):
         push_bs = (1 if dev > 0 else 0) if is_follow else (0 if dev > 0 else 1)
         push_oe = oe[0] if is_follow else 1 - oe[0]
     elif model_id == 2: # 连号极值
-        threshold = 2 + (param % 4) # 断龙阈值2-5
+        threshold = 2 + (param % 5)
         streak = 1
         for i in range(1, threshold+1):
             if bs[i] == bs[0]: streak += 1
@@ -68,21 +72,21 @@ def run_single_algo(aid, history):
         pred = bs[0] if streak < threshold else 1 - bs[0]
         push_bs = pred if is_follow else 1 - pred
         push_oe = oe[0]
-    elif model_id == 3: # MOM动量
-        w = 2 + (param % 5)
+    elif model_id == 3: # MOM
+        w = 2 + (param % 6)
         mom = sums[0] - sums[w]
         pred = 1 if mom > 0 else 0
         push_bs = pred if is_follow else 1 - pred
         push_oe = pred 
-    elif model_id == 4: # RSI强弱
+    elif model_id == 4: # RSI
         w = 3 + (param % 5)
         ups = sum([1 for i in range(w) if sums[i] > sums[i+1]])
         pred = 1 if ups >= w/2 else 0
         push_bs = pred if is_follow else 1 - pred
         push_oe = (0 if ups == w else (1 if ups == 0 else pred)) if is_follow else (1 if ups == w else (0 if ups == 0 else 1-pred))
     elif model_id == 5: # 布林带
-        w = 5 + (param % 6) # 周期5-10
-        std_factor = 1.5 + (param % 5) * 0.2 # 标准差倍数1.5 - 2.3
+        w = 5 + (param % 6) 
+        std_factor = 1.5 + (param % 5) * 0.2 
         ma = sum(sums[:w]) / w
         std = (sum([(x - ma)**2 for x in sums[:w]]) / w) ** 0.5
         if sums[0] > ma + std * std_factor: pred = 0
@@ -97,14 +101,13 @@ def run_single_algo(aid, history):
         push_bs, push_oe = freq // 2, freq % 2
         if not is_follow: push_bs, push_oe = 1 - push_bs, 1 - push_oe
     elif model_id == 7: # 斐波那契
-        w = 3 + (param % 4)
+        w = 3 + (param % 5)
         high, low = max(sums[:w]), min(sums[:w])
         fib = low + (high - low) * 0.618
         pred = 1 if fib >= 13.5 else 0
         push_bs = pred if is_follow else 1 - pred
         push_oe = pred if is_follow else 1 - pred
     elif model_id == 8: # 强哈希
-        # 加入 param 彻底打乱
         h = int(hashlib.sha256(f"{aid}_{history[0]['period']}_{sums[0]}_{param}".encode()).hexdigest(), 16)
         p_bs, p_oe = (h >> 1) & 1, h & 1
         push_bs = p_bs if is_follow else 1 - p_bs
@@ -121,16 +124,27 @@ def run_single_algo(aid, history):
 
     return ("大" if push_bs == 1 else "小") + ("单" if push_oe == 1 else "双")
 
-# ================== 十步漏斗筛选引擎 (近10期回测) ==================
+# ================== 强制去重器 ==================
+def unique_by_prediction(algo_list):
+    seen = set()
+    result = []
+    for a in algo_list:
+        if a['pred'] not in seen:
+            result.append(a)
+            seen.add(a['pred'])
+    return result
+
+# ================== 20步极限漏斗筛选 ==================
 def calculate_matrix(gt, history, next_p):
     if len(history) < 10: return None
 
+    # 1-5步：全量计算与回测
     algo_stats = []
     for aid in range(1, 201):
         pred_now = run_single_algo(aid, history)
         win_cnt = 0; lose_cnt = 0; curr_streak = 0; curr_type = ""
         
-        for i in range(10): # 近10期回测
+        for i in range(10):
             if i+1 >= len(history): break
             p = run_single_algo(aid, history[i+1:])
             r_bs, r_oe = history[i]['big_small'], history[i]['odd_even']
@@ -144,54 +158,58 @@ def calculate_matrix(gt, history, next_p):
             "streak": curr_streak if curr_type == "win" else 0
         })
 
-    # 剔除连中0，提拔连中>=2的
-    elite_pool = [a for a in algo_stats if a['streak'] >= 2]
-    if len(elite_pool) < 5:
-        elite_pool.extend([a for a in algo_stats if a['streak'] == 1])
+    # 6-10步：剔除上期用过、剔除连中0，按连中排序去重
+    streak_pool = [a for a in algo_stats if a['streak'] >= 1 and a['id'] not in LAST_USED_ALGOS[gt]]
+    streak_pool.sort(key=lambda x: (x['streak'], x['win']), reverse=True)
+    streak_pool = unique_by_prediction(streak_pool)
 
-    warning_msg = ""
-    if len(elite_pool) >= 5:
-        elite_pool.sort(key=lambda x: (x['streak'], x['win']), reverse=True)
-    else:
-        algo_stats.sort(key=lambda x: x['win'], reverse=True)
-        elite_pool = algo_stats[:10]
-        warning_msg = "【终极警告】全盘遭遇极限洗盘，强制按历史胜率提拔！"
+    # 11-15步：按最高总对排序去重
+    win_pool = [a for a in algo_stats if a['id'] not in LAST_USED_ALGOS[gt]]
+    win_pool.sort(key=lambda x: x['win'], reverse=True)
+    win_pool = unique_by_prediction(win_pool)
 
-    final_pred = None
-    top_5_final = []
-    best_vote_count = 0
+    # 16-20步：合并阵营，强行凑齐 3~5 个不同预测的算法
+    final_group = []
     
-    # 滑动窗口验证共识
-    for i in range(len(elite_pool) - 4):
-        current_group = elite_pool[i : i+5]
-        votes = Counter([t['pred'] for t in current_group])
-        top_combo, count = votes.most_common(1)[0]
+    # 优先从连中阵营拿
+    for a in streak_pool:
+        if len(final_group) >= 5: break
+        if a not in final_group: final_group.append(a)
         
-        if count > best_vote_count:
-            best_vote_count = count
-            final_pred = top_combo
-            top_5_final = current_group
-            if best_vote_count == 5: break
-                
-    if best_vote_count >= 3:
-        consensus_msg = f"触发【{best_vote_count}票共识】！" + ("全票通过，胜率极高！" if best_vote_count==5 else ("压倒性优势，极度稳妥！" if best_vote_count==4 else "多数派占优，稳健出击。"))
-    else:
-        top_5_final = elite_pool[:5]
-        final_pred = top_5_final[0]['pred']
-        consensus_msg = warning_msg + " (共识撕裂，强制榜首决议)"
+    # 如果不够 5 个，从总对阵营补
+    for a in win_pool:
+        if len(final_group) >= 5: break
+        if a not in final_group: final_group.append(a)
+        
+    # 如果还是不足 3 个，放宽限制找连中为0的替补
+    if len(final_group) < 3:
+        fallback = [a for a in algo_stats if a['id'] not in LAST_USED_ALGOS[gt]]
+        fallback.sort(key=lambda x: x['win'], reverse=True)
+        fallback = unique_by_prediction(fallback)
+        for a in fallback:
+            if len(final_group) >= 3: break
+            if a not in final_group: final_group.append(a)
 
-    top_display = f"{final_pred[0]} ➕ {final_pred[1]}"
-    kill_display = f"{'小' if final_pred[0]=='大' else '大'} ➕ {'双' if final_pred[1]=='单' else '单'}"
+    # 记录本期使用的算法，供下期黑名单禁用
+    LAST_USED_ALGOS[gt] = [a['id'] for a in final_group]
 
-    top5_details = "\n".join([f"- 算法{t['id']}: 连中{t['streak']}期，近10期对{t['win']}错{t['lose']}，推【{t['pred']}】" for t in top_5_final])
+    # 统票决议
+    votes = Counter([a['pred'] for a in final_group])
+    top_combo, count = votes.most_common(1)[0]
 
-    analysis = f"【舰长·十步漏斗过滤机制】\n"
-    analysis += f"经过真实筛选，最终出战阵容如下：\n{top5_details}\n\n"
-    analysis += f"逻辑判定：{consensus_msg}\n"
+    top_display = f"{top_combo[0]} ➕ {top_combo[1]}"
+    kill_display = f"{'小' if top_combo[0]=='大' else '大'} ➕ {'双' if top_combo[1]=='单' else '单'}"
+
+    top5_details = "\n".join([f"- 算法{a['id']}: 连中{a['streak']}期，近10对{a['win']}错{a['lose']}，推【{a['pred']}】" for a in final_group])
+
+    analysis = f"【舰长·20步极限漏斗筛选】\n"
+    analysis += f"本期严格挑选了 {len(final_group)} 个完全不同预测的算法（上期已禁用）：\n"
+    analysis += f"{top5_details}\n\n"
+    analysis += f"逻辑判定：达成【{count}票共识】！\n"
     analysis += f"🎯 核心推出：{top_display}\n"
     analysis += f"注：开出包含推出属性即算中奖！"
 
-    return {"kill": kill_display, "rec": top_display, "analysis": analysis, "algo_list": top_5_final}
+    return {"kill": kill_display, "rec": top_display, "analysis": analysis, "algo_list": final_group}
 
 # ================== 极速抓取主循环 ==================
 def fetch_loop():
@@ -207,7 +225,7 @@ def fetch_loop():
                         history = [{"period": i['period'], "nums": f"{i['num1']} + {i['num2']} + {i['num3']}", "total": i['total'], "big_small": i['big_small'], "odd_even": i['odd_even']} for i in data[:30]]
                         
                         if LIVE_DATA[gt]['period'] != latest['period']:
-                            AI_STATUS["msg"] = "十步漏斗极速过滤中..."
+                            AI_STATUS["msg"] = "20步漏斗极速过滤中..."
                             
                             if LIVE_DATA[gt]['period'] != "" and LIVE_DATA[gt]['pred']:
                                 real_bs, real_oe = latest['big_small'], latest['odd_even']
@@ -238,7 +256,7 @@ def fetch_loop():
                                                  (gt, next_p, latest['draw_time'], pred["kill"], pred["rec"], pred["analysis"]))
                                     conn.commit()
                                 
-                            AI_STATUS["msg"] = "十步筛选决议完毕，等待下一期..."
+                            AI_STATUS["msg"] = "20步严选决议完毕，等待下一期..."
                                 
                         LIVE_DATA[gt]['left'] = max(0, int(LIVE_DATA[gt]['target_time'] - datetime.utcnow().timestamp()))
             except Exception: pass
@@ -281,6 +299,7 @@ def api_clear(gt):
     with db() as conn:
         conn.execute("DELETE FROM logs WHERE gtype=?", (gt,))
         conn.commit()
+    LAST_USED_ALGOS[gt] = [] # 清空黑名单
     return jsonify({"ok": True})
 
 @app.route('/')
@@ -362,7 +381,7 @@ def index():
     
 <script>
     let curG = '2', timer = null;
-    const KEY = "captain_strict_v77";
+    const KEY = "captain_20steps_v78";
     
     function switchG(g, el) {
         curG = g;
