@@ -9,7 +9,7 @@ from flask import Flask, request, jsonify
 from datetime import datetime, timedelta
 
 app = Flask(__name__)
-SECRET_KEY = "captain_position_v91"
+SECRET_KEY = "captain_position_v92"
 
 GAMES = {
     "2": {"name": "加拿大28", "url": "https://yc28cn-ml1l.onrender.com/vipASDFGHJKLQQQWERTYUIOPWW9983/8626/0549CASWWW?type=2", "interval": 210},
@@ -17,11 +17,11 @@ GAMES = {
     "13": {"name": "比特28", "url": "https://yc28cn-ml1l.onrender.com/vipASDFGHJKLQQZXCVBNMWW9983/8626/0549CCBDR?type=13", "interval": 60}
 }
 
-AI_STATUS = {"online": True, "msg": "逐位公式深度推演中..."}
+AI_STATUS = {"online": True, "msg": "逐位公式深度推演中(四舍五入)..."}
 LIVE_DATA = {gt: {"period": "", "next": "", "left": 0, "history": [], "pred": None, "algo_list": []} for gt in GAMES}
 
 def db():
-    conn = sqlite3.connect('predict_position_v91.db', timeout=30)
+    conn = sqlite3.connect('predict_position_v92.db', timeout=30)
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -47,19 +47,22 @@ def calculate_matrix(gt, history, next_p):
 
     # 1. 推演 A 位 (百位)
     diffA_total = sum([abs(A_series[i] - A_series[i+1]) for i in range(9)])
-    avg_diffA = int(diffA_total / 9)
+    avg_diffA = round(diffA_total / 9) # 使用四舍五入
     pred_A = (A_series[0] + avg_diffA) % 10
 
     # 2. 推演 B 位 (十位)
     b_sum = sum(B_series)
-    b_avg = int(b_sum / 10)
+    b_avg = round(b_sum / 10) # 使用四舍五入
     pred_B = (B_series[0] * 2 - b_avg) % 10
     if pred_B < 0: pred_B += 10
 
     # 3. 推演 C 位 (个位)
     c_sum = sum(C_series)
-    c_avg = int(c_sum / 10)
-    pred_C = c_avg if c_avg != C_series[0] else (c_avg + 4) % 10
+    c_avg = round(c_sum / 10) # 使用四舍五入
+    if c_avg == C_series[0]:
+        pred_C = (c_avg + 4) % 10 # 如果等于上期，强制震荡偏移
+    else:
+        pred_C = c_avg
 
     # 汇总推演出的三位新号码
     pred_nums = [pred_A, pred_B, pred_C]
@@ -82,18 +85,21 @@ def calculate_matrix(gt, history, next_p):
     analysis += f"=== 【A位推演 (百位)】 ===\n"
     analysis += f"近10期A位序列：{A_series}\n"
     analysis += f"1. 计算相邻两期差值的绝对值之和：{diffA_total}\n"
-    analysis += f"2. 计算平均差值：{diffA_total} ÷ 9 = {avg_diffA} (取整)\n"
+    analysis += f"2. 计算平均差值：{diffA_total} ÷ 9 = {diffA_total/9:.2f}，四舍五入取整为 {avg_diffA}\n"
     analysis += f"3. 推演落点：(上期A位 {A_series[0]} + 平均差值 {avg_diffA}) % 10 = 【{pred_A}】\n\n"
 
     analysis += f"=== 【B位推演 (十位)】 ===\n"
     analysis += f"近10期B位序列：{B_series}\n"
-    analysis += f"1. 计算10期总和：{b_sum}，均值：{b_sum} ÷ 10 = {b_avg} (取整)\n"
+    analysis += f"1. 计算10期总和：{b_sum}，均值：{b_sum} ÷ 10 = {b_sum/10:.2f}，四舍五入取整为 {b_avg}\n"
     analysis += f"2. 推演落点：(上期B位 {B_series[0]} × 2 - 均值 {b_avg}) % 10 = 【{pred_B}】\n\n"
 
     analysis += f"=== 【C位推演 (个位)】 ===\n"
     analysis += f"近10期C位序列：{C_series}\n"
-    analysis += f"1. 计算10期总和：{c_sum}，均值：{c_sum} ÷ 10 = {c_avg} (取整)\n"
-    analysis += f"2. 推演落点：均值不等于上期 {C_series[0]}，直接取均值 【{pred_C}】\n\n"
+    analysis += f"1. 计算10期总和：{c_sum}，均值：{c_sum} ÷ 10 = {c_sum/10:.2f}，四舍五入取整为 {c_avg}\n"
+    if c_avg == C_series[0]:
+        analysis += f"2. 推演落点：均值 {c_avg} 等于上期 {C_series[0]}，强制震荡偏移 (均值+4)%10 = 【{pred_C}】\n\n"
+    else:
+        analysis += f"2. 推演落点：直接取均值 【{pred_C}】\n\n"
 
     analysis += f"=== 【综合判定】 ===\n"
     analysis += f"预测三码：{pred_A} + {pred_B} + {pred_C} = {pred_total}\n"
@@ -233,7 +239,6 @@ def index():
         .cd.analyzing { color: #d63031; font-size: 20px; animation: flash 0.5s infinite alternate;}
         @keyframes flash { 0% { opacity: 0.4; } 100% { opacity: 1; } }
         
-        /* 计算过程详细面板样式 */
         .ana { background: #fdfaf6; padding: 15px; border-left: 4px solid #e17055; font-size: 14px; line-height: 1.7; color: #2d3436; white-space: pre-wrap; border-radius: 0 12px 12px 0; margin-top: 15px; font-family: monospace;}
         
         .log-item { border-bottom: 1px solid #f1f2f6; padding: 12px 0; font-size: 13px; display: flex; justify-content: space-between; }
@@ -278,7 +283,7 @@ def index():
     
 <script>
     let curG = '2', timer = null;
-    const KEY = "captain_position_v91";
+    const KEY = "captain_position_v92";
     
     function switchG(g, el) {
         curG = g;
