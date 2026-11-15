@@ -9,7 +9,7 @@ from flask import Flask, request, jsonify
 from datetime import datetime, timedelta
 
 app = Flask(__name__)
-SECRET_KEY = "reverse_frequency_v50"
+SECRET_KEY = "simple_combo_v52"
 
 GAMES = {
     "2": {"name": "加拿大28", "url": "https://yc28cn-ml1l.onrender.com/vipASDFGHJKLQQQWERTYUIOPWW9983/8626/0549CASWWW?type=2", "interval": 210},
@@ -17,15 +17,11 @@ GAMES = {
     "13": {"name": "比特28", "url": "https://yc28cn-ml1l.onrender.com/vipASDFGHJKLQQZXCVBNMWW9983/8626/0549CCBDR?type=13", "interval": 60}
 }
 
-AI_STATUS = {"online": True, "msg": "50期频次回测反杀中..."}
+AI_STATUS = {"online": True, "msg": "20期冷热极简推演中..."}
 LIVE_DATA = {gt: {"period": "", "next": "", "left": 0, "history": [], "pred": None, "algo_list": []} for gt in GAMES}
 
-# 记录上期的绝杀项和连杀次数
-LAST_KILL_STR = {"2": "", "3": "", "13": ""}
-KILL_STREAK_COUNT = {"2": 0, "3": 0, "13": 0}
-
 def db():
-    conn = sqlite3.connect('predict_v50.db', timeout=30)
+    conn = sqlite3.connect('predict_v52.db', timeout=30)
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -35,79 +31,73 @@ with db() as conn:
         analysis TEXT, real_result TEXT DEFAULT '', status TEXT DEFAULT 'wait')''')
     conn.commit()
 
-# ================== 多周期高频反杀引擎 ==================
+# ================== 极简冷热推演引擎 ==================
 def calculate_prediction(gt, history, next_p):
-    if len(history) < 10:
-        return {"kill": "数据不足", "rec": "数据不足", "analysis": "等待足够的50期数据...", "algo_list": []}
+    if len(history) < 20:
+        return {"kill": "数据不足", "rec": "数据不足", "analysis": "等待20期数据...", "algo_list": []}
         
-    # 限制最大取50期
-    max_len = min(50, len(history))
+    h20 = history[:20]
+    bs_list = [h['big_small'] for h in h20]
+    oe_list = [h['odd_even'] for h in h20]
     
-    # 周期权重定义：近10期权重最高，50期权重最低
-    cycles = {10: 5, 20: 4, 30: 3, 40: 2, 50: 1}
-    scores = {"大单": 0, "大双": 0, "小单": 0, "小双": 0}
+    big_cnt = bs_list.count('大')
+    small_cnt = bs_list.count('小')
+    odd_cnt = oe_list.count('单')
+    even_cnt = oe_list.count('双')
     
-    algo_list = []
+    # 默认逻辑：谁多杀谁，谁少推谁
+    kill_bs = "大" if big_cnt >= small_cnt else "小"
+    push_bs = "小" if kill_bs == "大" else "大"
     
-    for cycle, weight in cycles.items():
-        if len(history) >= cycle:
-            recent = history[:cycle]
-            counts = {"大单": 0, "大双": 0, "小单": 0, "小双": 0}
-            for h in recent:
-                combo = h['big_small'] + h['odd_even']
-                if combo in counts:
-                    counts[combo] += 1
-            
-            # 累加加权得分
-            for combo in scores:
-                scores[combo] += counts[combo] * weight
-                
-            # 记录当前周期的最高频项
-            max_combo = max(counts, key=counts.get)
-            algo_list.append({
-                "name": f"近{cycle}期高频", 
-                "vote": max_combo, 
-                "detail": f"最高频【{max_combo}】出现{counts[max_combo]}次"
-            })
+    kill_oe = "单" if odd_cnt >= even_cnt else "双"
+    push_oe = "双" if kill_oe == "单" else "单"
 
-    # 按得分从高到低排序（得分越高，出现次数越多，越容易回落）
-    sorted_scores = sorted(scores.items(), key=lambda x: x[1], reverse=True)
-    
-    # 【反着来逻辑】：高频的三个去防守和绝杀，低频的一个去主攻
-    # 排除连杀熔断
-    if KILL_STREAK_COUNT[gt] >= 2:
-        # 已经连杀两期同一个方向，第三期强制换
-        KILL_STREAK_COUNT[gt] = 0
-        kill_str = sorted_scores[1][0]
-        defend_str = sorted_scores[0][0]
-        backup_str = sorted_scores[2][0]
-        main_vote = sorted_scores[3][0]
-    else:
-        kill_str = sorted_scores[0][0]    # 最热的，绝杀
-        defend_str = sorted_scores[1][0]  # 第二热的，防守
-        backup_str = sorted_scores[2][0]  # 第三热的，备选
-        main_vote = sorted_scores[3][0]   # 最冷的，主攻
+    # 检测长龙 (>=6连)
+    def check_dragon(seq):
+        streak = 1
+        for i in range(1, len(seq)):
+            if seq[i] == seq[0]: streak += 1
+            else: break
+        return streak >= 6, streak, seq[0]
 
-    # 更新熔断计数
-    if kill_str == LAST_KILL_STR[gt]:
-        KILL_STREAK_COUNT[gt] += 1
-    else:
-        KILL_STREAK_COUNT[gt] = 1
-    LAST_KILL_STR[gt] = kill_str
+    has_bs_dragon, bs_streak, bs_dragon_type = check_dragon(bs_list)
+    has_oe_dragon, oe_streak, oe_dragon_type = check_dragon(oe_list)
 
-    # 格式化得分
-    score_str = " | ".join([f"{k}:{v}分" for k, v in sorted_scores])
+    dragon_msg = ""
     
-    analysis = f"【多周期频次反杀】逆向博弈逻辑。\n"
-    analysis += f"- 综合得分：{score_str}\n"
-    analysis += f"- 【反着来】：坚决绝杀最热项【{kill_str}】，主攻最冷门【{main_vote}】！\n"
-    
-    # 把得分作为推演明细展示
-    algo_list.append({"name": "加权总分统计", "vote": "锁定", "detail": score_str})
+    # 长龙防回马枪逻辑：多的跟，少的反
+    if has_bs_dragon:
+        push_bs = bs_dragon_type # 连开什么就跟什么
+        kill_bs = "小" if push_bs == "大" else "大"
+        dragon_msg += f"【大小长龙】已连开 {bs_streak} 期【{bs_dragon_type}】，顺势跟进，防回马枪。\n"
+        
+    if has_oe_dragon:
+        push_oe = oe_dragon_type
+        kill_oe = "双" if push_oe == "单" else "单"
+        dragon_msg += f"【单双长龙】已连开 {oe_streak} 期【{oe_dragon_type}】，顺势跟进，防回马枪。\n"
+
+    if not dragon_msg:
+        dragon_msg = "【盘面平稳】遵循少跟多反原则。\n"
+
+    # 组合
+    push_combo = f"{push_bs} ➕ {push_oe}"
+    kill_combo = f"{kill_bs} ➕ {kill_oe}"
+
+    analysis = f"【近20期冷热推演】\n"
+    analysis += f"- 大小统计：大({big_cnt}) / 小({small_cnt})\n"
+    analysis += f"- 单双统计：单({odd_cnt}) / 双({even_cnt})\n"
+    analysis += f"- {dragon_msg}"
+    analysis += f"\n🎯 推出组合：{push_combo}\n🚫 击杀组合：{kill_combo}\n"
+    analysis += f"注：只要开出包含推出属性的组合（如推大单，开大双或小单），均算中奖！"
+
+    algo_list = [
+        {"name": "大小风向", "vote": push_bs, "detail": f"大{big_cnt} 小{small_cnt}"},
+        {"name": "单双风向", "vote": push_oe, "detail": f"单{odd_cnt} 双{even_cnt}"}
+    ]
 
     return {
-        "kill": kill_str, 
-        "rec": f"{main_vote}(主攻)、{defend_str}(防守)、{backup_str}(备选)", 
+        "kill": kill_combo, 
+        "rec": push_combo, 
         "analysis": analysis, 
         "algo_list": algo_list
     }
@@ -123,8 +113,7 @@ def fetch_loop():
                 with urllib.request.urlopen(req, timeout=5, context=ctx) as resp:
                     data = json.loads(resp.read().decode('utf-8'))
                     if data.get('data'):
-                        # 获取全部历史数据，最多截取50期
-                        raw_data = data['data'][:50]
+                        raw_data = data['data'][:20]
                         latest = raw_data[0]
                         
                         history = [{
@@ -136,12 +125,20 @@ def fetch_loop():
                         } for i in raw_data]
                         
                         if LIVE_DATA[gt]['period'] != latest['period']:
-                            # 结算
+                            # 结算逻辑：只要开出的结果不是击杀组合里的两个属性同时出现，就算容错命中
                             if LIVE_DATA[gt]['period'] != "" and LIVE_DATA[gt]['pred']:
                                 real = latest['big_small'] + latest['odd_even']
-                                p_kill = LIVE_DATA[gt]['pred']['kill']
+                                p_kill_combo = LIVE_DATA[gt]['pred']['kill']
+                                # 过滤加号
+                                k_bs, k_oe = p_kill_combo.replace(" ", "").split("➕")
+                                
+                                # 如果开奖同时满足击杀的大小和单双，才算输
+                                if real == (k_bs + k_oe):
+                                    status = 'lose'
+                                else:
+                                    status = 'win' 
+                                
                                 with db() as conn:
-                                    status = 'win' if real != p_kill else 'lose'
                                     conn.execute("UPDATE logs SET real_result=?, status=? WHERE gtype=? AND period=?", (real, status, gt, latest['period']))
                                     conn.commit()
 
@@ -171,7 +168,7 @@ def fetch_loop():
 
 threading.Thread(target=fetch_loop, daemon=True).start()
 
-# ================== API 与 前端 ==================
+# ================== API 与 极简前端 ==================
 def verify(): return request.headers.get('X-Token') == SECRET_KEY
 
 @app.route('/api/data/<gt>')
@@ -214,7 +211,7 @@ def index():
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-    <title>多周期频次反杀系统</title>
+    <title>极简推演组合</title>
     <style>
         * { box-sizing: border-box; }
         body { background: #f4f6f9; margin: 0; font-family: -apple-system, sans-serif; color: #333; }
@@ -225,43 +222,37 @@ def index():
         .tabs { display: flex; padding: 10px; gap: 10px; background: #fff; border-bottom: 1px solid #f1f2f6;}
         .tab { flex: 1; padding: 10px; text-align: center; background: #f0f2f5; border-radius: 8px; font-weight: bold; font-size: 14px; cursor: pointer; }
         .tab.on { background: #0984e3; color: #fff; }
-        .stats-bar { display: flex; background: #fff; margin: 12px; padding: 10px; border-radius: 12px; font-size: 13px; font-weight: bold; text-align: center;}
-        .stats-item { flex: 1; border-right: 1px solid #f1f2f6;}
-        .stats-item:last-child { border-right: none; }
-        .stats-val { display: block; font-size: 18px; margin-top: 4px;}
-        .card { background: #fff; margin: 12px; padding: 15px; border-radius: 12px; }
+        
+        .card { background: #fff; margin: 12px; padding: 15px; border-radius: 12px; box-shadow: 0 2px 10px rgba(0,0,0,0.05); }
         .title { font-size: 14px; font-weight: bold; margin-bottom: 10px; color: #2d3436;}
+        
         .history { display: flex; overflow-x: auto; gap: 10px; padding-bottom: 5px; }
         .h-item { background: #f8f9fa; padding: 10px; border-radius: 8px; min-width: 95px; text-align: center; border: 1px solid #eee;}
         .h-period { color: #b2bec3; font-size: 11px;}
         .h-nums { color: #636e72; font-size: 12px; margin: 4px 0; }
         .h-total { color: #d63031; font-weight: bold; font-size: 16px; }
-        .kill { color: #d63031; font-size: 22px; font-weight: 900; text-align: center; margin: 10px 0; background: #fff5f5; padding: 12px; border-radius: 8px; }
-        .rec-main { color: #fff; background: #e17055; font-size: 22px; font-weight: bold; text-align: center; margin-bottom: 10px; padding: 15px; border-radius: 8px; }
-        .rec-other { display: flex; gap: 10px; margin-bottom: 15px;}
-        .rec-def { flex: 1; color: #0984e3; background: #e8f4f8; font-size: 16px; font-weight: bold; text-align: center; padding: 12px; border-radius: 8px;}
-        .rec-bak { flex: 1; color: #636e72; background: #f1f2f6; font-size: 16px; font-weight: bold; text-align: center; padding: 12px; border-radius: 8px;}
         
-        .cd-box { text-align: center; font-size: 14px; color: #636e72; margin-bottom: 10px; display: flex; align-items: center; justify-content: center;}
-        .cd { font-size: 22px; color: #0984e3; font-weight: bold; margin-left: 5px;}
+        /* 极简展示区 */
+        .result-box { display: flex; flex-direction: column; gap: 15px; margin-top: 10px; }
+        .res-item { padding: 20px; border-radius: 12px; text-align: center; font-size: 32px; font-weight: 900; letter-spacing: 2px;}
+        .res-kill { color: #d63031; background: #fff5f5; border: 1px solid #ffcccc; }
+        .res-push { color: #0984e3; background: #e8f4f8; border: 1px solid #b2d8ef; }
+        
+        .cd-box { text-align: center; font-size: 14px; color: #636e72; margin-bottom: 10px;}
+        .cd { font-size: 22px; color: #0984e3; font-weight: bold; }
         .cd.danger { color: #d63031; animation: flash 0.5s infinite alternate;}
         @keyframes flash { 0% { opacity: 0.4; } 100% { opacity: 1; } }
         
-        .ana { background: #fdfaf6; padding: 15px; border-left: 4px solid #e17055; font-size: 14px; line-height: 1.7; color: #2d3436; white-space: pre-wrap; }
+        .ana { background: #fdfaf6; padding: 15px; border-left: 4px solid #e17055; font-size: 14px; line-height: 1.7; color: #2d3436; white-space: pre-wrap; border-radius: 0 12px 12px 0; margin-top: 15px;}
         
-        .api-list { display: none; background: #222f3e; color: #c8d6e5; margin: 12px; padding: 15px; border-radius: 12px; font-family: monospace; font-size: 12px; max-height: 400px; overflow-y: auto; }
-        .api-title { color: #feca57; font-weight: bold; margin-bottom: 10px; font-size: 14px; position: sticky; top: 0; background: #222f3e; padding-bottom: 5px; border-bottom: 1px solid #576574; z-index: 10;}
-        .api-row { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px dashed #2c3e50; }
-        .api-row span.red { color: #ff6b6b; font-weight: bold; }
-
-        .log-item { border-bottom: 1px solid #f1f2f6; padding: 10px 0; font-size: 13px; display: flex; justify-content: space-between; }
+        .log-item { border-bottom: 1px solid #f1f2f6; padding: 12px 0; font-size: 13px; display: flex; justify-content: space-between; }
         .win { color: #00b894; font-weight: bold; } .lose { color: #d63031; font-weight: bold; }
         .btn-clear { float:right; font-size:12px; padding:5px 10px; border:1px solid #d63031; color:#d63031; border-radius:6px;}
         .log-scroll { max-height: 400px; overflow-y: auto; }
     </style>
 </head>
 <body>
-    <div class="head">多周期频次反杀系统</div>
+    <div class="head">极简推演组合</div>
     <div class="status" id="status"><span class="dot"></span> 系统运转正常</div>
     <div class="tabs">
         <div class="tab on" onclick="switchG('2', this)">加拿大28</div>
@@ -269,40 +260,31 @@ def index():
         <div class="tab" onclick="switchG('13', this)">比特28</div>
     </div>
     
-    <div class="stats-bar">
-        <div class="stats-item">当前连中<span class="stats-val win" id="st-cw">0</span></div>
-        <div class="stats-item">当前连错<span class="stats-val lose" id="st-cl">0</span></div>
-        <div class="stats-item">总命中<span class="stats-val win" id="st-tw">0</span></div>
-        <div class="stats-item">总被杀<span class="stats-val lose" id="st-tl">0</span></div>
-    </div>
-
-    <div class="api-list" id="api-box">
-        <div class="api-title" id="api-title">📡 多周期频次统计</div>
-        <div id="api-content"></div>
-    </div>
-
     <div class="card">
         <div class="title">近 20 期 独立盘面</div>
         <div class="history" id="history"></div>
     </div>
+    
     <div class="card" id="pred-box" style="display:none">
         <div class="title">目标拦截: <span id="next-period" style="color:#0984e3;"></span></div>
-        <div class="kill">🚫 高危绝杀: <span id="kill-item"></span></div>
-        <div class="rec-main">🔥 核心主攻: <span id="main-item"></span></div>
-        <div class="rec-other">
-            <div class="rec-def">🛡️ 重点防守: <span id="def-item"></span></div>
-            <div class="rec-bak">🎯 战术备选: <span id="bak-item"></span></div>
+        
+        <div class="result-box">
+            <div class="res-item res-kill">🚫 击杀：<span id="kill-item"></span></div>
+            <div class="res-item res-push">🎯 推出：<span id="rec-item"></span></div>
         </div>
-        <div class="cd-box">状态: <span class="cd" id="cd">--:--</span></div>
+
+        <div class="cd-box" style="margin-top:20px;">距开奖: <span class="cd" id="cd">--:--</span></div>
         <div class="ana" id="ana"></div>
     </div>
+    
     <div class="card">
         <div class="title">历史复盘 <button class="btn-clear" onclick="clearLogs()">清空</button></div>
         <div id="logs" class="log-scroll"></div>
     </div>
+    
 <script>
     let curG = '2', timer = null;
-    const KEY = "reverse_frequency_v50";
+    const KEY = "simple_combo_v52";
     
     function switchG(g, el) {
         curG = g;
@@ -325,34 +307,12 @@ def index():
                     <div>${h.big_small}${h.odd_even}</div>
                 </div>`).join('');
 
-            if (d.algo_list && d.algo_list.length > 0) {
-                document.getElementById('api-box').style.display = 'block';
-                let html = '';
-                d.algo_list.forEach(algo => {
-                    html += `<div class="api-row">
-                        <div>
-                            <div style="color:#feca57;">[${algo.name}]</div>
-                            <div style="font-size:11px;">${algo.detail}</div>
-                        </div>
-                        <div class="red" style="font-size:16px;">${algo.vote}</div>
-                    </div>`;
-                });
-                document.getElementById('api-content').innerHTML = html;
-            } else {
-                document.getElementById('api-box').style.display = 'none';
-            }
-
             if(d.pred) {
                 document.getElementById('pred-box').style.display = 'block';
                 document.getElementById('next-period').innerText = d.next;
                 document.getElementById('kill-item').innerText = d.pred.kill;
+                document.getElementById('rec-item').innerText = d.pred.rec;
                 document.getElementById('ana').innerText = d.pred.analysis;
-                try {
-                    let parts = d.pred.rec.split('、');
-                    document.getElementById('main-item').innerText = parts[0].replace('(主攻)', '');
-                    document.getElementById('def-item').innerText = parts[1].replace('(防守)', '');
-                    document.getElementById('bak-item').innerText = parts[2].replace('(备选)', '');
-                } catch(e) {}
             }
             
             if(timer) clearInterval(timer);
@@ -360,7 +320,7 @@ def index():
             let cdEl = document.getElementById('cd');
             
             if(left <= 0) {
-                cdEl.innerText = "极速拉取官方开奖中...";
+                cdEl.innerText = "开奖中...";
                 cdEl.classList.add('danger');
                 setTimeout(fetchData, 100); 
                 return;
@@ -382,16 +342,11 @@ def index():
     
     function fetchLogs() {
         fetch(`/api/logs/${curG}`, { headers: {'X-Token': KEY} }).then(r => r.json()).then(res => {
-            document.getElementById('st-cw').innerText = res.stats.current_win;
-            document.getElementById('st-cl').innerText = res.stats.current_lose;
-            document.getElementById('st-tw').innerText = res.stats.total_win;
-            document.getElementById('st-tl').innerText = res.stats.total_lose;
-            
             document.getElementById('logs').innerHTML = res.logs.map(l => `
                 <div class="log-item">
                     <div>
-                        <div style="color:#b2bec3; font-size:12px;">${l.period} | 开奖时间: ${l.draw_time || '---'}</div>
-                        <div>绝杀:<span class="lose">${l.kill}</span> | 推荐:${l.rec}</div>
+                        <div style="color:#b2bec3; font-size:12px;">${l.period} | ${l.draw_time || '---'}</div>
+                        <div style="margin-top:4px;">推:<span style="color:#0984e3; font-weight:bold;">${l.rec}</span> | 杀:<span style="color:#d63031; font-weight:bold;">${l.kill}</span></div>
                     </div>
                     <div style="text-align:right">
                         <div class="${l.status === 'win' ? 'win' : (l.status === 'lose' ? 'lose' : '')}">
