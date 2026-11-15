@@ -10,7 +10,7 @@ from flask import Flask, request, jsonify
 from datetime import datetime, timedelta
 
 app = Flask(__name__)
-SECRET_KEY = "simple_combo_v57"
+SECRET_KEY = "simple_combo_v58"
 
 GAMES = {
     "2": {"name": "加拿大28", "url": "https://yc28cn-ml1l.onrender.com/vipASDFGHJKLQQQWERTYUIOPWW9983/8626/0549CASWWW?type=2", "interval": 210},
@@ -22,7 +22,7 @@ AI_STATUS = {"online": True, "msg": "近25期多跟少反推演中..."}
 LIVE_DATA = {gt: {"period": "", "next": "", "left": 0, "history": [], "pred": None, "algo_list": []} for gt in GAMES}
 
 def db():
-    conn = sqlite3.connect('predict_v57.db', timeout=30)
+    conn = sqlite3.connect('predict_v58.db', timeout=30)
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -45,9 +45,27 @@ def calculate_prediction(history, next_p):
     bs_cnt = Counter(bs_list)
     oe_cnt = Counter(oe_list)
     
-    # 多跟少反
-    push_bs = "大" if bs_cnt['大'] >= bs_cnt['小'] else "小"
-    push_oe = "单" if oe_cnt['单'] >= oe_cnt['双'] else "双"
+    # --- 大小平局破局逻辑 ---
+    if bs_cnt['大'] > bs_cnt['小']:
+        push_bs = "大"
+        bs_reason = f"大({bs_cnt['大']}) > 小({bs_cnt['小']})，主推大"
+    elif bs_cnt['小'] > bs_cnt['大']:
+        push_bs = "小"
+        bs_reason = f"小({bs_cnt['小']}) > 大({bs_cnt['大']})，主推小"
+    else:
+        push_bs = hx[0]['big_small'] # 平局顺延最新一期
+        bs_reason = f"大({bs_cnt['大']}) = 小({bs_cnt['小']})平局，顺延上期【{push_bs}】"
+
+    # --- 单双平局破局逻辑 ---
+    if oe_cnt['单'] > oe_cnt['双']:
+        push_oe = "单"
+        oe_reason = f"单({oe_cnt['单']}) > 双({oe_cnt['双']})，主推单"
+    elif oe_cnt['双'] > oe_cnt['单']:
+        push_oe = "双"
+        oe_reason = f"双({oe_cnt['双']}) > 单({oe_cnt['单']})，主推双"
+    else:
+        push_oe = hx[0]['odd_even'] # 平局顺延最新一期
+        oe_reason = f"单({oe_cnt['单']}) = 双({oe_cnt['双']})平局，顺延上期【{push_oe}】"
 
     # 长龙检测
     def check_dragon(seq):
@@ -64,19 +82,22 @@ def calculate_prediction(history, next_p):
     if bs_streak: push_bs = bs_type; dragon_msg.append(f"大小连开{bs_streak}期{bs_type}")
     if oe_streak: push_oe = oe_type; dragon_msg.append(f"单双连开{oe_streak}期{oe_type}")
     
-    msg = "【长龙防回马枪】" + "，".join(dragon_msg) + "。" if dragon_msg else "【盘面平稳】多跟少反原则。"
+    msg = "【长龙防回马枪】" + "，".join(dragon_msg) + "。" if dragon_msg else ""
 
     # 组合与反推击杀（用于后端判定胜负）
     push_combo = f"{push_bs} ➕ {push_oe}"
     kill_combo = f"{'小' if push_bs == '大' else '大'} ➕ {'双' if push_oe == '单' else '单'}"
 
-    analysis = f"【近{h_len}期多跟少反推演】\n- 大小统计：大({bs_cnt['大']}) / 小({bs_cnt['小']})\n"
-    analysis += f"- 单双统计：单({oe_cnt['单']}) / 双({oe_cnt['双']})\n- {msg}\n\n"
-    analysis += f"🎯 推出组合：{push_combo}\n注：只要开出包含推出属性的组合均算中奖！"
+    analysis = f"【近{h_len}期多跟少反推演】\n"
+    analysis += f"- 大小维度：{bs_reason}\n"
+    analysis += f"- 单双维度：{oe_reason}\n"
+    if msg: analysis += f"- {msg}\n"
+    analysis += f"\n🎯 推出组合：{push_combo}\n"
+    analysis += f"注：只要开出包含推出属性的组合均算中奖！"
 
     return {
         "kill": kill_combo, "rec": push_combo, "analysis": analysis, 
-        "algo_list": [{"name": "大小", "vote": push_bs, "detail": "多跟少反"}, {"name": "单双", "vote": push_oe, "detail": "多跟少反"}]
+        "algo_list": [{"name": "大小", "vote": push_bs, "detail": "多跟少反/平局顺延"}, {"name": "单双", "vote": push_oe, "detail": "多跟少反/平局顺延"}]
     }
 
 # ================== 极速抓取主循环 ==================
@@ -240,7 +261,7 @@ def index():
     
 <script>
     let curG = '2', timer = null;
-    const KEY = "simple_combo_v57";
+    const KEY = "simple_combo_v58";
     
     function switchG(g, el) {
         curG = g;
