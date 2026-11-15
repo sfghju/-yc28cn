@@ -11,7 +11,7 @@ from flask import Flask, request, jsonify
 from datetime import datetime, timedelta
 
 app = Flask(__name__)
-SECRET_KEY = "algo_200_matrix_v63"
+SECRET_KEY = "algo_200_matrix_v64"
 
 GAMES = {
     "2": {"name": "加拿大28", "url": "https://yc28cn-ml1l.onrender.com/vipASDFGHJKLQQQWERTYUIOPWW9983/8626/0549CASWWW?type=2", "interval": 210},
@@ -22,11 +22,10 @@ GAMES = {
 AI_STATUS = {"online": True, "msg": "200套独立算法矩阵推演中..."}
 LIVE_DATA = {gt: {"period": "", "next": "", "left": 0, "history": [], "pred": None, "algo_list": []} for gt in GAMES}
 
-# 维护 200 套算法的状态
 ALGO_STATS = {gt: {i: {"history": [], "streak": 0, "type": "", "win": 0, "lose": 0} for i in range(1, 201)} for gt in GAMES}
 
 def db():
-    conn = sqlite3.connect('predict_v63.db', timeout=30)
+    conn = sqlite3.connect('predict_v64.db', timeout=30)
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -44,75 +43,48 @@ def run_single_algo(aid, history):
     oe_seq = [h['odd_even'] for h in history]
     
     mode = aid % 10
-    param = aid // 10 # 0-19 参数
+    param = aid // 10
     
     push_bs, push_oe = "大", "单"
     
-    # 根据模式生成完全不同的预测
     if mode == 0: # 均值回归
         w = 5 + (param % 5)
-        recent_bs = bs_seq[:w]
-        recent_oe = oe_seq[:w]
+        recent_bs, recent_oe = bs_seq[:w], oe_seq[:w]
         push_bs = "小" if recent_bs.count('大') > len(recent_bs)/2 else "大"
         push_oe = "双" if recent_oe.count('单') > len(recent_oe)/2 else "单"
-        
     elif mode == 1: # 极值反杀
         w = 3 + (param % 4)
-        recent_bs = bs_seq[:w]
-        recent_oe = oe_seq[:w]
-        if recent_bs.count('大') == len(recent_bs): push_bs = "小"
-        elif recent_bs.count('小') == len(recent_bs): push_bs = "大"
-        else: push_bs = recent_bs[0]
-        
-        if recent_oe.count('单') == len(recent_oe): push_oe = "双"
-        elif recent_oe.count('双') == len(recent_oe): push_oe = "单"
-        else: push_oe = recent_oe[0]
-
+        recent_bs, recent_oe = bs_seq[:w], oe_seq[:w]
+        push_bs = "小" if recent_bs.count('大') == len(recent_bs) else ("大" if recent_bs.count('小') == len(recent_bs) else recent_bs[0])
+        push_oe = "双" if recent_oe.count('单') == len(recent_oe) else ("单" if recent_oe.count('双') == len(recent_oe) else recent_oe[0])
     elif mode == 2: # 顺势跟风
-        push_bs = bs_seq[0]
-        push_oe = oe_seq[0]
-        
+        push_bs, push_oe = bs_seq[0], oe_seq[0]
     elif mode == 3: # 交替逆势
         push_bs = "小" if bs_seq[0] == "大" else "大"
         push_oe = "双" if oe_seq[0] == "单" else "单"
-        
     elif mode == 4: # 和值尾数
         t = history[0]['total'] % 10
         push_bs = "大" if t >= 5 else "小"
         push_oe = "单" if t % 2 != 0 else "双"
-        
     elif mode == 5: # 位置交叉
         n0 = [int(x) for x in history[0]['nums'].split(' + ')]
         n1 = [int(x) for x in history[1]['nums'].split(' + ')]
         val = n0[0] + n1[1]
         push_bs = "大" if val >= 10 else "小"
         push_oe = "单" if val % 2 != 0 else "双"
-        
-    elif mode == 6: # 哈希扰动 (期号相关)
+    elif mode == 6: # 哈希扰动
         h = hashlib.md5(f"{aid}_{history[0]['period']}".encode()).hexdigest()
         v = int(h[:4], 16)
         push_bs = "大" if v % 2 == 0 else "小"
         push_oe = "单" if (v // 2) % 2 == 0 else "双"
-        
     elif mode == 7: # 连号断点
-        if bs_seq[0] == bs_seq[1] == bs_seq[2]:
-            push_bs = "小" if bs_seq[0] == "大" else "大"
-        else:
-            push_bs = bs_seq[1]
-            
-        if oe_seq[0] == oe_seq[1] == oe_seq[2]:
-            push_oe = "双" if oe_seq[0] == "单" else "单"
-        else:
-            push_oe = oe_seq[1]
-            
+        push_bs = ("小" if bs_seq[0] == "大" else "大") if (bs_seq[0] == bs_seq[1] == bs_seq[2]) else bs_seq[1]
+        push_oe = ("双" if oe_seq[0] == "单" else "单") if (oe_seq[0] == oe_seq[1] == oe_seq[2]) else oe_seq[1]
     elif mode == 8: # 多期平滑
-        w = 10
-        c_bs = bs_seq[:w].count('大')
-        c_oe = oe_seq[:w].count('单')
+        c_bs, c_oe = bs_seq[:10].count('大'), oe_seq[:10].count('单')
         push_bs = "大" if c_bs >= 5 else "小"
         push_oe = "单" if c_oe >= 5 else "双"
-        
-    else: # 终极混沌 (带参数的伪随机)
+    else: # 终极混沌
         h = hashlib.sha256(f"{aid}_{history[0]['period']}".encode()).hexdigest()
         v = int(h[:6], 16)
         push_bs = "大" if (v + param) % 3 == 0 else "小"
@@ -127,73 +99,56 @@ def calculate_matrix(gt, history, next_p):
     votes = Counter()
     algo_list = []
     
-    # 1. 更新战绩并统计当期预测
     for aid in range(1, 201):
-        # 计算上一期的预测结果，用于更新战绩
-        pred_last = run_single_algo(aid, history[1:])
-        real_last = history[0]['big_small'] + history[0]['odd_even']
-        
-        st = ALGO_STATS[gt][aid]
-        if len(st["history"]) > 0:
-            # 避免重复更新同一期
-            pass 
-        
-        # 简单粗暴统计当前进行状态（基于回测算法）
-        is_win = (pred_last == real_last)
-        
-        # 我们利用历史数据进行一次全量回测，确保统计准确
-        win_cnt = 0
-        lose_cnt = 0
-        curr_streak = 0
-        curr_type = ""
-        history_20 = []
+        # 回测近20期战绩 (应用容错机制)
+        win_cnt = 0; lose_cnt = 0; curr_streak = 0; curr_type = ""; history_20 = []
         
         for i in range(20):
             if i+1 >= len(history): break
             p = run_single_algo(aid, history[i+1:])
-            r = history[i]['big_small'] + history[i]['odd_even']
-            if p == r:
-                win_cnt += 1
-                history_20.append(True)
-                if curr_type == "win": curr_streak += 1
-                else: curr_streak = 1; curr_type = "win"
+            r_bs, r_oe = history[i]['big_small'], history[i]['odd_even']
+            
+            # 【核心容错判定】：只要中其一即算赢
+            is_win = (r_bs == p[0] or r_oe == p[1])
+            
+            if is_win:
+                win_cnt += 1; history_20.append(True)
+                curr_streak = curr_streak + 1 if curr_type == "win" else 1
+                curr_type = "win"
             else:
-                lose_cnt += 1
-                history_20.append(False)
-                if curr_type == "lose": curr_streak += 1
-                else: curr_streak = 1; curr_type = "lose"
+                lose_cnt += 1; history_20.append(False)
+                curr_streak = curr_streak + 1 if curr_type == "lose" else 1
+                curr_type = "lose"
                 
-        st["win"] = win_cnt
-        st["lose"] = lose_cnt
-        st["streak"] = curr_streak
-        st["type"] = curr_type
-        st["history"] = history_20
+        st = ALGO_STATS[gt][aid]
+        st.update({"win": win_cnt, "lose": lose_cnt, "streak": curr_streak, "type": curr_type, "history": history_20})
 
-        # 当前期的预测
+        # 当前期预测
         pred_now = run_single_algo(aid, history)
         votes[pred_now] += 1
         algo_list.append({
-            "id": aid,
-            "vote": pred_now,
-            "win": win_cnt,
-            "lose": lose_cnt,
-            "streak": curr_streak,
-            "type": curr_type
+            "id": aid, "vote": f"{pred_now[0]} ➕ {pred_now[1]}", 
+            "win": win_cnt, "lose": lose_cnt, "streak": curr_streak, "type": curr_type
         })
 
-    # 2. 统票选出主推组合
-    top_combo = votes.most_common(1)[0][0]
-    kill_combo = votes.most_common()[-1][0]
+    # 选出最高票组合
+    top_combo_raw = votes.most_common(1)[0][0] # 例如: "小双"
+    kill_combo_raw = votes.most_common()[-1][0]
+
+    # 格式化加号
+    top_display = f"{top_combo_raw[0]} ➕ {top_combo_raw[1]}"
+    kill_display = f"{kill_combo_raw[0]} ➕ {kill_combo_raw[1]}"
 
     analysis = f"【200套独立算法统票】\n"
     analysis += f"基于200个完全不同思路的算法深度推演：\n"
-    analysis += f"最高票数：{top_combo} ({votes[top_combo]}票)\n"
-    analysis += f"最低票数：{kill_combo} ({votes[kill_combo]}票)\n\n"
-    analysis += f"🎯 核心推出：{top_combo}"
+    analysis += f"最高票数：{top_display} ({votes[top_combo_raw]}票)\n"
+    analysis += f"最低票数：{kill_display} ({votes[kill_combo_raw]}票)\n\n"
+    analysis += f"🎯 核心推出：{top_display}\n"
+    analysis += f"注：只要开出包含推出属性的组合（如推小双，开小单或大双）均算中奖！"
 
     return {
-        "kill": kill_combo,
-        "rec": top_combo,
+        "kill": kill_display,
+        "rec": top_display,
         "analysis": analysis,
         "algo_list": algo_list
     }
@@ -214,12 +169,24 @@ def fetch_loop():
                         if LIVE_DATA[gt]['period'] != latest['period']:
                             AI_STATUS["msg"] = "200套算法深度计算中..."
                             
+                            # 【核心容错结算】
                             if LIVE_DATA[gt]['period'] != "" and LIVE_DATA[gt]['pred']:
-                                real = latest['big_small'] + latest['odd_even']
-                                k_combo = LIVE_DATA[gt]['pred']['kill']
-                                status = 'lose' if real == k_combo else 'win'
+                                real_bs = latest['big_small']
+                                real_oe = latest['odd_even']
+                                real_full = real_bs + real_oe
+                                
+                                # 解析上期预测
+                                prev_rec = LIVE_DATA[gt]['pred']['rec'] # 比如 "小 ➕ 双"
+                                p_bs, p_oe = prev_rec.replace(" ➕ ", "")
+                                
+                                # 只要开奖结果包含预测的大小或单双之一，就算赢
+                                if real_bs == p_bs or real_oe == p_oe:
+                                    status = 'win'
+                                else:
+                                    status = 'lose'
+
                                 with db() as conn:
-                                    conn.execute("UPDATE logs SET real_result=?, status=? WHERE gtype=? AND period=?", (real, status, gt, latest['period']))
+                                    conn.execute("UPDATE logs SET real_result=?, status=? WHERE gtype=? AND period=?", (real_full, status, gt, latest['period']))
                                     conn.commit()
 
                             dt = datetime.strptime(latest['draw_time'], "%Y-%m-%d %H:%M:%S")
@@ -240,7 +207,7 @@ def fetch_loop():
                                                  (gt, next_p, latest['draw_time'], pred["kill"], pred["rec"], pred["analysis"]))
                                     conn.commit()
                                 
-                            AI_STATUS["msg"] = "200套算法推演完毕"
+                            AI_STATUS["msg"] = "推演完毕，等待下一期..."
                                 
                         LIVE_DATA[gt]['left'] = max(0, int(LIVE_DATA[gt]['target_time'] - datetime.utcnow().timestamp()))
             except Exception: pass
@@ -256,7 +223,6 @@ def api_data(gt):
     if not verify(): return "<h1>Access Denied</h1>", 403
     return jsonify({"status": AI_STATUS, "data": LIVE_DATA.get(gt, {})})
 
-# 算法筛选接口
 @app.route('/api/filter/<gt>', methods=['POST'])
 def api_filter(gt):
     if not verify(): return jsonify({"ok": False})
@@ -269,18 +235,14 @@ def api_filter(gt):
     result = []
     
     if filter_type == "current_win":
-        # 当前连中3期以上
         result = [a for a in algos if a['type'] == 'win' and a['streak'] >= 3]
         result.sort(key=lambda x: x['streak'], reverse=True)
     elif filter_type == "current_lose":
-        # 当前连错3期以上
         result = [a for a in algos if a['type'] == 'lose' and a['streak'] >= 3]
         result.sort(key=lambda x: x['streak'], reverse=True)
     elif filter_type == "highest_win":
-        # 近20期总对最高
         result = sorted(algos, key=lambda x: x['win'], reverse=True)[:20]
     elif filter_type == "highest_lose":
-        # 近20期总错最高
         result = sorted(algos, key=lambda x: x['lose'], reverse=True)[:20]
         
     return jsonify({"algos": result})
@@ -347,7 +309,6 @@ def index():
         @keyframes flash { 0% { opacity: 0.4; } 100% { opacity: 1; } }
         .ana { background: #fdfaf6; padding: 15px; border-left: 4px solid #e17055; font-size: 14px; line-height: 1.7; color: #2d3436; white-space: pre-wrap; border-radius: 0 12px 12px 0; margin-top: 15px;}
         
-        /* 新增：算法列表筛选按钮 */
         .filter-bar { display: flex; gap: 8px; margin-bottom: 15px; }
         .btn-filter { flex: 1; padding: 8px 0; text-align: center; font-size: 13px; font-weight: bold; border-radius: 6px; border: 1px solid #ddd; background: #fff; cursor: pointer; transition: 0.2s;}
         .btn-filter:active { background: #f0f2f5; }
@@ -392,7 +353,6 @@ def index():
         <div class="ana" id="ana"></div>
     </div>
     
-    <!-- 新增的筛选算法卡片 -->
     <div class="card">
         <div class="title">📊 独立算法大盘 (点击按钮筛选)</div>
         <div class="filter-bar">
@@ -412,8 +372,8 @@ def index():
     </div>
     
 <script>
-    let curG = '2', timer = null, lastAlgoFilter = null;
-    const KEY = "algo_200_matrix_v63";
+    let curG = '2', timer = null;
+    const KEY = "algo_200_matrix_v64";
     
     function switchG(g, el) {
         curG = g;
@@ -421,7 +381,6 @@ def index():
         el.classList.add('on');
         document.getElementById('pred-box').style.display = 'none';
         document.getElementById('algo-list').innerHTML = '<div style="text-align: center; color: #8395a7; margin-top: 20px;">请点击上方按钮加载算法数据</div>';
-        lastAlgoFilter = null;
         document.querySelectorAll('.btn-filter').forEach(b => b.classList.remove('on'));
         fetchData(); fetchLogs();
     }
@@ -468,7 +427,6 @@ def index():
     function filterAlgos(type, btn) {
         document.querySelectorAll('.btn-filter').forEach(b => b.classList.remove('on'));
         btn.classList.add('on');
-        lastAlgoFilter = type;
         
         fetch(`/api/filter/${curG}`, {
             method: 'POST',
