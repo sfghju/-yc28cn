@@ -5,12 +5,11 @@ import time
 import threading
 import os
 import sqlite3
-from collections import Counter
 from flask import Flask, request, jsonify
 from datetime import datetime, timedelta
 
 app = Flask(__name__)
-SECRET_KEY = "captain_formula_v84"
+SECRET_KEY = "captain_fusion_v85"
 
 GAMES = {
     "2": {"name": "加拿大28", "url": "https://yc28cn-ml1l.onrender.com/vipASDFGHJKLQQQWERTYUIOPWW9983/8626/0549CASWWW?type=2", "interval": 210},
@@ -18,11 +17,11 @@ GAMES = {
     "13": {"name": "比特28", "url": "https://yc28cn-ml1l.onrender.com/vipASDFGHJKLQQZXCVBNMWW9983/8626/0549CCBDR?type=13", "interval": 60}
 }
 
-AI_STATUS = {"online": True, "msg": "纯身法公式演算中..."}
+AI_STATUS = {"online": True, "msg": "多维特征融合计算中..."}
 LIVE_DATA = {gt: {"period": "", "next": "", "left": 0, "history": [], "pred": None, "algo_list": []} for gt in GAMES}
 
 def db():
-    conn = sqlite3.connect('predict_formula_v84.db', timeout=30)
+    conn = sqlite3.connect('predict_fusion_v85.db', timeout=30)
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -34,92 +33,82 @@ with db() as conn:
     )''')
     conn.commit()
 
-# ================== 四大核心身法公式 ==================
-def formula_1_diff(history):
-    if len(history) < 1: return "大单"
-    nums = [int(x) for x in history[0]['nums'].split(' + ')]
-    diff = abs(nums[0] - nums[1]) + abs(nums[1] - nums[2]) + abs(nums[0] - nums[2])
-    tail = diff % 10
-    return ("大" if tail >= 5 else "小") + ("单" if tail % 2 != 0 else "双")
+# ================== 核心：多维特征融合引擎 ==================
+def calculate_matrix(gt, history, next_p):
+    if len(history) < 3: return None
 
-def formula_2_phase(history):
-    if len(history) < 1: return "大单"
-    total = history[0]['total']
-    val = int(total * 0.618)
-    tail = val % 10
-    return ("大" if tail >= 5 else "小") + ("单" if tail % 2 != 0 else "双")
-
-def formula_3_cross(history):
-    if len(history) < 2: return "大单"
+    # 基础数据准备
     n0 = [int(x) for x in history[0]['nums'].split(' + ')]
     n1 = [int(x) for x in history[1]['nums'].split(' + ')]
-    val = n0[0] + n1[1] + n0[2] + n1[0]
-    tail = val % 10
-    return ("大" if tail >= 5 else "小") + ("单" if tail % 2 != 0 else "双")
-
-def formula_4_streak(history):
-    if len(history) < 2: return "大单"
-    last_bs = history[0]['big_small']
-    last_oe = history[0]['odd_even']
-    streak = 1
-    for i in range(1, len(history)):
-        if history[i]['big_small'] == last_bs: streak += 1
-        else: break
-    
-    if streak >= 3:
-        return ("小" if last_bs == "大" else "大") + ("双" if last_oe == "单" else "单")
-    else:
-        return last_bs + last_oe
-
-# ================== 执行预测与去重 ==================
-def calculate_matrix(gt, history, next_p):
-    if len(history) < 10: return None
-
-    # 上期真实结果
     last_bs = history[0]['big_small']
     last_oe = history[0]['odd_even']
     last_combo = last_bs + last_oe
 
-    # 1. 运行 4 大公式
-    f1 = formula_1_diff(history)
-    f2 = formula_2_phase(history)
-    f3 = formula_3_cross(history)
-    f4 = formula_4_streak(history)
+    # 1. 提取特征值 1：位移差量
+    diff_sum = abs(n0[0] - n0[1]) + abs(n0[1] - n0[2]) + abs(n0[0] - n0[2])
     
-    formulas = [
-        {"name": "位移差量公式", "vote": f1, "detail": "计算三位数内部差值取尾"},
-        {"name": "相位偏移公式", "vote": f2, "detail": "和值乘0.618黄金分割取尾"},
-        {"name": "交叉异或公式", "vote": f3, "detail": "两期同位数字交叉相加取尾"},
-        {"name": "连号断点公式", "vote": f4, "detail": "检测极值连号顺势或反杀"}
+    # 2. 提取特征值 2：相位偏移 (和值 * 0.618)
+    phase_val = int(history[0]['total'] * 0.618)
+    
+    # 3. 提取特征值 3：交叉异或 (上期与上上期同位交叉相加)
+    cross_sum = n0[0] + n1[1] + n0[2] + n1[0]
+
+    # 【核心融合】：将三大特征值强力合并！
+    total_fusion = diff_sum + phase_val + cross_sum
+    
+    # 取最终尾数 (0-9)
+    final_tail = total_fusion % 10
+    
+    # 根据最终尾数判定大小单双
+    pred_bs = "大" if final_tail >= 5 else "小"
+    pred_oe = "单" if final_tail % 2 != 0 else "双"
+    final_combo = pred_bs + pred_oe
+
+    logic_msgs = [
+        f"位移差量特征值: {diff_sum}",
+        f"相位偏移特征值: {phase_val}",
+        f"交叉异或特征值: {cross_sum}",
+        f"融合总值: {total_fusion}，取尾数: {final_tail}",
+        f"初步判定: {pred_bs} {pred_oe}"
     ]
 
-    # 2. 统票选出最高频
-    votes = Counter([f['vote'] for f in formulas])
-    top_combo, count = votes.most_common(1)[0]
+    # ================== 断点公式干预 ==================
+    # 检测是否触发长龙极值 (假设3连以上强制反杀)
+    streak_bs = 1
+    for i in range(1, len(history)):
+        if history[i]['big_small'] == last_bs: streak_bs += 1
+        else: break
 
-    logic_msg = f"四大公式达成 {count} 票共识。"
-
-    # 3. 【一跟一反纠偏】核心逻辑
-    # 只有当这期算出来的结论，跟上一期开奖完全一模一样时，才强制打断
-    if top_combo == last_combo:
-        new_bs = '小' if top_combo[0] == '大' else '大'
-        top_combo = new_bs + top_combo[1]
-        logic_msg = "检测到与上期开奖完全重复，启动一跟一反纠偏！"
-
-    top_display = f"{top_combo[0]} ➕ {top_combo[1]}"
-    kill_display = f"{'小' if top_combo[0]=='大' else '大'} ➕ {'双' if top_combo[1]=='单' else '单'}"
-
-    # 分析文案
-    f_details = "\n".join([f"- 【{f['name']}】: {f['detail']}，推【{f['vote']}】" for f in formulas])
+    if streak_bs >= 4:
+        # 强制反转
+        pred_bs = "小" if pred_bs == "大" else "大"
+        pred_oe = "双" if pred_oe == "单" else "单"
+        final_combo = pred_bs + pred_oe
+        logic_msgs.append(f"⚠️ 触发 {streak_bs} 连断点极值，强制反转！")
     
-    analysis = f"【舰长·纯身法公式推演】\n"
+    # ================== 一跟一反纠偏 ==================
+    if final_combo == last_combo:
+        final_combo = ("小" if final_combo[0] == "大" else "大") + final_combo[1]
+        logic_msgs.append("⚠️ 触发防死磕机制，强制打断上期同轨！")
+
+    # 最终结果
+    top_bs = final_combo[0]
+    top_oe = final_combo[1]
+    top_display = f"{top_bs} ➕ {top_oe}"
+    kill_display = f"{'小' if top_bs=='大' else '大'} ➕ {'双' if top_oe=='单' else '单'}"
+
+    # 组装文案
+    analysis = f"【舰长·多维特征融合计算】\n"
     analysis += f"上期开奖：{last_bs} {last_oe}\n"
-    analysis += f"{f_details}\n\n"
-    analysis += f"逻辑判定：{logic_msg}\n"
-    analysis += f"🎯 核心推出：{top_display}\n"
+    for msg in logic_msgs:
+        analysis += f"- {msg}\n"
+    analysis += f"\n🎯 核心推出：{top_display}\n"
     analysis += f"注：开出包含推出属性即算中奖！"
 
-    return {"kill": kill_display, "rec": top_display, "analysis": analysis, "algo_list": formulas}
+    # 为了保持前端结构不变，将 messages 塞给 algo_list
+    algo_list = [{"name": "融合计算明细", "vote": top_display, "detail": m} for m in logic_msgs]
+
+    return {"kill": kill_display, "rec": top_display, "analysis": analysis, "algo_list": algo_list}
 
 # ================== 极速抓取主循环 ==================
 def fetch_loop():
@@ -135,7 +124,7 @@ def fetch_loop():
                         history = [{"period": i['period'], "nums": f"{i['num1']} + {i['num2']} + {i['num3']}", "total": i['total'], "big_small": i['big_small'], "odd_even": i['odd_even']} for i in data[:30]]
                         
                         if LIVE_DATA[gt]['period'] != latest['period']:
-                            AI_STATUS["msg"] = "执行身法公式推演中..."
+                            AI_STATUS["msg"] = "执行特征融合推演中..."
                             
                             if LIVE_DATA[gt]['period'] != "" and LIVE_DATA[gt]['pred']:
                                 real_bs, real_oe = latest['big_small'], latest['odd_even']
@@ -166,7 +155,7 @@ def fetch_loop():
                                                  (gt, next_p, latest['draw_time'], pred["kill"], pred["rec"], pred["analysis"]))
                                     conn.commit()
                                 
-                            AI_STATUS["msg"] = "公式推导完成，等待开奖..."
+                            AI_STATUS["msg"] = "融合计算完成，等待开奖..."
                                 
                         LIVE_DATA[gt]['left'] = max(0, int(LIVE_DATA[gt]['target_time'] - datetime.utcnow().timestamp()))
             except Exception: pass
@@ -290,7 +279,7 @@ def index():
     
 <script>
     let curG = '2', timer = null;
-    const KEY = "captain_formula_v84";
+    const KEY = "captain_fusion_v85";
     
     function switchG(g, el) {
         curG = g;
