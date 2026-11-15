@@ -9,7 +9,7 @@ from flask import Flask, request, jsonify
 from datetime import datetime, timedelta
 
 app = Flask(__name__)
-SECRET_KEY = "captain_position_v89"
+SECRET_KEY = "captain_position_v91"
 
 GAMES = {
     "2": {"name": "加拿大28", "url": "https://yc28cn-ml1l.onrender.com/vipASDFGHJKLQQQWERTYUIOPWW9983/8626/0549CASWWW?type=2", "interval": 210},
@@ -17,11 +17,11 @@ GAMES = {
     "13": {"name": "比特28", "url": "https://yc28cn-ml1l.onrender.com/vipASDFGHJKLQQZXCVBNMWW9983/8626/0549CCBDR?type=13", "interval": 60}
 }
 
-AI_STATUS = {"online": True, "msg": "逐位号码演算中..."}
+AI_STATUS = {"online": True, "msg": "逐位公式深度推演中..."}
 LIVE_DATA = {gt: {"period": "", "next": "", "left": 0, "history": [], "pred": None, "algo_list": []} for gt in GAMES}
 
 def db():
-    conn = sqlite3.connect('predict_position_v89.db', timeout=30)
+    conn = sqlite3.connect('predict_position_v91.db', timeout=30)
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -33,32 +33,33 @@ with db() as conn:
     )''')
     conn.commit()
 
-# ================== 纯位置数字推演引擎 ==================
+# ================== 纯位置数字 10 期公式推演引擎 ==================
 def calculate_matrix(gt, history, next_p):
-    if len(history) < 3: return None
+    if len(history) < 10: return None
 
-    # 提取近三期真实开奖位置数据
-    h0, h1, h2 = history[0], history[1], history[2]
-    n0 = [int(x) for x in h0['nums'].split(' + ')]
-    n1 = [int(x) for x in h1['nums'].split(' + ')]
-    n2 = [int(x) for x in h2['nums'].split(' + ')]
+    # 提取近 10 期真实位置数据
+    h10 = history[:10]
+    nums_10 = [[int(x) for x in h['nums'].split(' + ')] for h in h10]
     
-    last_bs = h0['big_small']
-    last_oe = h0['odd_even']
-    last_combo = last_bs + last_oe
+    A_series = [n[0] for n in nums_10]
+    B_series = [n[1] for n in nums_10]
+    C_series = [n[2] for n in nums_10]
 
-    # 1. 推演 A 位 (百位)：利用差值演进
-    diffA = abs(n0[0] - n1[0]) + abs(n1[0] - n2[0])
-    pred_A = (n0[0] + diffA) % 10
+    # 1. 推演 A 位 (百位)
+    diffA_total = sum([abs(A_series[i] - A_series[i+1]) for i in range(9)])
+    avg_diffA = int(diffA_total / 9)
+    pred_A = (A_series[0] + avg_diffA) % 10
 
-    # 2. 推演 B 位 (十位)：利用中位极值偏移
-    pred_B = (n0[1] * 2 - n2[1]) % 10
+    # 2. 推演 B 位 (十位)
+    b_sum = sum(B_series)
+    b_avg = int(b_sum / 10)
+    pred_B = (B_series[0] * 2 - b_avg) % 10
     if pred_B < 0: pred_B += 10
 
-    # 3. 推演 C 位 (个位)：利用三期尾数震荡回归
-    pred_C = int((n0[2] + n1[2] + n2[2]) / 3) 
-    if pred_C == n0[2]: # 如果均值等于上期，强制震荡
-        pred_C = (pred_C + 3) % 10
+    # 3. 推演 C 位 (个位)
+    c_sum = sum(C_series)
+    c_avg = int(c_sum / 10)
+    pred_C = c_avg if c_avg != C_series[0] else (c_avg + 4) % 10
 
     # 汇总推演出的三位新号码
     pred_nums = [pred_A, pred_B, pred_C]
@@ -69,29 +70,40 @@ def calculate_matrix(gt, history, next_p):
     pred_oe = "单" if pred_total % 2 != 0 else "双"
     final_combo = pred_bs + pred_oe
 
-    # ================== 一跟一反纠偏 ==================
-    correction_msg = "正常推演"
-    if final_combo == last_combo:
-        final_combo = ("小" if final_combo[0] == "大" else "大") + final_combo[1]
-        correction_msg = "⚠️ 触发同轨死磕，强制打断反转！"
-
     # 最终结果
     top_bs, top_oe = final_combo[0], final_combo[1]
     top_display = f"{top_bs} ➕ {top_oe}"
     kill_display = f"{'小' if top_bs=='大' else '大'} ➕ {'双' if top_oe=='单' else '单'}"
 
-    # 组装分析文案
-    analysis = f"【舰长·逐位号码深度推演】\n"
-    analysis += f"近3期真实开奖：{h2['nums']} / {h1['nums']} / {h0['nums']}\n"
-    analysis += f"- A位推演(差值演进)：预测下一期落点【{pred_A}】\n"
-    analysis += f"- B位推演(极值偏移)：预测下一期落点【{pred_B}】\n"
-    analysis += f"- C位推演(均值震荡)：预测下一期落点【{pred_C}】\n"
-    analysis += f"- 组合推演和值：{pred_A} + {pred_B} + {pred_C} = {pred_total}\n"
-    analysis += f"- 干预机制：{correction_msg}\n\n"
+    # ================== 组装极其详细的推演过程 ==================
+    analysis = f"【舰长·逐位公式深度计算说明】\n"
+    analysis += f"上期开奖号码：{h10[0]['nums']}\n\n"
+    
+    analysis += f"=== 【A位推演 (百位)】 ===\n"
+    analysis += f"近10期A位序列：{A_series}\n"
+    analysis += f"1. 计算相邻两期差值的绝对值之和：{diffA_total}\n"
+    analysis += f"2. 计算平均差值：{diffA_total} ÷ 9 = {avg_diffA} (取整)\n"
+    analysis += f"3. 推演落点：(上期A位 {A_series[0]} + 平均差值 {avg_diffA}) % 10 = 【{pred_A}】\n\n"
+
+    analysis += f"=== 【B位推演 (十位)】 ===\n"
+    analysis += f"近10期B位序列：{B_series}\n"
+    analysis += f"1. 计算10期总和：{b_sum}，均值：{b_sum} ÷ 10 = {b_avg} (取整)\n"
+    analysis += f"2. 推演落点：(上期B位 {B_series[0]} × 2 - 均值 {b_avg}) % 10 = 【{pred_B}】\n\n"
+
+    analysis += f"=== 【C位推演 (个位)】 ===\n"
+    analysis += f"近10期C位序列：{C_series}\n"
+    analysis += f"1. 计算10期总和：{c_sum}，均值：{c_sum} ÷ 10 = {c_avg} (取整)\n"
+    analysis += f"2. 推演落点：均值不等于上期 {C_series[0]}，直接取均值 【{pred_C}】\n\n"
+
+    analysis += f"=== 【综合判定】 ===\n"
+    analysis += f"预测三码：{pred_A} + {pred_B} + {pred_C} = {pred_total}\n"
+    analysis += f"大小判定：{pred_total} {'>=' if pred_total >= 14 else '<'} 14，判定为【{pred_bs}】\n"
+    analysis += f"单双判定：{pred_total} 是{'奇' if pred_total % 2 != 0 else '偶'}数，判定为【{pred_oe}】\n\n"
+
     analysis += f"🎯 核心推出：{top_display}\n"
     analysis += f"注：开出包含推出属性即算中奖！"
 
-    algo_list = [{"name": "逐位推演", "vote": top_display, "detail": f"推演组合：{pred_A}+{pred_B}+{pred_C}"}]
+    algo_list = [{"name": "10期逐位推演", "vote": top_display, "detail": f"推演组合：{pred_A}+{pred_B}+{pred_C}"}]
 
     return {"kill": kill_display, "rec": top_display, "analysis": analysis, "algo_list": algo_list}
 
@@ -109,7 +121,7 @@ def fetch_loop():
                         history = [{"period": i['period'], "nums": f"{i['num1']} + {i['num2']} + {i['num3']}", "total": i['total'], "big_small": i['big_small'], "odd_even": i['odd_even']} for i in data[:30]]
                         
                         if LIVE_DATA[gt]['period'] != latest['period']:
-                            AI_STATUS["msg"] = "执行逐位号码演算中..."
+                            AI_STATUS["msg"] = "执行10期位置公式推演中..."
                             
                             if LIVE_DATA[gt]['period'] != "" and LIVE_DATA[gt]['pred']:
                                 real_bs, real_oe = latest['big_small'], latest['odd_even']
@@ -220,7 +232,9 @@ def index():
         .cd { font-size: 22px; color: #0984e3; font-weight: bold; }
         .cd.analyzing { color: #d63031; font-size: 20px; animation: flash 0.5s infinite alternate;}
         @keyframes flash { 0% { opacity: 0.4; } 100% { opacity: 1; } }
-        .ana { background: #fdfaf6; padding: 15px; border-left: 4px solid #e17055; font-size: 14px; line-height: 1.7; color: #2d3436; white-space: pre-wrap; border-radius: 0 12px 12px 0; margin-top: 15px;}
+        
+        /* 计算过程详细面板样式 */
+        .ana { background: #fdfaf6; padding: 15px; border-left: 4px solid #e17055; font-size: 14px; line-height: 1.7; color: #2d3436; white-space: pre-wrap; border-radius: 0 12px 12px 0; margin-top: 15px; font-family: monospace;}
         
         .log-item { border-bottom: 1px solid #f1f2f6; padding: 12px 0; font-size: 13px; display: flex; justify-content: space-between; }
         .win { color: #00b894; font-weight: bold; } .lose { color: #d63031; font-weight: bold; }
@@ -264,7 +278,7 @@ def index():
     
 <script>
     let curG = '2', timer = null;
-    const KEY = "captain_position_v89";
+    const KEY = "captain_position_v91";
     
     function switchG(g, el) {
         curG = g;
