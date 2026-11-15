@@ -10,7 +10,7 @@ from flask import Flask, request, jsonify
 from datetime import datetime, timedelta
 
 app = Flask(__name__)
-SECRET_KEY = "simple_combo_v58"
+SECRET_KEY = "simple_combo_v59"
 
 GAMES = {
     "2": {"name": "加拿大28", "url": "https://yc28cn-ml1l.onrender.com/vipASDFGHJKLQQQWERTYUIOPWW9983/8626/0549CASWWW?type=2", "interval": 210},
@@ -18,11 +18,11 @@ GAMES = {
     "13": {"name": "比特28", "url": "https://yc28cn-ml1l.onrender.com/vipASDFGHJKLQQZXCVBNMWW9983/8626/0549CCBDR?type=13", "interval": 60}
 }
 
-AI_STATUS = {"online": True, "msg": "近25期多跟少反推演中..."}
+AI_STATUS = {"online": True, "msg": "近15期多跟少反推演中..."}
 LIVE_DATA = {gt: {"period": "", "next": "", "left": 0, "history": [], "pred": None, "algo_list": []} for gt in GAMES}
 
 def db():
-    conn = sqlite3.connect('predict_v58.db', timeout=30)
+    conn = sqlite3.connect('predict_v59.db', timeout=30)
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -32,9 +32,9 @@ with db() as conn:
         analysis TEXT, real_result TEXT DEFAULT '', status TEXT DEFAULT 'wait')''')
     conn.commit()
 
-# ================== 精简版 25期推演引擎 ==================
+# ================== 极简 15期推演引擎 ==================
 def calculate_prediction(history, next_p):
-    h_len = min(25, len(history))
+    h_len = min(15, len(history))
     if h_len < 10:
         return {"kill": "", "rec": "数据不足", "analysis": "等待数据...", "algo_list": []}
         
@@ -53,7 +53,7 @@ def calculate_prediction(history, next_p):
         push_bs = "小"
         bs_reason = f"小({bs_cnt['小']}) > 大({bs_cnt['大']})，主推小"
     else:
-        push_bs = hx[0]['big_small'] # 平局顺延最新一期
+        push_bs = hx[0]['big_small']
         bs_reason = f"大({bs_cnt['大']}) = 小({bs_cnt['小']})平局，顺延上期【{push_bs}】"
 
     # --- 单双平局破局逻辑 ---
@@ -64,7 +64,7 @@ def calculate_prediction(history, next_p):
         push_oe = "双"
         oe_reason = f"双({oe_cnt['双']}) > 单({oe_cnt['单']})，主推双"
     else:
-        push_oe = hx[0]['odd_even'] # 平局顺延最新一期
+        push_oe = hx[0]['odd_even']
         oe_reason = f"单({oe_cnt['单']}) = 双({oe_cnt['双']})平局，顺延上期【{push_oe}】"
 
     # 长龙检测
@@ -111,7 +111,8 @@ def fetch_loop():
                     data = json.loads(resp.read().decode('utf-8')).get('data')
                     if data:
                         latest = data[0]
-                        history = [{"period": i['period'], "nums": f"{i['num1']} + {i['num2']} + {i['num3']}", "total": i['total'], "big_small": i['big_small'], "odd_even": i['odd_even']} for i in data[:25]]
+                        # 切片为15期数据
+                        history = [{"period": i['period'], "nums": f"{i['num1']} + {i['num2']} + {i['num3']}", "total": i['total'], "big_small": i['big_small'], "odd_even": i['odd_even']} for i in data[:15]]
                         
                         if LIVE_DATA[gt]['period'] != latest['period']:
                             AI_STATUS["msg"] = "正在极速预测中..."
@@ -243,7 +244,7 @@ def index():
     </div>
 
     <div class="card">
-        <div class="title">近 25 期 独立盘面</div>
+        <div class="title">近 15 期 独立盘面</div>
         <div class="history" id="history"></div>
     </div>
     
@@ -261,7 +262,7 @@ def index():
     
 <script>
     let curG = '2', timer = null;
-    const KEY = "simple_combo_v58";
+    const KEY = "simple_combo_v59";
     
     function switchG(g, el) {
         curG = g;
