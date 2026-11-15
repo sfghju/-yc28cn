@@ -11,7 +11,7 @@ from flask import Flask, request, jsonify
 from datetime import datetime, timedelta
 
 app = Flask(__name__)
-SECRET_KEY = "algo_rank_second_v65"
+SECRET_KEY = "algo_rank_second_v66"
 
 GAMES = {
     "2": {"name": "加拿大28", "url": "https://yc28cn-ml1l.onrender.com/vipASDFGHJKLQQQWERTYUIOPWW9983/8626/0549CASWWW?type=2", "interval": 210},
@@ -19,18 +19,21 @@ GAMES = {
     "13": {"name": "比特28", "url": "https://yc28cn-ml1l.onrender.com/vipASDFGHJKLQQZXCVBNMWW9983/8626/0549CCBDR?type=13", "interval": 60}
 }
 
-AI_STATUS = {"online": True, "msg": "200套算法排位筛选榜眼中..."}
+AI_STATUS = {"online": True, "msg": "200套算法严格锁定期中..."}
 LIVE_DATA = {gt: {"period": "", "next": "", "left": 0, "history": [], "pred": None, "algo_list": []} for gt in GAMES}
 
 def db():
-    conn = sqlite3.connect('predict_v65.db', timeout=30)
+    conn = sqlite3.connect('predict_v66.db', timeout=30)
     conn.row_factory = sqlite3.Row
     return conn
 
+# 【核心修复1：增加 UNIQUE 约束防重复】
 with db() as conn:
     conn.execute('''CREATE TABLE IF NOT EXISTS logs (
         id INTEGER PRIMARY KEY AUTOINCREMENT, gtype TEXT, period TEXT, draw_time TEXT, kill TEXT, rec TEXT, 
-        analysis TEXT, real_result TEXT DEFAULT '', status TEXT DEFAULT 'wait')''')
+        analysis TEXT, real_result TEXT DEFAULT '', status TEXT DEFAULT 'wait',
+        UNIQUE(gtype, period) 
+    )''')
     conn.commit()
 
 # ================== 核心：200套独立算法引擎 ==================
@@ -42,47 +45,46 @@ def run_single_algo(aid, history):
     
     mode = aid % 10
     param = aid // 10
-    
     push_bs, push_oe = "大", "单"
     
-    if mode == 0: # 均值回归
+    if mode == 0:
         w = 5 + (param % 5)
         recent_bs, recent_oe = bs_seq[:w], oe_seq[:w]
         push_bs = "小" if recent_bs.count('大') > len(recent_bs)/2 else "大"
         push_oe = "双" if recent_oe.count('单') > len(recent_oe)/2 else "单"
-    elif mode == 1: # 极值反杀
+    elif mode == 1:
         w = 3 + (param % 4)
         recent_bs, recent_oe = bs_seq[:w], oe_seq[:w]
         push_bs = "小" if recent_bs.count('大') == len(recent_bs) else ("大" if recent_bs.count('小') == len(recent_bs) else recent_bs[0])
         push_oe = "双" if recent_oe.count('单') == len(recent_oe) else ("单" if recent_oe.count('双') == len(recent_oe) else recent_oe[0])
-    elif mode == 2: # 顺势跟风
+    elif mode == 2:
         push_bs, push_oe = bs_seq[0], oe_seq[0]
-    elif mode == 3: # 交替逆势
+    elif mode == 3:
         push_bs = "小" if bs_seq[0] == "大" else "大"
         push_oe = "双" if oe_seq[0] == "单" else "单"
-    elif mode == 4: # 和值尾数
+    elif mode == 4:
         t = history[0]['total'] % 10
         push_bs = "大" if t >= 5 else "小"
         push_oe = "单" if t % 2 != 0 else "双"
-    elif mode == 5: # 位置交叉
+    elif mode == 5:
         n0 = [int(x) for x in history[0]['nums'].split(' + ')]
         n1 = [int(x) for x in history[1]['nums'].split(' + ')]
         val = n0[0] + n1[1]
         push_bs = "大" if val >= 10 else "小"
         push_oe = "单" if val % 2 != 0 else "双"
-    elif mode == 6: # 哈希扰动
+    elif mode == 6:
         h = hashlib.md5(f"{aid}_{history[0]['period']}".encode()).hexdigest()
         v = int(h[:4], 16)
         push_bs = "大" if v % 2 == 0 else "小"
         push_oe = "单" if (v // 2) % 2 == 0 else "双"
-    elif mode == 7: # 连号断点
+    elif mode == 7:
         push_bs = ("小" if bs_seq[0] == "大" else "大") if (bs_seq[0] == bs_seq[1] == bs_seq[2]) else bs_seq[1]
         push_oe = ("双" if oe_seq[0] == "单" else "单") if (oe_seq[0] == oe_seq[1] == oe_seq[2]) else oe_seq[1]
-    elif mode == 8: # 多期平滑
+    elif mode == 8:
         c_bs, c_oe = bs_seq[:10].count('大'), oe_seq[:10].count('单')
         push_bs = "大" if c_bs >= 5 else "小"
         push_oe = "单" if c_oe >= 5 else "双"
-    else: # 终极混沌
+    else:
         h = hashlib.sha256(f"{aid}_{history[0]['period']}".encode()).hexdigest()
         v = int(h[:6], 16)
         push_bs = "大" if (v + param) % 3 == 0 else "小"
@@ -90,13 +92,11 @@ def run_single_algo(aid, history):
 
     return push_bs + push_oe
 
-# ================== 状态更新与榜首猎杀引擎 ==================
+# ================== 榜眼猎杀引擎 ==================
 def calculate_matrix(gt, history, next_p):
     if len(history) < 20: return None
 
     algo_list = []
-    
-    # 1. 计算所有算法近20期战绩
     for aid in range(1, 201):
         win_cnt = 0; lose_cnt = 0; curr_streak = 0; curr_type = ""
         
@@ -104,8 +104,6 @@ def calculate_matrix(gt, history, next_p):
             if i+1 >= len(history): break
             p = run_single_algo(aid, history[i+1:])
             r_bs, r_oe = history[i]['big_small'], history[i]['odd_even']
-            
-            # 【容错判定】：只要中其一即算赢
             is_win = (r_bs == p[0] or r_oe == p[1])
             
             if is_win:
@@ -117,45 +115,30 @@ def calculate_matrix(gt, history, next_p):
                 curr_streak = curr_streak + 1 if curr_type == "lose" else 1
                 curr_type = "lose"
                 
-        # 当期预测
         pred_now = run_single_algo(aid, history)
-        
         algo_list.append({
-            "id": aid, 
-            "vote": f"{pred_now[0]} ➕ {pred_now[1]}", 
-            "win": win_cnt, 
-            "lose": lose_cnt, 
-            "streak": curr_streak, 
-            "type": curr_type
+            "id": aid, "vote": f"{pred_now[0]} ➕ {pred_now[1]}", 
+            "win": win_cnt, "lose": lose_cnt, "streak": curr_streak, "type": curr_type
         })
 
-    # 2. 强制排序：按【总对】降序。如果总对相同，按【连中】降序辅助排位。
+    # 按胜场降序，胜场相同按连中降序
     algo_list.sort(key=lambda x: (x['win'], x['streak']), reverse=True)
 
-    # 3. 精准夺取【第2名榜眼】
-    if len(algo_list) >= 2:
-        target_algo = algo_list[1]  # 索引1就是第2名
-    else:
-        target_algo = algo_list[0]
+    # 锁定第 2 名（榜眼）
+    target_algo = algo_list[1] if len(algo_list) >= 2 else algo_list[0]
 
     top_display = target_algo['vote']
-    # 反推击杀组合（用于系统容错结算判定）
     k_bs = '小' if top_display[0] == '大' else '大'
     k_oe = '双' if top_display[2] == '单' else '单'
     kill_display = f"{k_bs} ➕ {k_oe}"
 
     analysis = f"【最高总对·榜眼猎杀机制】\n"
     analysis += f"经20期真实容错回测，锁定排名第 2 的顶级算法：【算法{target_algo['id']}】\n"
-    analysis += f"该算法战绩：近20期对({target_algo['win']})错({target_algo['lose']})，当前{('连中' if target_algo['type']=='win' else '连错')}{target_algo['streak']}期。\n\n"
-    analysis += f"🎯 严格执行榜眼预测，核心推出：{top_display}\n"
-    analysis += f"注：只要开出包含推出属性的组合（如推小双，开小单或大双）均算中奖！"
+    analysis += f"战绩：对({target_algo['win']})错({target_algo['lose']})，当前{('连中' if target_algo['type']=='win' else '连错')}{target_algo['streak']}期。\n\n"
+    analysis += f"🎯 核心推出：{top_display}\n"
+    analysis += f"注：开出包含推出属性即算中奖！"
 
-    return {
-        "kill": kill_display,
-        "rec": top_display,
-        "analysis": analysis,
-        "algo_list": algo_list
-    }
+    return {"kill": kill_display, "rec": top_display, "analysis": analysis, "algo_list": algo_list}
 
 # ================== 极速抓取主循环 ==================
 def fetch_loop():
@@ -170,23 +153,17 @@ def fetch_loop():
                         latest = data[0]
                         history = [{"period": i['period'], "nums": f"{i['num1']} + {i['num2']} + {i['num3']}", "total": i['total'], "big_small": i['big_small'], "odd_even": i['odd_even']} for i in data[:30]]
                         
+                        # 【核心修复2】：如果内存里的期号不同，才去处理和入库
                         if LIVE_DATA[gt]['period'] != latest['period']:
-                            AI_STATUS["msg"] = "正锁定榜眼算法..."
+                            AI_STATUS["msg"] = "正在锁定榜眼算法..."
                             
-                            # 【容错结算】
                             if LIVE_DATA[gt]['period'] != "" and LIVE_DATA[gt]['pred']:
-                                real_bs = latest['big_small']
-                                real_oe = latest['odd_even']
+                                real_bs, real_oe = latest['big_small'], latest['odd_even']
                                 real_full = real_bs + real_oe
-                                
-                                prev_rec = LIVE_DATA[gt]['pred']['rec'] # 比如 "小 ➕ 双"
+                                prev_rec = LIVE_DATA[gt]['pred']['rec']
                                 p_bs, p_oe = prev_rec.replace(" ➕ ", "")
+                                status = 'win' if (real_bs == p_bs or real_oe == p_oe) else 'lose'
                                 
-                                if real_bs == p_bs or real_oe == p_oe:
-                                    status = 'win'
-                                else:
-                                    status = 'lose'
-
                                 with db() as conn:
                                     conn.execute("UPDATE logs SET real_result=?, status=? WHERE gtype=? AND period=?", (real_full, status, gt, latest['period']))
                                     conn.commit()
@@ -204,12 +181,13 @@ def fetch_loop():
                                 LIVE_DATA[gt]['pred'] = pred
                                 LIVE_DATA[gt]['algo_list'] = pred['algo_list']
                                 
+                                # 【核心修复3】：使用 INSERT OR IGNORE，数据库层面强行防重
                                 with db() as conn:
-                                    conn.execute('''INSERT INTO logs (gtype, period, draw_time, kill, rec, analysis) VALUES (?,?,?,?,?,?)''', 
+                                    conn.execute('''INSERT OR IGNORE INTO logs (gtype, period, draw_time, kill, rec, analysis) VALUES (?,?,?,?,?,?)''', 
                                                  (gt, next_p, latest['draw_time'], pred["kill"], pred["rec"], pred["analysis"]))
                                     conn.commit()
                                 
-                            AI_STATUS["msg"] = "榜眼猎杀完毕，等待下一期..."
+                            AI_STATUS["msg"] = "推演完毕，等待下一期..."
                                 
                         LIVE_DATA[gt]['left'] = max(0, int(LIVE_DATA[gt]['target_time'] - datetime.utcnow().timestamp()))
             except Exception: pass
@@ -229,31 +207,22 @@ def api_data(gt):
 def api_filter(gt):
     if not verify(): return jsonify({"ok": False})
     filter_type = request.json.get('filter_type')
-    
-    if 'algo_list' not in LIVE_DATA[gt] or not LIVE_DATA[gt]['algo_list']:
-        return jsonify({"algos": []})
+    if 'algo_list' not in LIVE_DATA[gt] or not LIVE_DATA[gt]['algo_list']: return jsonify({"algos": []})
         
     algos = LIVE_DATA[gt]['algo_list']
-    result = []
-    
-    if filter_type == "current_win":
-        result = [a for a in algos if a['type'] == 'win' and a['streak'] >= 3]
-        result.sort(key=lambda x: x['streak'], reverse=True)
-    elif filter_type == "current_lose":
-        result = [a for a in algos if a['type'] == 'lose' and a['streak'] >= 3]
-        result.sort(key=lambda x: x['streak'], reverse=True)
-    elif filter_type == "highest_win":
-        result = sorted(algos, key=lambda x: (x['win'], x['streak']), reverse=True)[:20]
-    elif filter_type == "highest_lose":
-        result = sorted(algos, key=lambda x: x['lose'], reverse=True)[:20]
-        
+    if filter_type == "current_win": result = sorted([a for a in algos if a['type'] == 'win' and a['streak'] >= 3], key=lambda x: x['streak'], reverse=True)
+    elif filter_type == "current_lose": result = sorted([a for a in algos if a['type'] == 'lose' and a['streak'] >= 3], key=lambda x: x['streak'], reverse=True)
+    elif filter_type == "highest_win": result = sorted(algos, key=lambda x: (x['win'], x['streak']), reverse=True)[:20]
+    elif filter_type == "highest_lose": result = sorted(algos, key=lambda x: x['lose'], reverse=True)[:20]
+    else: result = []
     return jsonify({"algos": result})
 
 @app.route('/api/logs/<gt>')
 def api_logs(gt):
     if not verify(): return "<h1>Access Denied</h1>", 403
     with db() as conn:
-        logs = conn.execute("SELECT * FROM logs WHERE gtype=? ORDER BY id DESC", (gt,)).fetchall()
+        # 【核心修复4】：查询时使用 GROUP BY period，绝对过滤掉任何脏数据
+        logs = conn.execute("SELECT * FROM logs WHERE gtype=? GROUP BY period ORDER BY id DESC", (gt,)).fetchall()
         settled = [l['status'] for l in logs if l['status'] in ('win', 'lose')]
         stats = {"current_win": 0, "current_lose": 0, "total_win": settled.count('win'), "total_lose": settled.count('lose')}
         
@@ -375,7 +344,7 @@ def index():
     
 <script>
     let curG = '2', timer = null;
-    const KEY = "algo_rank_second_v65";
+    const KEY = "algo_rank_second_v66";
     
     function switchG(g, el) {
         curG = g;
@@ -437,7 +406,7 @@ def index():
         }).then(r => r.json()).then(res => {
             let algos = res.algos;
             if (!algos || algos.length === 0) {
-                document.getElementById('algo-list').innerHTML = '<div style="text-align: center; color: #8395a7; margin-top: 20px;">未找到符合条件的算法</div>';
+                document.getElementById('algo-list').innerHTML = '<div style="text-align: center; color: #8395a7; margin-top: 20px;">未找到符合条件的算法 (如：无3连及以上)</div>';
                 return;
             }
             
