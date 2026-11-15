@@ -9,7 +9,7 @@ from flask import Flask, request, jsonify
 from datetime import datetime, timedelta
 
 app = Flask(__name__)
-SECRET_KEY = "simple_combo_v52"
+SECRET_KEY = "simple_combo_v53"
 
 GAMES = {
     "2": {"name": "加拿大28", "url": "https://yc28cn-ml1l.onrender.com/vipASDFGHJKLQQQWERTYUIOPWW9983/8626/0549CASWWW?type=2", "interval": 210},
@@ -17,11 +17,11 @@ GAMES = {
     "13": {"name": "比特28", "url": "https://yc28cn-ml1l.onrender.com/vipASDFGHJKLQQZXCVBNMWW9983/8626/0549CCBDR?type=13", "interval": 60}
 }
 
-AI_STATUS = {"online": True, "msg": "20期冷热极简推演中..."}
+AI_STATUS = {"online": True, "msg": "20期极简推演中..."}
 LIVE_DATA = {gt: {"period": "", "next": "", "left": 0, "history": [], "pred": None, "algo_list": []} for gt in GAMES}
 
 def db():
-    conn = sqlite3.connect('predict_v52.db', timeout=30)
+    conn = sqlite3.connect('predict_v53.db', timeout=30)
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -34,7 +34,7 @@ with db() as conn:
 # ================== 极简冷热推演引擎 ==================
 def calculate_prediction(gt, history, next_p):
     if len(history) < 20:
-        return {"kill": "数据不足", "rec": "数据不足", "analysis": "等待20期数据...", "algo_list": []}
+        return {"kill": "", "rec": "数据不足", "analysis": "等待20期数据...", "algo_list": []}
         
     h20 = history[:20]
     bs_list = [h['big_small'] for h in h20]
@@ -45,14 +45,11 @@ def calculate_prediction(gt, history, next_p):
     odd_cnt = oe_list.count('单')
     even_cnt = oe_list.count('双')
     
-    # 默认逻辑：谁多杀谁，谁少推谁
     kill_bs = "大" if big_cnt >= small_cnt else "小"
     push_bs = "小" if kill_bs == "大" else "大"
-    
     kill_oe = "单" if odd_cnt >= even_cnt else "双"
     push_oe = "双" if kill_oe == "单" else "单"
 
-    # 检测长龙 (>=6连)
     def check_dragon(seq):
         streak = 1
         for i in range(1, len(seq)):
@@ -64,22 +61,17 @@ def calculate_prediction(gt, history, next_p):
     has_oe_dragon, oe_streak, oe_dragon_type = check_dragon(oe_list)
 
     dragon_msg = ""
-    
-    # 长龙防回马枪逻辑：多的跟，少的反
     if has_bs_dragon:
-        push_bs = bs_dragon_type # 连开什么就跟什么
+        push_bs = bs_dragon_type
         kill_bs = "小" if push_bs == "大" else "大"
-        dragon_msg += f"【大小长龙】已连开 {bs_streak} 期【{bs_dragon_type}】，顺势跟进，防回马枪。\n"
-        
+        dragon_msg += f"【大小长龙】已连开 {bs_streak} 期【{bs_dragon_type}】，顺势跟进。\n"
     if has_oe_dragon:
         push_oe = oe_dragon_type
         kill_oe = "双" if push_oe == "单" else "单"
-        dragon_msg += f"【单双长龙】已连开 {oe_streak} 期【{oe_dragon_type}】，顺势跟进，防回马枪。\n"
-
+        dragon_msg += f"【单双长龙】已连开 {oe_streak} 期【{oe_dragon_type}】，顺势跟进。\n"
     if not dragon_msg:
         dragon_msg = "【盘面平稳】遵循少跟多反原则。\n"
 
-    # 组合
     push_combo = f"{push_bs} ➕ {push_oe}"
     kill_combo = f"{kill_bs} ➕ {kill_oe}"
 
@@ -87,7 +79,7 @@ def calculate_prediction(gt, history, next_p):
     analysis += f"- 大小统计：大({big_cnt}) / 小({small_cnt})\n"
     analysis += f"- 单双统计：单({odd_cnt}) / 双({even_cnt})\n"
     analysis += f"- {dragon_msg}"
-    analysis += f"\n🎯 推出组合：{push_combo}\n🚫 击杀组合：{kill_combo}\n"
+    analysis += f"\n🎯 推出组合：{push_combo}\n"
     analysis += f"注：只要开出包含推出属性的组合（如推大单，开大双或小单），均算中奖！"
 
     algo_list = [
@@ -96,7 +88,7 @@ def calculate_prediction(gt, history, next_p):
     ]
 
     return {
-        "kill": kill_combo, 
+        "kill": kill_combo, # 后台依然计算击杀组合用于校验命中率
         "rec": push_combo, 
         "analysis": analysis, 
         "algo_list": algo_list
@@ -125,19 +117,19 @@ def fetch_loop():
                         } for i in raw_data]
                         
                         if LIVE_DATA[gt]['period'] != latest['period']:
-                            # 结算逻辑：只要开出的结果不是击杀组合里的两个属性同时出现，就算容错命中
                             if LIVE_DATA[gt]['period'] != "" and LIVE_DATA[gt]['pred']:
                                 real = latest['big_small'] + latest['odd_even']
                                 p_kill_combo = LIVE_DATA[gt]['pred']['kill']
-                                # 过滤加号
-                                k_bs, k_oe = p_kill_combo.replace(" ", "").split("➕")
                                 
-                                # 如果开奖同时满足击杀的大小和单双，才算输
-                                if real == (k_bs + k_oe):
-                                    status = 'lose'
+                                if p_kill_combo:
+                                    k_bs, k_oe = p_kill_combo.replace(" ", "").split("➕")
+                                    if real == (k_bs + k_oe):
+                                        status = 'lose'
+                                    else:
+                                        status = 'win' 
                                 else:
-                                    status = 'win' 
-                                
+                                    status = 'win' # 数据不足时默认
+
                                 with db() as conn:
                                     conn.execute("UPDATE logs SET real_result=?, status=? WHERE gtype=? AND period=?", (real, status, gt, latest['period']))
                                     conn.commit()
@@ -211,7 +203,7 @@ def index():
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-    <title>极简推演组合</title>
+    <title>极简推出组合</title>
     <style>
         * { box-sizing: border-box; }
         body { background: #f4f6f9; margin: 0; font-family: -apple-system, sans-serif; color: #333; }
@@ -234,9 +226,7 @@ def index():
         
         /* 极简展示区 */
         .result-box { display: flex; flex-direction: column; gap: 15px; margin-top: 10px; }
-        .res-item { padding: 20px; border-radius: 12px; text-align: center; font-size: 32px; font-weight: 900; letter-spacing: 2px;}
-        .res-kill { color: #d63031; background: #fff5f5; border: 1px solid #ffcccc; }
-        .res-push { color: #0984e3; background: #e8f4f8; border: 1px solid #b2d8ef; }
+        .res-push { padding: 25px; border-radius: 12px; text-align: center; font-size: 36px; font-weight: 900; letter-spacing: 2px; color: #0984e3; background: #e8f4f8; border: 1px solid #b2d8ef; box-shadow: 0 4px 15px rgba(9,132,227,0.1);}
         
         .cd-box { text-align: center; font-size: 14px; color: #636e72; margin-bottom: 10px;}
         .cd { font-size: 22px; color: #0984e3; font-weight: bold; }
@@ -252,7 +242,7 @@ def index():
     </style>
 </head>
 <body>
-    <div class="head">极简推演组合</div>
+    <div class="head">极简推出组合</div>
     <div class="status" id="status"><span class="dot"></span> 系统运转正常</div>
     <div class="tabs">
         <div class="tab on" onclick="switchG('2', this)">加拿大28</div>
@@ -269,8 +259,7 @@ def index():
         <div class="title">目标拦截: <span id="next-period" style="color:#0984e3;"></span></div>
         
         <div class="result-box">
-            <div class="res-item res-kill">🚫 击杀：<span id="kill-item"></span></div>
-            <div class="res-item res-push">🎯 推出：<span id="rec-item"></span></div>
+            <div class="res-push">🎯 推出：<span id="rec-item"></span></div>
         </div>
 
         <div class="cd-box" style="margin-top:20px;">距开奖: <span class="cd" id="cd">--:--</span></div>
@@ -284,7 +273,7 @@ def index():
     
 <script>
     let curG = '2', timer = null;
-    const KEY = "simple_combo_v52";
+    const KEY = "simple_combo_v53";
     
     function switchG(g, el) {
         curG = g;
@@ -310,7 +299,7 @@ def index():
             if(d.pred) {
                 document.getElementById('pred-box').style.display = 'block';
                 document.getElementById('next-period').innerText = d.next;
-                document.getElementById('kill-item').innerText = d.pred.kill;
+                // 前端不再展示击杀，只展示推出
                 document.getElementById('rec-item').innerText = d.pred.rec;
                 document.getElementById('ana').innerText = d.pred.analysis;
             }
@@ -346,7 +335,7 @@ def index():
                 <div class="log-item">
                     <div>
                         <div style="color:#b2bec3; font-size:12px;">${l.period} | ${l.draw_time || '---'}</div>
-                        <div style="margin-top:4px;">推:<span style="color:#0984e3; font-weight:bold;">${l.rec}</span> | 杀:<span style="color:#d63031; font-weight:bold;">${l.kill}</span></div>
+                        <div style="margin-top:4px;">推:<span style="color:#0984e3; font-weight:bold;">${l.rec}</span></div>
                     </div>
                     <div style="text-align:right">
                         <div class="${l.status === 'win' ? 'win' : (l.status === 'lose' ? 'lose' : '')}">
