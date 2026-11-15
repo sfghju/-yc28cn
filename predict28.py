@@ -11,7 +11,7 @@ from flask import Flask, request, jsonify
 from datetime import datetime, timedelta
 
 app = Flask(__name__)
-SECRET_KEY = "algo_200_matrix_v64"
+SECRET_KEY = "algo_rank_second_v65"
 
 GAMES = {
     "2": {"name": "加拿大28", "url": "https://yc28cn-ml1l.onrender.com/vipASDFGHJKLQQQWERTYUIOPWW9983/8626/0549CASWWW?type=2", "interval": 210},
@@ -19,13 +19,11 @@ GAMES = {
     "13": {"name": "比特28", "url": "https://yc28cn-ml1l.onrender.com/vipASDFGHJKLQQZXCVBNMWW9983/8626/0549CCBDR?type=13", "interval": 60}
 }
 
-AI_STATUS = {"online": True, "msg": "200套独立算法矩阵推演中..."}
+AI_STATUS = {"online": True, "msg": "200套算法排位筛选榜眼中..."}
 LIVE_DATA = {gt: {"period": "", "next": "", "left": 0, "history": [], "pred": None, "algo_list": []} for gt in GAMES}
 
-ALGO_STATS = {gt: {i: {"history": [], "streak": 0, "type": "", "win": 0, "lose": 0} for i in range(1, 201)} for gt in GAMES}
-
 def db():
-    conn = sqlite3.connect('predict_v64.db', timeout=30)
+    conn = sqlite3.connect('predict_v65.db', timeout=30)
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -92,58 +90,64 @@ def run_single_algo(aid, history):
 
     return push_bs + push_oe
 
-# ================== 状态更新与决策引擎 ==================
+# ================== 状态更新与榜首猎杀引擎 ==================
 def calculate_matrix(gt, history, next_p):
     if len(history) < 20: return None
 
-    votes = Counter()
     algo_list = []
     
+    # 1. 计算所有算法近20期战绩
     for aid in range(1, 201):
-        # 回测近20期战绩 (应用容错机制)
-        win_cnt = 0; lose_cnt = 0; curr_streak = 0; curr_type = ""; history_20 = []
+        win_cnt = 0; lose_cnt = 0; curr_streak = 0; curr_type = ""
         
         for i in range(20):
             if i+1 >= len(history): break
             p = run_single_algo(aid, history[i+1:])
             r_bs, r_oe = history[i]['big_small'], history[i]['odd_even']
             
-            # 【核心容错判定】：只要中其一即算赢
+            # 【容错判定】：只要中其一即算赢
             is_win = (r_bs == p[0] or r_oe == p[1])
             
             if is_win:
-                win_cnt += 1; history_20.append(True)
+                win_cnt += 1
                 curr_streak = curr_streak + 1 if curr_type == "win" else 1
                 curr_type = "win"
             else:
-                lose_cnt += 1; history_20.append(False)
+                lose_cnt += 1
                 curr_streak = curr_streak + 1 if curr_type == "lose" else 1
                 curr_type = "lose"
                 
-        st = ALGO_STATS[gt][aid]
-        st.update({"win": win_cnt, "lose": lose_cnt, "streak": curr_streak, "type": curr_type, "history": history_20})
-
-        # 当前期预测
+        # 当期预测
         pred_now = run_single_algo(aid, history)
-        votes[pred_now] += 1
+        
         algo_list.append({
-            "id": aid, "vote": f"{pred_now[0]} ➕ {pred_now[1]}", 
-            "win": win_cnt, "lose": lose_cnt, "streak": curr_streak, "type": curr_type
+            "id": aid, 
+            "vote": f"{pred_now[0]} ➕ {pred_now[1]}", 
+            "win": win_cnt, 
+            "lose": lose_cnt, 
+            "streak": curr_streak, 
+            "type": curr_type
         })
 
-    # 选出最高票组合
-    top_combo_raw = votes.most_common(1)[0][0] # 例如: "小双"
-    kill_combo_raw = votes.most_common()[-1][0]
+    # 2. 强制排序：按【总对】降序。如果总对相同，按【连中】降序辅助排位。
+    algo_list.sort(key=lambda x: (x['win'], x['streak']), reverse=True)
 
-    # 格式化加号
-    top_display = f"{top_combo_raw[0]} ➕ {top_combo_raw[1]}"
-    kill_display = f"{kill_combo_raw[0]} ➕ {kill_combo_raw[1]}"
+    # 3. 精准夺取【第2名榜眼】
+    if len(algo_list) >= 2:
+        target_algo = algo_list[1]  # 索引1就是第2名
+    else:
+        target_algo = algo_list[0]
 
-    analysis = f"【200套独立算法统票】\n"
-    analysis += f"基于200个完全不同思路的算法深度推演：\n"
-    analysis += f"最高票数：{top_display} ({votes[top_combo_raw]}票)\n"
-    analysis += f"最低票数：{kill_display} ({votes[kill_combo_raw]}票)\n\n"
-    analysis += f"🎯 核心推出：{top_display}\n"
+    top_display = target_algo['vote']
+    # 反推击杀组合（用于系统容错结算判定）
+    k_bs = '小' if top_display[0] == '大' else '大'
+    k_oe = '双' if top_display[2] == '单' else '单'
+    kill_display = f"{k_bs} ➕ {k_oe}"
+
+    analysis = f"【最高总对·榜眼猎杀机制】\n"
+    analysis += f"经20期真实容错回测，锁定排名第 2 的顶级算法：【算法{target_algo['id']}】\n"
+    analysis += f"该算法战绩：近20期对({target_algo['win']})错({target_algo['lose']})，当前{('连中' if target_algo['type']=='win' else '连错')}{target_algo['streak']}期。\n\n"
+    analysis += f"🎯 严格执行榜眼预测，核心推出：{top_display}\n"
     analysis += f"注：只要开出包含推出属性的组合（如推小双，开小单或大双）均算中奖！"
 
     return {
@@ -167,19 +171,17 @@ def fetch_loop():
                         history = [{"period": i['period'], "nums": f"{i['num1']} + {i['num2']} + {i['num3']}", "total": i['total'], "big_small": i['big_small'], "odd_even": i['odd_even']} for i in data[:30]]
                         
                         if LIVE_DATA[gt]['period'] != latest['period']:
-                            AI_STATUS["msg"] = "200套算法深度计算中..."
+                            AI_STATUS["msg"] = "正锁定榜眼算法..."
                             
-                            # 【核心容错结算】
+                            # 【容错结算】
                             if LIVE_DATA[gt]['period'] != "" and LIVE_DATA[gt]['pred']:
                                 real_bs = latest['big_small']
                                 real_oe = latest['odd_even']
                                 real_full = real_bs + real_oe
                                 
-                                # 解析上期预测
                                 prev_rec = LIVE_DATA[gt]['pred']['rec'] # 比如 "小 ➕ 双"
                                 p_bs, p_oe = prev_rec.replace(" ➕ ", "")
                                 
-                                # 只要开奖结果包含预测的大小或单双之一，就算赢
                                 if real_bs == p_bs or real_oe == p_oe:
                                     status = 'win'
                                 else:
@@ -207,7 +209,7 @@ def fetch_loop():
                                                  (gt, next_p, latest['draw_time'], pred["kill"], pred["rec"], pred["analysis"]))
                                     conn.commit()
                                 
-                            AI_STATUS["msg"] = "推演完毕，等待下一期..."
+                            AI_STATUS["msg"] = "榜眼猎杀完毕，等待下一期..."
                                 
                         LIVE_DATA[gt]['left'] = max(0, int(LIVE_DATA[gt]['target_time'] - datetime.utcnow().timestamp()))
             except Exception: pass
@@ -241,7 +243,7 @@ def api_filter(gt):
         result = [a for a in algos if a['type'] == 'lose' and a['streak'] >= 3]
         result.sort(key=lambda x: x['streak'], reverse=True)
     elif filter_type == "highest_win":
-        result = sorted(algos, key=lambda x: x['win'], reverse=True)[:20]
+        result = sorted(algos, key=lambda x: (x['win'], x['streak']), reverse=True)[:20]
     elif filter_type == "highest_lose":
         result = sorted(algos, key=lambda x: x['lose'], reverse=True)[:20]
         
@@ -280,7 +282,7 @@ def index():
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-    <title>200套独立算法矩阵</title>
+    <title>200套算法·榜眼猎杀</title>
     <style>
         * { box-sizing: border-box; }
         body { background: #f4f6f9; margin: 0; font-family: -apple-system, sans-serif; color: #333; }
@@ -326,7 +328,7 @@ def index():
     </style>
 </head>
 <body>
-    <div class="head">200套独立算法矩阵</div>
+    <div class="head">200套算法·榜眼猎杀</div>
     <div class="status" id="status"><span class="dot"></span> 系统运转正常</div>
     <div class="tabs">
         <div class="tab on" onclick="switchG('2', this)">加拿大28</div>
@@ -373,7 +375,7 @@ def index():
     
 <script>
     let curG = '2', timer = null;
-    const KEY = "algo_200_matrix_v64";
+    const KEY = "algo_rank_second_v65";
     
     function switchG(g, el) {
         curG = g;
@@ -435,7 +437,7 @@ def index():
         }).then(r => r.json()).then(res => {
             let algos = res.algos;
             if (!algos || algos.length === 0) {
-                document.getElementById('algo-list').innerHTML = '<div style="text-align: center; color: #8395a7; margin-top: 20px;">未找到符合条件的算法 (如：暂无3连及以上)</div>';
+                document.getElementById('algo-list').innerHTML = '<div style="text-align: center; color: #8395a7; margin-top: 20px;">未找到符合条件的算法</div>';
                 return;
             }
             
