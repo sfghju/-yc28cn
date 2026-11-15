@@ -10,7 +10,7 @@ from flask import Flask, request, jsonify
 from datetime import datetime, timedelta
 
 app = Flask(__name__)
-SECRET_KEY = "layer_predict_v60"
+SECRET_KEY = "dual_engine_v61"
 
 GAMES = {
     "2": {"name": "加拿大28", "url": "https://yc28cn-ml1l.onrender.com/vipASDFGHJKLQQQWERTYUIOPWW9983/8626/0549CASWWW?type=2", "interval": 210},
@@ -18,11 +18,11 @@ GAMES = {
     "13": {"name": "比特28", "url": "https://yc28cn-ml1l.onrender.com/vipASDFGHJKLQQZXCVBNMWW9983/8626/0549CCBDR?type=13", "interval": 60}
 }
 
-AI_STATUS = {"online": True, "msg": "多层级递进推演中..."}
+AI_STATUS = {"online": True, "msg": "双引擎严格推演中..."}
 LIVE_DATA = {gt: {"period": "", "next": "", "left": 0, "history": [], "pred": None, "algo_list": []} for gt in GAMES}
 
 def db():
-    conn = sqlite3.connect('predict_v60.db', timeout=30)
+    conn = sqlite3.connect('predict_v61.db', timeout=30)
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -32,69 +32,94 @@ with db() as conn:
         analysis TEXT, real_result TEXT DEFAULT '', status TEXT DEFAULT 'wait')''')
     conn.commit()
 
-# ================== 多层级递进推演引擎 ==================
+# ================== 双引擎动态推演核心 ==================
 def calculate_prediction(history, next_p):
-    if len(history) < 10:
+    if len(history) < 50:
         return {"kill": "", "rec": "数据不足", "analysis": "等待数据...", "algo_list": []}
 
-    # 1. 定义分析周期与权重 (越近权重越高)
-    periods = [(50, 1), (30, 2), (10, 3), (5, 4)]
+    # 提取近5期、15期、50期数据
+    h5 = history[:5]
+    h15 = history[:15]
+    h50 = history[:50]
     
-    score_bs = {"大": 0, "小": 0}
-    score_oe = {"单": 0, "双": 0}
-    reason_logs = []
-
-    # 2. 层级遍历统计
-    for p_len, weight in periods:
-        hx = history[:min(p_len, len(history))]
-        bs_list = [h['big_small'] for h in hx]
-        oe_list = [h['odd_even'] for h in hx]
-        bs_cnt, oe_cnt = Counter(bs_list), Counter(oe_list)
-        
-        # 大小判定: 谁少给谁加分
-        if bs_cnt['大'] < bs_cnt['小']: score_bs['大'] += weight
-        elif bs_cnt['小'] < bs_cnt['大']: score_bs['小'] += weight
-        
-        # 单双判定: 谁少给谁加分
-        if oe_cnt['单'] < oe_cnt['双']: score_oe['单'] += weight
-        elif oe_cnt['双'] < oe_cnt['单']: score_oe['双'] += weight
-
-    # 基础推演结果：得分最高的属性
-    push_bs = max(score_bs, key=score_bs.get)
-    push_oe = max(score_oe, key=score_oe.get)
-    reason_logs.append(f"多周期少跟得分：大小[{push_bs}胜({score_bs['大']}vs{score_bs['小']})] | 单双[{push_oe}胜({score_oe['单']}vs{score_oe['双']})]")
-
-    # 3. 长龙防范强制干预 (检测近10期内是否 >= 6连)
-    recent_10_bs = [h['big_small'] for h in history[:10]]
-    recent_10_oe = [h['odd_even'] for h in history[:10]]
+    bs_5 = [h['big_small'] for h in h5]
+    oe_5 = [h['odd_even'] for h in h5]
     
-    def check_dragon(seq):
+    # 检测长龙 (>=4连)
+    def check_dragon(seq, length=4):
         streak = 1
         for i in range(1, len(seq)):
             if seq[i] == seq[0]: streak += 1
             else: break
-        return streak if streak >= 6 else 0, seq[0]
+        return streak >= length, streak, seq[0]
+    
+    has_bs_dragon, bs_streak, bs_type = check_dragon(bs_5, 4)
+    has_oe_dragon, oe_streak, oe_type = check_dragon(oe_5, 4)
 
-    bs_streak, bs_type = check_dragon(recent_10_bs)
-    oe_streak, oe_type = check_dragon(recent_10_oe)
+    # 统计热态 (近5期极热)
+    bs_cnt5 = Counter(bs_5)
+    oe_cnt5 = Counter(oe_5)
+    
+    # 趋势判定开关
+    mode_bs = "少跟多反" # 默认震荡模式
+    mode_oe = "少跟多反"
+    
+    if has_bs_dragon or bs_cnt5['大'] >= 4 or bs_cnt5['小'] >= 4:
+        mode_bs = "多跟少反" # 极热或长龙，切换顺势模式
+    if has_oe_dragon or oe_cnt5['单'] >= 4 or oe_cnt5['双'] >= 4:
+        mode_oe = "多跟少反"
 
-    if bs_streak:
-        push_bs = bs_type
-        reason_logs.append(f"⚠️ 大小长龙（{bs_streak}连{bs_type}），强制跟龙")
-    if oe_streak:
-        push_oe = oe_type
-        reason_logs.append(f"⚠️ 单双长龙（{oe_streak}连{oe_type}），强制跟龙")
+    # 计算多周期统计
+    def get_counts(h_data, attr):
+        return Counter([h[attr] for h in h_data])
 
-    # 4. 最终组合与后端击杀校验
+    # ------------------ 大小维度推演 ------------------
+    if mode_bs == "多跟少反":
+        # 顺势：谁多推谁，谁少杀谁
+        push_bs = "大" if bs_cnt5['大'] >= bs_cnt5['小'] else "小"
+        reason_bs = f"近5期热态触发【多跟少反】。顺势推【{push_bs}】"
+        if has_bs_dragon: reason_bs = f"防长龙【多跟少反】。连开{bs_streak}期【{bs_type}】，强推【{bs_type}】"
+    else:
+        # 震荡：层级打分找最少的
+        score_bs = {"大": 0, "小": 0}
+        for h_data, weight in [(h50, 1), (h15, 2), (h5, 3)]:
+            c = get_counts(h_data, 'big_small')
+            if c['大'] < c['小']: score_bs['大'] += weight
+            elif c['小'] < c['大']: score_bs['小'] += weight
+        push_bs = max(score_bs, key=score_bs.get)
+        reason_bs = f"盘面震荡触发【少跟多反】。多周期回补推【{push_bs}】"
+
+    # ------------------ 单双维度推演 ------------------
+    if mode_oe == "多跟少反":
+        push_oe = "单" if oe_cnt5['单'] >= oe_cnt5['双'] else "双"
+        reason_oe = f"近5期热态触发【多跟少反】。顺势推【{push_oe}】"
+        if has_oe_dragon: reason_oe = f"防长龙【多跟少反】。连开{oe_streak}期【{oe_type}】，强推【{oe_type}】"
+    else:
+        score_oe = {"单": 0, "双": 0}
+        for h_data, weight in [(h50, 1), (h15, 2), (h5, 3)]:
+            c = get_counts(h_data, 'odd_even')
+            if c['单'] < c['双']: score_oe['单'] += weight
+            elif c['双'] < c['单']: score_oe['双'] += weight
+        push_oe = max(score_oe, key=score_oe.get)
+        reason_oe = f"盘面震荡触发【少跟多反】。多周期回补推【{push_oe}】"
+
+    # ------------------ 组合与输出 ------------------
     push_combo = f"{push_bs} ➕ {push_oe}"
+    # 击杀组合是为了防止反向全中，只要不全中击杀项，就算命中
     kill_combo = f"{'小' if push_bs == '大' else '大'} ➕ {'双' if push_oe == '单' else '单'}"
 
-    analysis = f"【多周期层级推演】\n" + "\n".join(f"- {r}" for r in reason_logs)
-    analysis += f"\n\n🎯 最终推出：{push_combo}\n注：只要开出包含推出属性的组合均算中奖！"
+    analysis = f"【双引擎严格推演】\n"
+    analysis += f"- 大小逻辑：{reason_bs}\n"
+    analysis += f"- 单双逻辑：{reason_oe}\n"
+    analysis += f"\n🎯 最终严格推出：{push_combo}\n"
+    analysis += f"注：基于当前状态机，只要不双杀反属性即算中奖！"
 
     return {
         "kill": kill_combo, "rec": push_combo, "analysis": analysis, 
-        "algo_list": [{"name": "大小递进", "vote": push_bs, "detail": "少跟多反"}, {"name": "单双递进", "vote": push_oe, "detail": "少跟多反"}]
+        "algo_list": [
+            {"name": f"大小模式({mode_bs})", "vote": push_bs, "detail": reason_bs},
+            {"name": f"单双模式({mode_oe})", "vote": push_oe, "detail": reason_oe}
+        ]
     }
 
 # ================== 极速抓取主循环 ==================
@@ -108,7 +133,6 @@ def fetch_loop():
                     data = json.loads(resp.read().decode('utf-8')).get('data')
                     if data:
                         latest = data[0]
-                        # 拉取足够的数据用于分析50期
                         history = [{"period": i['period'], "nums": f"{i['num1']} + {i['num2']} + {i['num3']}", "total": i['total'], "big_small": i['big_small'], "odd_even": i['odd_even']} for i in data[:50]]
                         
                         if LIVE_DATA[gt]['period'] != latest['period']:
@@ -139,7 +163,7 @@ def fetch_loop():
                                              (gt, next_p, latest['draw_time'], pred["kill"], pred["rec"], pred["analysis"]))
                                 conn.commit()
                                 
-                            AI_STATUS["msg"] = "推演完毕，等待下一期..."
+                            AI_STATUS["msg"] = "双引擎推演完毕，等待下一期..."
                                 
                         LIVE_DATA[gt]['left'] = max(0, int(LIVE_DATA[gt]['target_time'] - datetime.utcnow().timestamp()))
             except Exception: pass
@@ -188,7 +212,7 @@ def index():
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-    <title>多层级递进推演</title>
+    <title>双引擎严格推演</title>
     <style>
         * { box-sizing: border-box; }
         body { background: #f4f6f9; margin: 0; font-family: -apple-system, sans-serif; color: #333; }
@@ -223,7 +247,7 @@ def index():
     </style>
 </head>
 <body>
-    <div class="head">多层级递进推演</div>
+    <div class="head">双引擎严格推演</div>
     <div class="status" id="status"><span class="dot"></span> 系统运转正常</div>
     <div class="tabs">
         <div class="tab on" onclick="switchG('2', this)">加拿大28</div>
@@ -257,7 +281,7 @@ def index():
     
 <script>
     let curG = '2', timer = null;
-    const KEY = "layer_predict_v60";
+    const KEY = "dual_engine_v61";
     
     function switchG(g, el) {
         curG = g;
