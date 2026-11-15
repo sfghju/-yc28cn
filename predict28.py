@@ -12,7 +12,7 @@ from flask import Flask, request, jsonify
 from datetime import datetime, timedelta
 
 app = Flask(__name__)
-SECRET_KEY = "captain_consensus_v79"
+SECRET_KEY = "captain_final_v81"
 
 GAMES = {
     "2": {"name": "加拿大28", "url": "https://yc28cn-ml1l.onrender.com/vipASDFGHJKLQQQWERTYUIOPWW9983/8626/0549CASWWW?type=2", "interval": 210},
@@ -20,14 +20,14 @@ GAMES = {
     "13": {"name": "比特28", "url": "https://yc28cn-ml1l.onrender.com/vipASDFGHJKLQQZXCVBNMWW9983/8626/0549CCBDR?type=13", "interval": 60}
 }
 
-AI_STATUS = {"online": True, "msg": "严格5人选3票共识筛选..."}
+AI_STATUS = {"online": True, "msg": "双向强制变化推演中..."}
 LIVE_DATA = {gt: {"period": "", "next": "", "left": 0, "history": [], "pred": None, "algo_list": []} for gt in GAMES}
 
-# 记录上期出战算法，用于强制换新
-LAST_USED_ALGOS = {"2": [], "3": [], "13": []}
+# 记录上期的预测，用于防死板
+LAST_PRED_STR = {"2": "", "3": "", "13": ""}
 
 def db():
-    conn = sqlite3.connect('predict_consensus_v79.db', timeout=30)
+    conn = sqlite3.connect('predict_final_v81.db', timeout=30)
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -39,32 +39,32 @@ with db() as conn:
     )''')
     conn.commit()
 
-# ================== 200套真实算法引擎 (确保各不相同) ==================
+# ================== 50套算法引擎 ==================
 def run_single_algo(aid, history):
     if len(history) < 10: return "数据不足"
     sums = [h['total'] for h in history]
     bs = [1 if h['big_small'] == '大' else 0 for h in history]
     oe = [1 if h['odd_even'] == '单' else 0 for h in history]
     
-    is_follow = aid <= 100
-    model_id = (aid % 10) if is_follow else ((aid - 100) % 10)
-    param = aid // 10
+    is_follow = aid <= 25
+    model_id = (aid % 5) if is_follow else ((aid - 25) % 5)
+    param = aid // 5
     
     push_bs, push_oe = 1, 1 
     
     if model_id == 0:
-        w = 3 + (param % 7)
+        w = 3 + (param % 5)
         ma = sum(sums[:w]) / w
         push_bs = (1 if ma >= 13.5 else 0) if is_follow else (0 if ma >= 13.5 else 1)
         push_oe = (1 if ma % 2 >= 1 else 0) if is_follow else (0 if ma % 2 >= 1 else 1)
     elif model_id == 1:
-        w = 3 + (param % 5)
+        w = 3 + (param % 4)
         ma = sum(sums[:w]) / w
         dev = sums[0] - ma
         push_bs = (1 if dev > 0 else 0) if is_follow else (0 if dev > 0 else 1)
         push_oe = oe[0] if is_follow else 1 - oe[0]
     elif model_id == 2:
-        threshold = 2 + (param % 5)
+        threshold = 2 + (param % 3)
         streak = 1
         for i in range(1, threshold+1):
             if bs[i] == bs[0]: streak += 1
@@ -73,76 +73,31 @@ def run_single_algo(aid, history):
         push_bs = pred if is_follow else 1 - pred
         push_oe = oe[0]
     elif model_id == 3:
-        w = 2 + (param % 6)
+        w = 2 + (param % 4)
         mom = sums[0] - sums[w]
         pred = 1 if mom > 0 else 0
         push_bs = pred if is_follow else 1 - pred
         push_oe = pred 
-    elif model_id == 4:
-        w = 3 + (param % 5)
+    else:
+        w = 3 + (param % 3)
         ups = sum([1 for i in range(w) if sums[i] > sums[i+1]])
         pred = 1 if ups >= w/2 else 0
         push_bs = pred if is_follow else 1 - pred
         push_oe = (0 if ups == w else (1 if ups == 0 else pred)) if is_follow else (1 if ups == w else (0 if ups == 0 else 1-pred))
-    elif model_id == 5:
-        w = 5 + (param % 6) 
-        std_factor = 1.5 + (param % 5) * 0.2 
-        ma = sum(sums[:w]) / w
-        std = (sum([(x - ma)**2 for x in sums[:w]]) / w) ** 0.5
-        if sums[0] > ma + std * std_factor: pred = 0
-        elif sums[0] < ma - std * std_factor: pred = 1
-        else: pred = 1 if sums[0] > ma else 0
-        push_bs = pred if is_follow else 1 - pred
-        push_oe = oe[0] if is_follow else 1 - oe[0]
-    elif model_id == 6:
-        w = 3 + (param % 4)
-        matrix = [bs[i]*2 + oe[i] for i in range(w)]
-        freq = Counter(matrix).most_common(1)[0][0]
-        push_bs, push_oe = freq // 2, freq % 2
-        if not is_follow: push_bs, push_oe = 1 - push_bs, 1 - push_oe
-    elif model_id == 7:
-        w = 3 + (param % 5)
-        high, low = max(sums[:w]), min(sums[:w])
-        fib = low + (high - low) * 0.618
-        pred = 1 if fib >= 13.5 else 0
-        push_bs = pred if is_follow else 1 - pred
-        push_oe = pred if is_follow else 1 - pred
-    elif model_id == 8:
-        h = int(hashlib.sha256(f"{aid}_{history[0]['period']}_{sums[0]}_{param}".encode()).hexdigest(), 16)
-        p_bs, p_oe = (h >> 1) & 1, h & 1
-        push_bs = p_bs if is_follow else 1 - p_bs
-        push_oe = p_oe if is_follow else 1 - p_oe
-    else:
-        w = 5 + (param % 5)
-        last = bs[1]*2 + oe[1]
-        trans = {0:[0,0],1:[0,0],2:[0,0],3:[0,0]}
-        for i in range(min(w, len(bs)-1), 0, -1):
-            trans[bs[i-1]*2 + oe[i-1]][(bs[i]*2 + oe[i]) % 2] += 1
-        pred_oe = 0 if trans[last][0] >= trans[last][1] else 1
-        push_bs = bs[0] if is_follow else 1 - bs[0]
-        push_oe = pred_oe if is_follow else 1 - pred_oe
 
     return ("大" if push_bs == 1 else "小") + ("单" if push_oe == 1 else "双")
 
-# ================== 强制去重器 ==================
-def unique_by_prediction(algo_list):
-    seen = set()
-    result = []
-    for a in algo_list:
-        if a['pred'] not in seen:
-            result.append(a)
-            seen.add(a['pred'])
-    return result
-
-# ================== 严格共识引擎 ==================
+# ================== 强制变向与共识引擎 ==================
 def calculate_matrix(gt, history, next_p):
     if len(history) < 10: return None
 
-    # 1. 获取基础战绩
+    # 使用真实毫秒级时间作为种子
+    random.seed(int(time.time() * 1000) + int(next_p))
+    
     algo_stats = []
-    for aid in range(1, 201):
+    for aid in range(1, 51):
         pred_now = run_single_algo(aid, history)
-        win_cnt = 0; lose_cnt = 0; curr_streak = 0; curr_type = ""
+        win_cnt = 0; curr_streak = 0; curr_type = ""
         
         for i in range(10):
             if i+1 >= len(history): break
@@ -151,71 +106,61 @@ def calculate_matrix(gt, history, next_p):
             if (r_bs == p[0] or r_oe == p[1]):
                 win_cnt += 1; curr_streak = curr_streak + 1 if curr_type == "win" else 1; curr_type = "win"
             else:
-                lose_cnt += 1; curr_streak = curr_streak + 1 if curr_type == "lose" else 1; curr_type = "lose"
+                curr_streak = 0; curr_type = "lose"
 
         algo_stats.append({
-            "id": aid, "pred": pred_now, "win": win_cnt, "lose": lose_cnt, 
+            "id": aid, "pred": pred_now, "win": win_cnt, 
             "streak": curr_streak if curr_type == "win" else 0
         })
 
-    # 2. 过滤黑名单（上期用过的）
-    available = [a for a in algo_stats if a['id'] not in LAST_USED_ALGOS[gt]]
+    # 排序并强制去重（允许算法连续出场，但预测属性必须不同）
+    algo_stats.sort(key=lambda x: (x['streak'], x['win']), reverse=True)
     
-    # 3. 按连中排序去重（连中>=1）
-    streak_pool = [a for a in available if a['streak'] >= 1]
-    streak_pool.sort(key=lambda x: (x['streak'], x['win']), reverse=True)
-    streak_pool = unique_by_prediction(streak_pool)
+    unique_pool = []
+    seen_preds = set()
+    for a in algo_stats:
+        if a['pred'] not in seen_preds:
+            unique_pool.append(a)
+            seen_preds.add(a['pred'])
 
-    # 4. 按胜率排序去重
-    win_pool = sorted(available, key=lambda x: x['win'], reverse=True)
-    win_pool = unique_by_prediction(win_pool)
+    final_group = unique_pool[:5]
+    if len(final_group) < 5:
+        for a in algo_stats:
+            if a not in final_group:
+                final_group.append(a)
+                if len(final_group) == 5: break
 
-    # 5. 强行凑齐 5 个不同预测的算法
-    final_group = []
-    for a in streak_pool:
-        if len(final_group) >= 5: break
-        if a not in final_group: final_group.append(a)
-    for a in win_pool:
-        if len(final_group) >= 5: break
-        if a not in final_group: final_group.append(a)
-        
-    if len(final_group) < 3:
-        fallback = [a for a in available if a['id'] not in [x['id'] for x in final_group]]
-        fallback.sort(key=lambda x: x['win'], reverse=True)
-        fallback = unique_by_prediction(fallback)
-        for a in fallback:
-            if len(final_group) >= 3: break
-            if a not in final_group: final_group.append(a)
-
-    # 记录本期使用，禁用下期
-    LAST_USED_ALGOS[gt] = [a['id'] for a in final_group]
-
-    # 6. 共识裁决
+    # 共识裁决
     votes = Counter([a['pred'] for a in final_group])
     top_combo, count = votes.most_common(1)[0]
+    
+    final_pred = top_combo if count >= 3 else final_group[0]['pred']
+    consensus_msg = f"【{count}票共识】" if count >= 3 else "【强制主帅裁决】"
 
-    # 强制共识逻辑：如果最高票数没达到3票，强行拉拢最接近的
-    if count < 3 and len(final_group) >= 3:
-        # 如果存在 2 票的，强制凑成 3 票（拉起同阵营的替补）
-        consensus_msg = "【强制干预】票数未达标，启动最高胜率主帅裁决。"
-    else:
-        consensus_msg = f"【绝对共识】达成 {count} 票共识！"
+    # 【核心逻辑：强制变化防死板】
+    # 如果这期推出来的组合跟上期一模一样，强行把大小或单双翻转
+    if final_pred == LAST_PRED_STR[gt]:
+        # 翻转大小
+        flipped_bs = '小' if final_pred[0] == '大' else '大'
+        final_pred = flipped_bs + final_pred[1]
+        consensus_msg += " (检测到连续重复，强制反向纠偏)"
 
-    top_display = f"{top_combo[0]} ➕ {top_combo[1]}"
-    kill_display = f"{'小' if top_combo[0]=='大' else '大'} ➕ {'双' if top_combo[1]=='单' else '单'}"
+    LAST_PRED_STR[gt] = final_pred
 
-    top5_details = "\n".join([f"- 算法{a['id']}: 连中{a['streak']}期，近10对{a['win']}错{a['lose']}，推【{a['pred']}】" for a in final_group])
+    top_display = f"{final_pred[0]} ➕ {final_pred[1]}"
+    kill_display = f"{'小' if final_pred[0]=='大' else '大'} ➕ {'双' if final_pred[1]=='单' else '单'}"
 
-    analysis = f"【舰长·严格共识机制】\n"
-    analysis += f"本期强选出 {len(final_group)} 个完全不同预测的算法（上期已禁用）：\n"
-    analysis += f"{top5_details}\n\n"
+    top5_details = "\n".join([f"- 算法{a['id']}: 连中{a['streak']}期，近10对{a['win']}，推【{a['pred']}】" for a in final_group])
+
+    analysis = f"【舰长·终极结论机制】\n"
+    analysis += f"严格筛选 50 套算法，本期出战阵容：\n{top5_details}\n\n"
     analysis += f"逻辑判定：{consensus_msg}\n"
-    analysis += f"🎯 核心推出：{top_display}\n"
+    analysis += f"🎯 最终结论：坚决主推【{top_display}】\n"
     analysis += f"注：开出包含推出属性即算中奖！"
 
     return {"kill": kill_display, "rec": top_display, "analysis": analysis, "algo_list": final_group}
 
-# ================== 抓取与API ==================
+# ================== 极速抓取主循环 ==================
 def fetch_loop():
     ctx = ssl._create_unverified_context()
     while True:
@@ -229,7 +174,7 @@ def fetch_loop():
                         history = [{"period": i['period'], "nums": f"{i['num1']} + {i['num2']} + {i['num3']}", "total": i['total'], "big_small": i['big_small'], "odd_even": i['odd_even']} for i in data[:30]]
                         
                         if LIVE_DATA[gt]['period'] != latest['period']:
-                            AI_STATUS["msg"] = "共识演算中..."
+                            AI_STATUS["msg"] = "双向强制变化演算中..."
                             
                             if LIVE_DATA[gt]['period'] != "" and LIVE_DATA[gt]['pred']:
                                 real_bs, real_oe = latest['big_small'], latest['odd_even']
@@ -260,7 +205,7 @@ def fetch_loop():
                                                  (gt, next_p, latest['draw_time'], pred["kill"], pred["rec"], pred["analysis"]))
                                     conn.commit()
                                 
-                            AI_STATUS["msg"] = "决议完毕，等待下一期..."
+                            AI_STATUS["msg"] = "结论已出，等待开奖..."
                                 
                         LIVE_DATA[gt]['left'] = max(0, int(LIVE_DATA[gt]['target_time'] - datetime.utcnow().timestamp()))
             except Exception: pass
@@ -268,6 +213,7 @@ def fetch_loop():
 
 threading.Thread(target=fetch_loop, daemon=True).start()
 
+# ================== API 接口 ==================
 def verify(): return request.headers.get('X-Token') == SECRET_KEY
 
 @app.route('/api/data/<gt>')
@@ -302,7 +248,7 @@ def api_clear(gt):
     with db() as conn:
         conn.execute("DELETE FROM logs WHERE gtype=?", (gt,))
         conn.commit()
-    LAST_USED_ALGOS[gt] = []
+    LAST_PRED_STR[gt] = ""
     return jsonify({"ok": True})
 
 @app.route('/')
@@ -384,7 +330,7 @@ def index():
     
 <script>
     let curG = '2', timer = null;
-    const KEY = "captain_consensus_v79";
+    const KEY = "captain_final_v81";
     
     function switchG(g, el) {
         curG = g;
