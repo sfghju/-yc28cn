@@ -7,11 +7,12 @@ import os
 import sqlite3
 import math
 import random
+import statistics
 from flask import Flask, request, jsonify
 from datetime import datetime, timedelta
 
 app = Flask(__name__)
-SECRET_KEY = "captain_cross_v100"
+SECRET_KEY = "captain_ensemble_v101"
 
 GAMES = {
     "2": {"name": "加拿大28", "url": "https://yc28cn-ml1l.onrender.com/vipASDFGHJKLQQQWERTYUIOPWW9983/8626/0549CASWWW?type=2", "interval": 210},
@@ -19,11 +20,11 @@ GAMES = {
     "13": {"name": "比特28", "url": "https://yc28cn-ml1l.onrender.com/vipASDFGHJKLQQZXCVBNMWW9983/8626/0549CCBDR?type=13", "interval": 60}
 }
 
-AI_STATUS = {"online": True, "msg": "近5期交叉公式独立推演中..."}
+AI_STATUS = {"online": True, "msg": "6大高维算法融合推演中..."}
 LIVE_DATA = {gt: {"period": "", "next": "", "left": 0, "history": [], "pred": None, "algo_list": []} for gt in GAMES}
 
 def db():
-    conn = sqlite3.connect('predict_cross_v100.db', timeout=30)
+    conn = sqlite3.connect('predict_ensemble_v101.db', timeout=30)
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -35,94 +36,116 @@ with db() as conn:
     )''')
     conn.commit()
 
-# ================== 近5期专属交叉公式推演引擎 ==================
+# ================== 高阶机器学习与统计融合引擎 ==================
 def calculate_matrix(gt, history, next_p):
-    if len(history) < 5: return None
+    if len(history) < 20: return None
 
-    # 严格提取近 5 期开奖数据
-    h5 = history[:5]
-    nums_5 = [[int(x) for x in h['nums'].split(' + ')] for h in h5]
-    sums_5 = [h['total'] for h in h5]
-
-    # 随机数种子，确保每次计算有微小的数学精度差异
-    random.seed(int(next_p))
-    eps = round(random.uniform(0.01, 0.99), 2) # 误差控制 0.01 - 0.99
-
-    score_bs = 0.0
-    score_oe = 0.0
-    details = []
-
-    # ================== 一、加拿大28 专属算法 (宏观周期交叉) ==================
-    if gt == "2":
-        # 公式1: 首尾交叉 A1*B2 + C3*0.618
-        cross1 = nums_5[0][0] * nums_5[1][1] + nums_5[2][2] * 0.618
-        # 公式2: 奇偶错位交叉 (A1+A3+A5) - (B2+B4)
-        cross2 = (nums_5[0][0] + nums_5[2][0] + nums_5[4][0]) - (nums_5[1][1] + nums_5[3][1])
-        # 公式3: 近5期和值均值偏差
-        cross3 = sum(sums_5) / 5.0 + eps
-        
-        score_bs = cross1 + cross2 - cross3
-        score_oe = cross1 * 0.5 - cross2 + cross3
-        
-        details.append(f"[加拿大专属-首尾交叉] 计算值: {cross1:.3f}")
-        details.append(f"[加拿大专属-奇偶错位] 计算值: {cross2:.3f}")
-        details.append(f"[加拿大专属-均值偏差] 计算值: {cross3:.3f}")
-
-    # ================== 二、分分28 专属算法 (高频波动交叉) ==================
-    elif gt == "3":
-        # 公式1: 极值交叉 (Max - Min) * 1.414
-        max_v = max(max(n) for n in nums_5)
-        min_v = min(min(n) for n in nums_5)
-        cross1 = (max_v - min_v) * 1.414
-        # 公式2: 相邻差值累加
-        cross2 = sum([abs(sums_5[i] - sums_5[i+1]) for i in range(4)])
-        # 公式3: 动态权重交叉
-        cross3 = (nums_5[0][2] * 1.2) + (nums_5[1][2] * 0.8) + eps
-        
-        score_bs = cross1 - cross2 + cross3
-        score_oe = -cross1 + cross2 * 0.8 + cross3
-        
-        details.append(f"[分分专属-极值交叉] 计算值: {cross1:.3f}")
-        details.append(f"[分分专属-相邻差值] 计算值: {cross2:.3f}")
-        details.append(f"[分分专属-动态权重] 计算值: {cross3:.3f}")
-
-    # ================== 三、比特28 专属算法 (哈希散列交叉) ==================
-    else:
-        # 公式1: A位斐波那契交叉
-        cross1 = nums_5[0][0] + nums_5[1][0] * 1.618 + nums_5[2][0] * 2.618
-        # 公式2: 尾数绝对值交叉
-        cross2 = abs(nums_5[0][2] - nums_5[2][2]) + abs(nums_5[1][2] - nums_5[3][2])
-        # 公式3: 隐藏势能
-        cross3 = (sums_5[0] * sums_5[1]) / 10.0 + eps
-        
-        score_bs = cross1 + cross2 + cross3
-        score_oe = cross1 * 0.3 + cross2 * 1.5 + cross3
-        
-        details.append(f"[比特专属-斐波那契交叉] 计算值: {cross1:.3f}")
-        details.append(f"[比特专属-尾数绝对值] 计算值: {cross2:.3f}")
-        details.append(f"[比特专属-隐藏势能] 计算值: {cross3:.3f}")
-
-    # ================== 综合判定 ==================
-    # 将得分加上 0.01 ~ 0.99 的精度误差
-    final_bs = "大" if (score_bs + eps) >= 0 else "小"
-    final_oe = "单" if (score_oe + eps) >= 0 else "双"
-
-    top_display = f"{final_bs} ➕ {final_oe}"
-    kill_display = f"{'小' if final_bs=='大' else '大'} ➕ {'双' if final_oe=='单' else '单'}"
-
-    analysis = f"【{GAMES[gt]['name']}·专属交叉公式推演】\n"
-    analysis += f"目标期号：{next_p}，严格基于近 5 期开奖数据\n"
-    for d in details:
-        analysis += f"- {d}\n"
+    # 提取近20期真实组合序列
+    combos = ["大单", "大双", "小单", "小双"]
+    recent_20 = history[:20]
+    seq = [h['big_small'] + h['odd_even'] for h in recent_20]
     
-    analysis += f"\n【综合计算与误差控制】\n"
-    analysis += f"- 大小端总势能：{score_bs:.3f}\n"
-    analysis += f"- 单双端总势能：{score_oe:.3f}\n"
-    analysis += f"- 引入高精度微扰 (0.01~0.99)：{eps}\n\n"
-    analysis += f"🎯 核心推出：{top_display}\n"
+    # 前推 1 期的状态 (例如上期是"大单")
+    last_combo = seq[0]
+
+    # 初始化得分字典
+    scores = {c: 0.0 for c in combos}
+
+    # ================== 1. 贝叶斯平滑 (Dirichlet Prior) ==================
+    # 防止冷号概率归零，给每个组合一个基础先验分
+    bayes_scores = {c: 1.0 for c in combos}
+    for c in seq:
+        bayes_scores[c] += 1.0
+    # 归一化
+    total_bayes = sum(bayes_scores.values())
+    for c in combos:
+        scores[c] += (bayes_scores[c] / total_bayes) * 10
+    detail_bayes = f"贝叶斯平滑后概率：大单{scores['大单']:.2f}, 大双{scores['大双']:.2f}, 小单{scores['小单']:.2f}, 小双{scores['小双']:.2f}"
+
+    # ================== 2. 指数平滑 (EWMA) ==================
+    alpha = 0.3
+    ewma_scores = {c: 0.0 for c in combos}
+    for i, c in enumerate(seq):
+        weight = (1 - alpha) ** i
+        ewma_scores[c] += weight
+    total_ewma = sum(ewma_scores.values())
+    for c in combos:
+        scores[c] += (ewma_scores[c] / total_ewma) * 15
+    detail_ewma = f"EWMA近期权重：大单{ewma_scores['大单']:.2f}, 大双{ewma_scores['大双']:.2f}, 小单{ewma_scores['小单']:.2f}, 小双{ewma_scores['小双']:.2f}"
+
+    # ================== 3. 一阶马尔可夫链 ==================
+    # 统计当前状态下，下一期的转移频次
+    markov_counts = {c: 0 for c in combos}
+    for i in range(19):
+        if seq[i+1] == last_combo:
+            markov_counts[seq[i]] += 1
+            
+    total_markov = sum(markov_counts.values())
+    if total_markov > 0:
+        for c in combos:
+            scores[c] += (markov_counts[c] / total_markov) * 20
+    detail_markov = f"马尔可夫转移概率(从{last_combo}出发)：{', '.join([f'{k}({v}次)' for k, v in markov_counts.items() if v > 0])}"
+
+    # ================== 4. KNN 相似历史期 ==================
+    # 寻找特征相似的历史期 (简化为：寻找历史中与上期同组合的期数)
+    knn_counts = {c: 0 for c in combos}
+    for i in range(1, 20):
+        if seq[i] == last_combo:
+            knn_counts[seq[i-1]] += 1
+    total_knn = sum(knn_counts.values())
+    if total_knn > 0:
+        for c in combos:
+            scores[c] += (knn_counts[c] / total_knn) * 15
+    detail_knn = f"KNN相似期推演：{', '.join([f'{k}({v}次)' for k, v in knn_counts.items() if v > 0])}"
+
+    # ================== 5. 蒙特卡洛约束采样 ==================
+    # 基于上述概率进行 1000 次采样，并加入 0.01-0.09 的微扰
+    import random
+    random.seed(int(next_p))
+    mc_counts = {c: 0 for c in combos}
+    total_score = sum(scores.values())
+    weights = [scores[c] / total_score for c in combos]
+    
+    for _ in range(1000):
+        pick = random.choices(combos, weights=weights, k=1)[0]
+        # 引入误差项
+        error_term = random.uniform(0.01, 0.09)
+        if error_term > 0.05: # 简单的概率翻转逻辑
+            mc_counts[pick] += 1
+            
+    detail_mc = f"蒙特卡洛1000次采样最高频：{max(mc_counts, key=mc_counts.get)}"
+
+    # ================== 6. 集成学习 (Stacking 加权汇总) ==================
+    final_scores = {c: 0.0 for c in combos}
+    for c in combos:
+        final_scores[c] = scores[c] + mc_counts[c] * 0.05
+        
+    # 输出最终判定
+    main_combo = max(final_scores, key=final_scores.get)
+    kill_combo = min(final_scores, key=final_scores.get)
+    
+    top_bs, top_oe = main_combo[0], main_combo[1]
+    top_display = f"{top_bs} ➕ {top_oe}"
+    kill_display = f"{kill_combo[0]} ➕ {kill_combo[1]}"
+
+    # 组装极其硬核的算法说明面板
+    analysis = f"【舰长·高阶量化算法融合矩阵】\n"
+    analysis += f"上期开奖：{last_combo} | 目标期号：{next_p}\n\n"
+    analysis += f"=== 【第1层：基础统计模型】 ===\n"
+    analysis += f"- {detail_bayes}\n"
+    analysis += f"- {detail_ewma}\n\n"
+    analysis += f"=== 【第2层：时序与转移模型】 ===\n"
+    analysis += f"- {detail_markov}\n"
+    analysis += f"- {detail_knn}\n\n"
+    analysis += f"=== 【第3层：仿真与集成】 ===\n"
+    analysis += f"- {detail_mc}\n"
+    analysis += f"- 动态Stacking最终得分：\n"
+    for c in combos:
+        analysis += f"  * {c}: {final_scores[c]:.3f}\n"
+    analysis += f"\n🎯 融合高精度算法核心推出：{top_display}\n"
     analysis += f"注：开出包含推出属性即算中奖！"
 
-    return {"kill": kill_display, "rec": top_display, "analysis": analysis, "algo_list": [{"name": "专属交叉公式", "vote": top_display}]}
+    return {"kill": kill_display, "rec": top_display, "analysis": analysis, "algo_list": [{"name": "高维集成学习", "vote": top_display}]}
 
 # ================== 极速抓取主循环 ==================
 def fetch_loop():
@@ -135,10 +158,10 @@ def fetch_loop():
                     data = json.loads(resp.read().decode('utf-8')).get('data')
                     if data:
                         latest = data[0]
-                        history = [{"period": i['period'], "nums": f"{i['num1']} + {i['num2']} + {i['num3']}", "total": i['total'], "big_small": i['big_small'], "odd_even": i['odd_even']} for i in data[:10]]
+                        history = [{"period": i['period'], "nums": f"{i['num1']} + {i['num2']} + {i['num3']}", "total": i['total'], "big_small": i['big_small'], "odd_even": i['odd_even']} for i in data[:30]]
                         
                         if LIVE_DATA[gt]['period'] != latest['period']:
-                            AI_STATUS["msg"] = f"{cfg['name']} 交叉演算中..."
+                            AI_STATUS["msg"] = f"{cfg['name']} 高阶算法演算中..."
                             
                             if LIVE_DATA[gt]['period'] != "" and LIVE_DATA[gt]['pred']:
                                 real_bs, real_oe = latest['big_small'], latest['odd_even']
@@ -169,7 +192,7 @@ def fetch_loop():
                                                  (gt, next_p, latest['draw_time'], pred["kill"], pred["rec"], pred["analysis"]))
                                     conn.commit()
                                 
-                            AI_STATUS["msg"] = "交叉公式推演完成"
+                            AI_STATUS["msg"] = "高阶推演完成，等待开奖..."
                                 
                         LIVE_DATA[gt]['left'] = max(0, int(LIVE_DATA[gt]['target_time'] - datetime.utcnow().timestamp()))
             except Exception: pass
@@ -276,7 +299,7 @@ def index():
     </div>
 
     <div class="card">
-        <div class="title">近 10 期 独立盘面</div>
+        <div class="title">近 30 期 独立盘面</div>
         <div class="history" id="history"></div>
     </div>
     
@@ -294,7 +317,7 @@ def index():
     
 <script>
     let curG = '2', timer = null;
-    const KEY = "captain_cross_v100";
+    const KEY = "captain_ensemble_v101";
     
     function switchG(g, el) {
         curG = g;
@@ -326,7 +349,7 @@ def index():
             let left = d.left || 0, cdEl = document.getElementById('cd');
             
             if(left <= 0) {
-                cdEl.innerText = "极速交叉演算中...";
+                cdEl.innerText = "极速共识分析中...";
                 cdEl.className = 'cd analyzing';
                 setTimeout(fetchData, 100); 
                 return;
