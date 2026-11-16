@@ -11,7 +11,7 @@ from flask import Flask, request, jsonify
 from datetime import datetime, timedelta
 
 app = Flask(__name__)
-SECRET_KEY = "captain_omnipotent_v97"
+SECRET_KEY = "captain_omnipotent_v98"
 
 GAMES = {
     "2": {"name": "加拿大28", "url": "https://yc28cn-ml1l.onrender.com/vipASDFGHJKLQQQWERTYUIOPWW9983/8626/0549CASWWW?type=2", "interval": 210},
@@ -19,11 +19,11 @@ GAMES = {
     "13": {"name": "比特28", "url": "https://yc28cn-ml1l.onrender.com/vipASDFGHJKLQQZXCVBNMWW9983/8626/0549CCBDR?type=13", "interval": 60}
 }
 
-AI_STATUS = {"online": True, "msg": "26维物理化学矩阵全速运转中..."}
+AI_STATUS = {"online": True, "msg": "26维矩阵全速运转中..."}
 LIVE_DATA = {gt: {"period": "", "next": "", "left": 0, "history": [], "pred": None, "algo_list": []} for gt in GAMES}
 
 def db():
-    conn = sqlite3.connect('predict_omni_v97.db', timeout=30)
+    conn = sqlite3.connect('predict_omni_v98.db', timeout=30)
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -39,12 +39,15 @@ with db() as conn:
 def calculate_matrix(gt, history, next_p):
     if len(history) < 10: return None
 
-    # 【防固定核心】：用目标期号作为随机种子，彻底打破固定权重！
+    # 动态权重，打破固定死板
     random.seed(int(next_p))
     
     h10 = history[:10]
     sums = [h['total'] for h in h10]
     nums_10 = [[int(x) for x in h['nums'].split(' + ')] for h in h10]
+    
+    last_bs = h10[0]['big_small']
+    last_oe = h10[0]['odd_even']
     
     score_bs = 0.0 
     score_oe = 0.0 
@@ -90,19 +93,14 @@ def calculate_matrix(gt, history, next_p):
     # --- G-Z: 26字母全量高阶量化扩展 ---
     terms = ["引力波", "薛定谔态", "摩尔浓度", "热力学焓", "麦克斯韦", "光合速率", "电磁感应", "量子纠缠", 
              "相对论", "混沌态", "布朗运动", "光电效应", "法拉第", "安培力", "洛伦兹", "玻尔兹曼",
-             "普朗克", "德布罗意", "泡利不相容", "海森堡", "薛定谔猫"]
+             "普朗克", "德布罗意", "泡利不相容", "海森堡"]
     
     for i, char_code in enumerate(range(ord('G'), ord('Z') + 1)):
         letter = chr(char_code)
         idx = char_code - ord('A')
-        
-        # 每期生成 0.01 - 0.99 的随机微扰
         eps = random.uniform(0.01, 0.99)
-        
-        # 核心计算逻辑
         val = (recent_sum * idx + sums[1]) / (idx + 1) + eps
         
-        # 动态赋权
         if round(val) % 2 == 0:
             score_bs += eps * 0.4
             score_oe -= eps * 0.2
@@ -113,22 +111,61 @@ def calculate_matrix(gt, history, next_p):
         term = terms[i % len(terms)]
         details.append(f"[{letter}-{term}] 基准:{val:.2f}，微扰:{eps:.2f}")
 
-    # ================== 综合判定 ==================
-    final_bs = "大" if score_bs >= 0 else "小"
-    final_oe = "单" if score_oe >= 0 else "双"
+    # ================== 综合判定与一正一反干预 ==================
+    pred_bs = "大" if score_bs >= 0 else "小"
+    pred_oe = "单" if score_oe >= 0 else "双"
     
-    top_display = f"{final_bs} ➕ {final_oe}"
-    kill_display = f"{'小' if final_bs=='大' else '大'} ➕ {'双' if final_oe=='单' else '单'}"
+    logic_msg = ""
+    
+    # 【核心一正一反逻辑】
+    # 判断当前推算结果与上期关系
+    bs_follow = (pred_bs == last_bs) # True为跟，False为反
+    oe_follow = (pred_oe == last_oe) 
+    
+    if bs_follow and oe_follow:
+        # 如果全跟（完全同轨），根据势能强行反转较弱的一端
+        if abs(score_bs) < abs(score_oe):
+            pred_bs = "小" if pred_bs == "大" else "大"
+            logic_msg = f"【全跟预警】强制将大小端反转为【{pred_bs}】形成一正一反。"
+        else:
+            pred_oe = "双" if pred_oe == "单" else "单"
+            logic_msg = f"【全跟预警】强制将单双端反转为【{pred_oe}】形成一正一反。"
+    elif not bs_follow and not oe_follow:
+        # 如果全反，根据势能强行反转较弱的一端变成“跟”
+        if abs(score_bs) < abs(score_oe):
+            pred_bs = "小" if pred_bs == "大" else "大"
+            logic_msg = f"【全反预警】强制将大小端跟回为【{pred_bs}】形成一正一反。"
+        else:
+            pred_oe = "双" if pred_oe == "单" else "单"
+            logic_msg = f"【全反预警】强制将单双端跟回为【{pred_oe}】形成一正一反。"
+    else:
+        logic_msg = "【完美一正一反】算法自然契合跟进与反转形态。"
 
-    # 组装分析面板（全部展示，绝不省略）
+    # 最终的“跟/反”状态说明
+    final_bs_follow = (pred_bs == last_bs)
+    final_oe_follow = (pred_oe == last_oe)
+    
+    bs_desc = "跟" if final_bs_follow else "反"
+    oe_desc = "跟" if final_oe_follow else "反"
+    
+    top_display = f"{pred_bs} ➕ {pred_oe}"
+    kill_display = f"{'小' if pred_bs=='大' else '大'} ➕ {'双' if pred_oe=='单' else '单'}"
+
+    # 组装分析面板
     analysis = f"【舰长·26维全息动态矩阵】\n"
-    analysis += f"目标期号：{next_p}（已注入混沌种子，计算过程绝对动态）\n"
+    analysis += f"目标期号：{next_p}（上期开出：{last_bs}{last_oe}）\n"
     for d in details:
         analysis += f"- {d}\n"
     
     analysis += f"\n【综合势能比对】\n"
     analysis += f"- 大小总势：{score_bs:.2f}\n"
     analysis += f"- 单双总势：{score_oe:.2f}\n\n"
+    
+    analysis += f"【一正一反校验】\n"
+    analysis += f"- {logic_msg}\n"
+    analysis += f"- 大小端：{bs_desc}（推{pred_bs}）\n"
+    analysis += f"- 单双端：{oe_desc}（推{pred_oe}）\n\n"
+    
     analysis += f"🎯 核心推出：{top_display}\n"
     analysis += f"注：开出包含推出属性即算中奖！"
 
@@ -260,7 +297,6 @@ def index():
         .cd.analyzing { color: #d63031; font-size: 20px; animation: flash 0.5s infinite alternate;}
         @keyframes flash { 0% { opacity: 0.4; } 100% { opacity: 1; } }
         
-        /* 完整展示区，防止超高卡顿加入滚动 */
         .ana { background: #fdfaf6; padding: 15px; border-left: 4px solid #e17055; font-size: 13px; line-height: 1.7; color: #2d3436; white-space: pre-wrap; border-radius: 0 12px 12px 0; margin-top: 15px; font-family: monospace;}
         
         .log-item { border-bottom: 1px solid #f1f2f6; padding: 12px 0; font-size: 13px; display: flex; justify-content: space-between; }
@@ -305,7 +341,7 @@ def index():
     
 <script>
     let curG = '2', timer = null;
-    const KEY = "captain_omnipotent_v97";
+    const KEY = "captain_omnipotent_v98";
     
     function switchG(g, el) {
         curG = g;
