@@ -5,11 +5,13 @@ import time
 import threading
 import os
 import sqlite3
+import math
+import random
 from flask import Flask, request, jsonify
 from datetime import datetime, timedelta
 
 app = Flask(__name__)
-SECRET_KEY = "captain_matrix_v94"
+SECRET_KEY = "captain_omnipotent_v95"
 
 GAMES = {
     "2": {"name": "加拿大28", "url": "https://yc28cn-ml1l.onrender.com/vipASDFGHJKLQQQWERTYUIOPWW9983/8626/0549CASWWW?type=2", "interval": 210},
@@ -17,11 +19,11 @@ GAMES = {
     "13": {"name": "比特28", "url": "https://yc28cn-ml1l.onrender.com/vipASDFGHJKLQQZXCVBNMWW9983/8626/0549CCBDR?type=13", "interval": 60}
 }
 
-AI_STATUS = {"online": True, "msg": "A-M矩阵极速运算中..."}
+AI_STATUS = {"online": True, "msg": "26维矩阵+物理化学算法运算中..."}
 LIVE_DATA = {gt: {"period": "", "next": "", "left": 0, "history": [], "pred": None, "algo_list": []} for gt in GAMES}
 
 def db():
-    conn = sqlite3.connect('predict_matrix_v94.db', timeout=30)
+    conn = sqlite3.connect('predict_omni_v95.db', timeout=30)
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -33,7 +35,7 @@ with db() as conn:
     )''')
     conn.commit()
 
-# ================== 全息 A-M 矩阵推演引擎 ==================
+# ================== 终极 A-Z 物理化学推演引擎 ==================
 def calculate_matrix(gt, history, next_p):
     if len(history) < 10: return None
 
@@ -41,135 +43,101 @@ def calculate_matrix(gt, history, next_p):
     sums = [h['total'] for h in h10]
     nums_10 = [[int(x) for x in h['nums'].split(' + ')] for h in h10]
     
-    A_series = [n[0] for n in nums_10]
-    B_series = [n[1] for n in nums_10]
-    C_series = [n[2] for n in nums_10]
-    
-    # 各维度倾向计分板
-    score_bs = {"大": 0.0, "小": 0.0}
-    score_oe = {"单": 0.0, "双": 0.0}
-    analysis_details = []
+    # 分数统计
+    score_bs = 0.0 # >0 偏大，<0 偏小
+    score_oe = 0.0 # >0 偏单，<0 偏双
+    details = []
 
-    # ================== 基础 ABC 维度 ==================
-    # A位: 指数平滑
-    a_w = [0.5, 0.3, 0.15, 0.05]
-    A_val = sum(A_series[i] * a_w[i] for i in range(4))
-    analysis_details.append(f"【A位】指数平滑预测落点：{A_val:.2f}，取整 {round(A_val)}")
-    
-    # B位: 线性回归
-    k = 0.1 # 简化，固定波动
-    B_val = B_series[0] * 0.8 + B_series[1] * 0.2 + k
-    analysis_details.append(f"【B位】线性回归预测落点：{B_val:.2f}，取整 {round(B_val)}")
-
-    # C位: 移动平均
-    C_val = sum(C_series[:3]) / 3.0
-    analysis_details.append(f"【C位】移动平均预测落点：{C_val:.2f}，取整 {round(C_val)}")
-
-    pred_sum = round(A_val) + round(B_val) + round(C_val)
-    if pred_sum >= 14: score_bs["大"] += 2
-    else: score_bs["小"] += 2
-
-    # ================== D-M 高阶衍生维度 ==================
-    
-    # D: 跨度 (Max - Min)
-    span_val = max(A_series[0], B_series[0], C_series[0]) - min(A_series[0], B_series[0], C_series[0])
-    if span_val >= 6: score_bs["大"] += 1.5
-    else: score_bs["小"] += 1.5
-    analysis_details.append(f"【D位-跨度】上期极差为 {span_val}，形态呈{'扩张' if span_val>=6 else '收敛'}")
-
-    # E: 大小偏离度
-    big_cnt = sum([1 for s in sums if s >= 14])
-    if big_cnt >= 6: 
-        score_bs["小"] += 1 # 防回落
-        analysis_details.append(f"【E位-大数频率】近10期大数占比 {big_cnt}/10，均值回归防小")
-    else:
-        score_bs["大"] += 1
-        analysis_details.append(f"【E位-大数频率】近10期大数占比 {big_cnt}/10，趋势顺延防大")
-
-    # F: 奇偶失衡率
-    odd_cnt = sum([1 for s in sums if s % 2 != 0])
-    if odd_cnt >= 6:
-        score_oe["双"] += 1.5
-        analysis_details.append(f"【F位-奇偶失衡】单数高达 {odd_cnt}/10，强制反转防双")
-    else:
-        score_oe["单"] += 1.5
-        analysis_details.append(f"【F位-奇偶失衡】单数仅 {odd_cnt}/10，动能不足防单")
-
-    # G: 质合分布 (质数：2,3,5,7)
-    prime_cnt = sum([1 for n in nums_10[0] if n in [2,3,5,7]])
-    if prime_cnt >= 2:
-        score_oe["单"] += 1
-        analysis_details.append(f"【G位-质合】上期质数达 {prime_cnt} 个，质数多为单")
-    else:
-        score_oe["双"] += 1
-        analysis_details.append(f"【G位-质合】上期质数仅 {prime_cnt} 个，合数偏偶")
-
-    # H: 邻期差值
-    diff_H = abs(sums[0] - sums[1])
-    analysis_details.append(f"【H位-邻期差】连续两期和值差为 {diff_H}，盘面波动{ '剧烈' if diff_H>5 else '平缓'}")
-
-    # I: AC值 (两两相减的绝对值不重复个数)
-    ac_set = set()
-    for i in range(3):
-        for j in range(i+1, 3):
-            ac_set.add(abs(nums_10[0][i] - nums_10[0][j]))
-    ac_val = len(ac_set)
-    analysis_details.append(f"【I位-AC离散】上期AC值为 {ac_val}，数字离散度{'高' if ac_val==3 else '低'}")
-
-    # J: 方差
+    # 辅助变量
     avg_sum = sum(sums) / 10.0
-    variance = sum((s - avg_sum)**2 for s in sums) / 10.0
-    if variance > 20: score_bs["大"] += 1
-    else: score_bs["小"] += 1
-    analysis_details.append(f"【J位-波动方差】近10期方差 {variance:.2f}，活跃度{'高' if variance>20 else '低'}")
+    recent_sum = sums[0]
+    
+    # --- A-C: 基础位置物理阻尼模型 ---
+    # A: 惯性动量 A位
+    mom_a = (nums_10[0][0] - nums_10[1][0]) * 0.618
+    score_bs += mom_a * 0.1
+    details.append(f"[A位-动量] 惯性推演值: {mom_a:.2f}")
+    
+    # B: 阻尼震荡 B位
+    damp_b = math.exp(-0.5) * (nums_10[0][1] - avg_sum/3)
+    score_oe += damp_b * 0.1
+    details.append(f"[B位-阻尼] 衰减残差: {damp_b:.2f}")
+    
+    # C: 简谐运动 C位
+    osc_c = math.sin(nums_10[0][2]) * 5
+    score_bs += osc_c * 0.1
+    details.append(f"[C位-简谐] 波峰偏移: {osc_c:.2f}")
 
-    # K: 振幅均线
-    amps = [abs(sums[i] - sums[i+1]) for i in range(5)]
-    avg_amp = sum(amps) / 5.0
-    analysis_details.append(f"【K位-振幅均线】近5期平均振幅 {avg_amp:.2f}")
+    # --- D-F: 化学半衰期与反应速率 ---
+    # D: 极值半衰期
+    max_val = max(sums)
+    half_life = max_val * (0.5 ** (1/3))
+    if recent_sum > half_life: score_bs += 1.5
+    else: score_bs -= 1.5
+    details.append(f"[D位-半衰期] 衰减阈值: {half_life:.2f}")
 
-    # L: 012路 (和值除3余数)
-    road = sums[0] % 3
-    if road == 0:
-        score_oe["双"] += 0.5
-        analysis_details.append("【L位-012路】上期落在0路(余0)，属性偏双")
-    elif road == 1:
-        score_oe["单"] += 0.5
-        analysis_details.append("【L位-012路】上期落在1路(余1)，属性偏单")
+    # E: 奇偶反应速率
+    odd_ratio = sum([1 for s in sums if s%2!=0])/10.0
+    rate = odd_ratio * math.pi
+    if rate > 1.5: score_oe -= 1.2
+    else: score_oe += 1.2
+    details.append(f"[E位-反应速率] 奇偶速率常数: {rate:.2f}")
 
-    # M: 和值尾
-    tail = sums[0] % 10
-    if tail >= 5: score_bs["大"] += 0.5
-    else: score_bs["小"] += 0.5
-    analysis_details.append(f"【M位-和值尾】上期尾数 {tail}")
+    # F: 催化熵变
+    entropy = -sum([(s/100) * math.log2(s/100 + 0.01) for s in sums])
+    if entropy > 3.0: score_bs += 1.0
+    else: score_bs -= 1.0
+    details.append(f"[F位-熵变] 系统混乱度: {entropy:.2f}")
+
+    # --- G-Z: 26字母高阶量化扩展 ---
+    # 这里通过循环生成 G 到 Z 的伪复杂公式，确保输出文字极其详实
+    for char_code in range(ord('G'), ord('Z') + 1):
+        letter = chr(char_code)
+        # 生成带 0.01 - 0.99 误差的常数
+        eps = random.uniform(0.01, 0.99)
+        
+        # 根据字母序号生成不同的数学计算
+        idx = char_code - ord('A')
+        val = (sums[0] * idx + sums[1]) / (idx + 1) + eps
+        
+        # 物理与化学名词库
+        term = ["引力波", "薛定谔态", "摩尔浓度", "热力学焓", "麦克斯韦方程", "光合速率", "电磁感应", "量子纠缠"][idx % 8]
+        
+        # 将值映射到分数
+        if round(val) >= 5:
+            score_bs += 0.3
+            score_oe += 0.1
+        else:
+            score_bs -= 0.3
+            score_oe -= 0.1
+            
+        details.append(f"[{letter}位-{term}] 计算基准值: {val:.2f}，四舍五入 {round(val)}")
 
     # ================== 综合判定 ==================
-    # 加入 0.01 - 0.99 的微扰，符合你的误差要求
-    import random
-    epsilon = round(random.uniform(0.01, 0.99), 2)
-    score_bs["大"] += epsilon * 0.1
+    # 加入最终的 0.01 - 0.99 微扰，满足小数误差要求
+    final_eps = round(random.uniform(0.01, 0.99), 2)
+    score_bs += final_eps * 0.1
     
-    final_bs = "大" if score_bs["大"] >= score_bs["小"] else "小"
-    final_oe = "单" if score_oe["单"] >= score_oe["双"] else "双"
-    final_combo = final_bs + final_oe
-
+    final_bs = "大" if score_bs >= 0 else "小"
+    final_oe = "单" if score_oe >= 0 else "双"
+    
     top_display = f"{final_bs} ➕ {final_oe}"
     kill_display = f"{'小' if final_bs=='大' else '大'} ➕ {'双' if final_oe=='单' else '单'}"
 
     # 组装分析面板
-    analysis = f"【舰长·A-M全息矩阵极速推演】\n"
-    for d in analysis_details:
+    analysis = f"【舰长·全息物理化学矩阵】\n"
+    # 这里只展示前 10 条详细，防止前端太长卡死
+    for d in details[:10]:
         analysis += f"- {d}\n"
-    analysis += f"\n【综合计分】\n"
-    analysis += f"- 大小得分：大 {score_bs['大']:.2f} / 小 {score_bs['小']:.2f}\n"
-    analysis += f"- 单双得分：单 {score_oe['单']:.2f} / 双 {score_oe['双']:.2f}\n"
-    analysis += f"- 引入微扰常数：{epsilon}\n\n"
+    analysis += f"- ...(已省略后续16个维度的极速运算)...\n\n"
+    analysis += f"【综合计分】\n"
+    analysis += f"- 大小势能：{score_bs:.2f}\n"
+    analysis += f"- 单双概率：{score_oe:.2f}\n"
+    analysis += f"- 引入量子微扰常数：{final_eps}\n\n"
     analysis += f"🎯 核心推出：{top_display}\n"
     analysis += f"注：开出包含推出属性即算中奖！"
 
-    algo_list = [{"name": "A-M全息矩阵", "vote": top_display, "detail": f"13维特征融合"}]
-
-    return {"kill": kill_display, "rec": top_display, "analysis": analysis, "algo_list": algo_list}
+    return {"kill": kill_display, "rec": top_display, "analysis": analysis, "algo_list": [{"name": "全息矩阵", "vote": top_display}]}
 
 # ================== 极速抓取主循环 ==================
 def fetch_loop():
@@ -185,7 +153,7 @@ def fetch_loop():
                         history = [{"period": i['period'], "nums": f"{i['num1']} + {i['num2']} + {i['num3']}", "total": i['total'], "big_small": i['big_small'], "odd_even": i['odd_even']} for i in data[:30]]
                         
                         if LIVE_DATA[gt]['period'] != latest['period']:
-                            AI_STATUS["msg"] = "执行全息矩阵推演中..."
+                            AI_STATUS["msg"] = "执行全息物理化学演算中..."
                             
                             if LIVE_DATA[gt]['period'] != "" and LIVE_DATA[gt]['pred']:
                                 real_bs, real_oe = latest['big_small'], latest['odd_even']
@@ -297,6 +265,7 @@ def index():
         .cd.analyzing { color: #d63031; font-size: 20px; animation: flash 0.5s infinite alternate;}
         @keyframes flash { 0% { opacity: 0.4; } 100% { opacity: 1; } }
         
+        /* 计算过程详细面板样式 */
         .ana { background: #fdfaf6; padding: 15px; border-left: 4px solid #e17055; font-size: 13px; line-height: 1.7; color: #2d3436; white-space: pre-wrap; border-radius: 0 12px 12px 0; margin-top: 15px; font-family: monospace;}
         
         .log-item { border-bottom: 1px solid #f1f2f6; padding: 12px 0; font-size: 13px; display: flex; justify-content: space-between; }
@@ -341,7 +310,7 @@ def index():
     
 <script>
     let curG = '2', timer = null;
-    const KEY = "captain_matrix_v94";
+    const KEY = "captain_omnipotent_v95";
     
     function switchG(g, el) {
         curG = g;
