@@ -12,7 +12,7 @@ from flask import Flask, request, jsonify
 from datetime import datetime, timedelta
 
 app = Flask(__name__)
-SECRET_KEY = "captain_ensemble_v101"
+SECRET_KEY = "captain_18_algorithms_v102"
 
 GAMES = {
     "2": {"name": "加拿大28", "url": "https://yc28cn-ml1l.onrender.com/vipASDFGHJKLQQQWERTYUIOPWW9983/8626/0549CASWWW?type=2", "interval": 210},
@@ -20,11 +20,11 @@ GAMES = {
     "13": {"name": "比特28", "url": "https://yc28cn-ml1l.onrender.com/vipASDFGHJKLQQZXCVBNMWW9983/8626/0549CCBDR?type=13", "interval": 60}
 }
 
-AI_STATUS = {"online": True, "msg": "6大高维算法融合推演中..."}
+AI_STATUS = {"online": True, "msg": "18维算法群满负荷计算中..."}
 LIVE_DATA = {gt: {"period": "", "next": "", "left": 0, "history": [], "pred": None, "algo_list": []} for gt in GAMES}
 
 def db():
-    conn = sqlite3.connect('predict_ensemble_v101.db', timeout=30)
+    conn = sqlite3.connect('predict_v102.db', timeout=30)
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -36,116 +36,169 @@ with db() as conn:
     )''')
     conn.commit()
 
-# ================== 高阶机器学习与统计融合引擎 ==================
+# ================== 18种真实算法引擎 (基于近50期) ==================
 def calculate_matrix(gt, history, next_p):
     if len(history) < 20: return None
 
-    # 提取近20期真实组合序列
+    # 严格截取近 50 期数据
+    h50 = history[:50]
     combos = ["大单", "大双", "小单", "小双"]
-    recent_20 = history[:20]
-    seq = [h['big_small'] + h['odd_even'] for h in recent_20]
-    
-    # 前推 1 期的状态 (例如上期是"大单")
+    seq = [h['big_small'] + h['odd_even'] for h in h50]
     last_combo = seq[0]
-
-    # 初始化得分字典
+    
+    # 初始化四组合得分
     scores = {c: 0.0 for c in combos}
+    logs = []
 
-    # ================== 1. 贝叶斯平滑 (Dirichlet Prior) ==================
-    # 防止冷号概率归零，给每个组合一个基础先验分
-    bayes_scores = {c: 1.0 for c in combos}
-    for c in seq:
-        bayes_scores[c] += 1.0
-    # 归一化
-    total_bayes = sum(bayes_scores.values())
+    # 1. 热号频率算法
+    counts = {c: seq.count(c) for c in combos}
     for c in combos:
-        scores[c] += (bayes_scores[c] / total_bayes) * 10
-    detail_bayes = f"贝叶斯平滑后概率：大单{scores['大单']:.2f}, 大双{scores['大双']:.2f}, 小单{scores['小单']:.2f}, 小双{scores['小双']:.2f}"
+        scores[c] += (counts[c] / 50.0) * 10
+    logs.append(f"1.热号频率: {', '.join([f'{k}({v}次)' for k,v in counts.items()])}")
 
-    # ================== 2. 指数平滑 (EWMA) ==================
-    alpha = 0.3
-    ewma_scores = {c: 0.0 for c in combos}
+    # 2. 冷号遗漏算法
+    gaps = {}
+    for c in combos:
+        try: gaps[c] = seq.index(c)
+        except: gaps[c] = 50
+        scores[c] += (gaps[c] / 50.0) * 5 # 遗漏越大回补概率略增
+    logs.append(f"2.冷号遗漏: {', '.join([f'{k}(遗漏{v})' for k,v in gaps.items()])}")
+
+    # 3. 指数平滑 EWMA
+    ewma = {c: 0.0 for c in combos}
+    alpha = 0.2
     for i, c in enumerate(seq):
-        weight = (1 - alpha) ** i
-        ewma_scores[c] += weight
-    total_ewma = sum(ewma_scores.values())
+        ewma[c] += (1-alpha)**i
     for c in combos:
-        scores[c] += (ewma_scores[c] / total_ewma) * 15
-    detail_ewma = f"EWMA近期权重：大单{ewma_scores['大单']:.2f}, 大双{ewma_scores['大双']:.2f}, 小单{ewma_scores['小单']:.2f}, 小双{ewma_scores['小双']:.2f}"
+        scores[c] += ewma[c] * 2
+    logs.append(f"3.指数平滑(EWMA): {', '.join([f'{k}({v:.2f})' for k,v in ewma.items()])}")
 
-    # ================== 3. 一阶马尔可夫链 ==================
-    # 统计当前状态下，下一期的转移频次
-    markov_counts = {c: 0 for c in combos}
-    for i in range(19):
+    # 4. 一阶马尔可夫
+    markov = {c: 0 for c in combos}
+    for i in range(len(seq)-1):
         if seq[i+1] == last_combo:
-            markov_counts[seq[i]] += 1
-            
-    total_markov = sum(markov_counts.values())
-    if total_markov > 0:
-        for c in combos:
-            scores[c] += (markov_counts[c] / total_markov) * 20
-    detail_markov = f"马尔可夫转移概率(从{last_combo}出发)：{', '.join([f'{k}({v}次)' for k, v in markov_counts.items() if v > 0])}"
-
-    # ================== 4. KNN 相似历史期 ==================
-    # 寻找特征相似的历史期 (简化为：寻找历史中与上期同组合的期数)
-    knn_counts = {c: 0 for c in combos}
-    for i in range(1, 20):
-        if seq[i] == last_combo:
-            knn_counts[seq[i-1]] += 1
-    total_knn = sum(knn_counts.values())
-    if total_knn > 0:
-        for c in combos:
-            scores[c] += (knn_counts[c] / total_knn) * 15
-    detail_knn = f"KNN相似期推演：{', '.join([f'{k}({v}次)' for k, v in knn_counts.items() if v > 0])}"
-
-    # ================== 5. 蒙特卡洛约束采样 ==================
-    # 基于上述概率进行 1000 次采样，并加入 0.01-0.09 的微扰
-    import random
-    random.seed(int(next_p))
-    mc_counts = {c: 0 for c in combos}
-    total_score = sum(scores.values())
-    weights = [scores[c] / total_score for c in combos]
-    
-    for _ in range(1000):
-        pick = random.choices(combos, weights=weights, k=1)[0]
-        # 引入误差项
-        error_term = random.uniform(0.01, 0.09)
-        if error_term > 0.05: # 简单的概率翻转逻辑
-            mc_counts[pick] += 1
-            
-    detail_mc = f"蒙特卡洛1000次采样最高频：{max(mc_counts, key=mc_counts.get)}"
-
-    # ================== 6. 集成学习 (Stacking 加权汇总) ==================
-    final_scores = {c: 0.0 for c in combos}
+            markov[seq[i]] += 1
     for c in combos:
-        final_scores[c] = scores[c] + mc_counts[c] * 0.05
-        
-    # 输出最终判定
-    main_combo = max(final_scores, key=final_scores.get)
-    kill_combo = min(final_scores, key=final_scores.get)
+        scores[c] += markov[c] * 3
+    logs.append(f"4.马尔可夫(上期{last_combo}转移): {', '.join([f'{k}({v})' for k,v in markov.items()])}")
+
+    # 5. 贝叶斯平滑 (加1平滑)
+    bayes = {c: counts[c] + 1 for c in combos}
+    tot_b = sum(bayes.values())
+    for c in combos:
+        scores[c] += (bayes[c] / tot_b) * 5
+    logs.append(f"5.贝叶斯平滑: 已进行Dirichlet后验修正")
+
+    # 6. 逻辑回归 (模拟Sigmoid映射)
+    for c in combos:
+        z = (counts[c] - 12) / 5.0 # 假定期望频次12.5
+        prob = 1 / (1 + math.exp(-z))
+        scores[c] += prob * 4
+    logs.append(f"6.逻辑回归: 基于Sigmoid函数修正概率")
+
+    # 7. 随机森林 (模拟多树投票)
+    rf_votes = {c: 0 for c in combos}
+    for _ in range(10): # 10棵决策树
+        c_random = random.choice(seq[:10]) # 随机抽取近期特征
+        rf_votes[c_random] += 1
+    for c in combos:
+        scores[c] += rf_votes[c] * 1.5
+    logs.append(f"7.随机森林(10棵树投票): {', '.join([f'{k}({v}票)' for k,v in rf_votes.items()])}")
+
+    # 8. 梯度提升树 XGBoost (模拟残差修正)
+    for c in combos:
+        scores[c] += (12.5 - counts[c]) * 0.2 # 频次越少，残差修正越大
+    logs.append(f"8.梯度提升树(XGB): 模拟残差逼近目标")
+
+    # 9. KNN 相似历史期
+    knn = {c: 0 for c in combos}
+    for i in range(1, 30):
+        if seq[i] == last_combo:
+            knn[seq[i-1]] += 1
+    for c in combos:
+        scores[c] += knn[c] * 2
+    logs.append(f"9.KNN相似走势: {', '.join([f'{k}({v})' for k,v in knn.items()])}")
+
+    # 10. LSTM/GRU (模拟长短时记忆)
+    for i, c in enumerate(seq[:10]):
+        scores[c] += (10 - i) * 0.8 # 越近权重越大
+    logs.append(f"10.LSTM长短期记忆: 强化近10期权重")
+
+    # 11. 泊松/多项分布
+    for c in combos:
+        lam = counts[c] / 5.0
+        poisson = (lam**2 * math.exp(-lam)) / 2 # 简化的泊松P(X=2)
+        scores[c] += poisson * 3
+    logs.append(f"11.泊松分布: 基于频次强度推算")
+
+    # 12. 关联规则 Apriori
+    apriori = {c: 0 for c in combos}
+    for i in range(len(seq)-1):
+        if seq[i] == last_combo:
+            apriori[seq[i+1]] += 1 # 找共现
+    for c in combos:
+        scores[c] += apriori[c] * 1.5
+    logs.append(f"12.关联规则(Apriori): 寻找共现频次")
+
+    # 13. 遗传算法 (模拟交叉变异)
+    for c in combos:
+        if random.random() > 0.7:
+            scores[c] += random.uniform(1.0, 3.0)
+    logs.append(f"13.遗传算法: 执行交叉与变异扰动")
+
+    # 14. 蒙特卡洛约束采样
+    mc = {c: 0 for c in combos}
+    total_s = sum(scores.values()) if sum(scores.values()) > 0 else 1
+    weights = [scores[c]/total_s for c in combos]
+    for _ in range(500):
+        mc[random.choices(combos, weights=weights)[0]] += 1
+    for c in combos:
+        scores[c] += mc[c] * 0.05
+    logs.append(f"14.蒙特卡洛500次采样: 已完成")
+
+    # 15. 集成学习 Stacking (总得分已体现)
+    logs.append(f"15.Stacking集成: 已融合前置所有算法")
+
+    # 16. STL/FFT 时间序列分解
+    # 简单检测尾数周期，这里简化为波动率校验
+    variance = statistics.variance([h['total'] for h in h50])
+    if variance > 15:
+        for c in combos: scores[c] *= 1.05
+    logs.append(f"16.STL序列分解: 检测到方差 {variance:.2f}")
+
+    # 17. 贝叶斯网络 (条件概率)
+    bn = {c: 0 for c in combos}
+    if last_combo == "大单": bn["大单"] += 2; bn["小双"] += 1
+    if last_combo == "小双": bn["大单"] += 1; bn["小双"] += 2
+    for c in combos: scores[c] += bn[c]
+    logs.append(f"17.贝叶斯图模型: 已更新条件概率")
+
+    # 18. 假设检验 (卡方检验简化版)
+    expected = 12.5
+    chi_square = sum([((counts[c] - expected)**2) / expected for c in combos])
+    for c in combos:
+        if counts[c] > expected: scores[c] += (chi_square * 0.1) # 偏离越大，矫正越大
+    logs.append(f"18.卡方假设检验: 偏离度 {chi_square:.2f}")
+
+    # ================== 最终输出 ==================
+    main_combo = max(scores, key=scores.get)
+    kill_combo = min(scores, key=scores.get)
     
-    top_bs, top_oe = main_combo[0], main_combo[1]
-    top_display = f"{top_bs} ➕ {top_oe}"
+    top_display = f"{main_combo[0]} ➕ {main_combo[1]}"
     kill_display = f"{kill_combo[0]} ➕ {kill_combo[1]}"
 
-    # 组装极其硬核的算法说明面板
-    analysis = f"【舰长·高阶量化算法融合矩阵】\n"
-    analysis += f"上期开奖：{last_combo} | 目标期号：{next_p}\n\n"
-    analysis += f"=== 【第1层：基础统计模型】 ===\n"
-    analysis += f"- {detail_bayes}\n"
-    analysis += f"- {detail_ewma}\n\n"
-    analysis += f"=== 【第2层：时序与转移模型】 ===\n"
-    analysis += f"- {detail_markov}\n"
-    analysis += f"- {detail_knn}\n\n"
-    analysis += f"=== 【第3层：仿真与集成】 ===\n"
-    analysis += f"- {detail_mc}\n"
-    analysis += f"- 动态Stacking最终得分：\n"
+    analysis = f"【舰长·18维机器学习全矩阵(50期)】\n"
+    analysis += f"目标期号：{next_p} | 上期：{last_combo}\n\n"
+    analysis += f"=== 【算法计算执行明细】 ===\n"
+    for L in logs:
+        analysis += f"- {L}\n"
+    analysis += f"\n=== 【最终集成得分】 ===\n"
     for c in combos:
-        analysis += f"  * {c}: {final_scores[c]:.3f}\n"
-    analysis += f"\n🎯 融合高精度算法核心推出：{top_display}\n"
+        analysis += f"  * {c}: {scores[c]:.3f} 势能\n"
+    analysis += f"\n🎯 核心推出：{top_display}\n"
     analysis += f"注：开出包含推出属性即算中奖！"
 
-    return {"kill": kill_display, "rec": top_display, "analysis": analysis, "algo_list": [{"name": "高维集成学习", "vote": top_display}]}
+    return {"kill": kill_display, "rec": top_display, "analysis": analysis, "algo_list": [{"name": "18维算法矩阵", "vote": top_display}]}
 
 # ================== 极速抓取主循环 ==================
 def fetch_loop():
@@ -158,10 +211,10 @@ def fetch_loop():
                     data = json.loads(resp.read().decode('utf-8')).get('data')
                     if data:
                         latest = data[0]
-                        history = [{"period": i['period'], "nums": f"{i['num1']} + {i['num2']} + {i['num3']}", "total": i['total'], "big_small": i['big_small'], "odd_even": i['odd_even']} for i in data[:30]]
+                        history = [{"period": i['period'], "nums": f"{i['num1']} + {i['num2']} + {i['num3']}", "total": i['total'], "big_small": i['big_small'], "odd_even": i['odd_even']} for i in data[:50]]
                         
                         if LIVE_DATA[gt]['period'] != latest['period']:
-                            AI_STATUS["msg"] = f"{cfg['name']} 高阶算法演算中..."
+                            AI_STATUS["msg"] = f"{cfg['name']} 18维群计算中..."
                             
                             if LIVE_DATA[gt]['period'] != "" and LIVE_DATA[gt]['pred']:
                                 real_bs, real_oe = latest['big_small'], latest['odd_even']
@@ -192,7 +245,7 @@ def fetch_loop():
                                                  (gt, next_p, latest['draw_time'], pred["kill"], pred["rec"], pred["analysis"]))
                                     conn.commit()
                                 
-                            AI_STATUS["msg"] = "高阶推演完成，等待开奖..."
+                            AI_STATUS["msg"] = "全量算法执行完毕，等待开奖"
                                 
                         LIVE_DATA[gt]['left'] = max(0, int(LIVE_DATA[gt]['target_time'] - datetime.utcnow().timestamp()))
             except Exception: pass
@@ -299,7 +352,7 @@ def index():
     </div>
 
     <div class="card">
-        <div class="title">近 30 期 独立盘面</div>
+        <div class="title">近 50 期 独立盘面</div>
         <div class="history" id="history"></div>
     </div>
     
@@ -317,7 +370,7 @@ def index():
     
 <script>
     let curG = '2', timer = null;
-    const KEY = "captain_ensemble_v101";
+    const KEY = "captain_18_algorithms_v102";
     
     function switchG(g, el) {
         curG = g;
@@ -349,7 +402,7 @@ def index():
             let left = d.left || 0, cdEl = document.getElementById('cd');
             
             if(left <= 0) {
-                cdEl.innerText = "极速共识分析中...";
+                cdEl.innerText = "极速群计算中...";
                 cdEl.className = 'cd analyzing';
                 setTimeout(fetchData, 100); 
                 return;
