@@ -11,7 +11,7 @@ from flask import Flask, request, jsonify
 from datetime import datetime, timedelta
 
 app = Flask(__name__)
-SECRET_KEY = "captain_omnipotent_v98"
+SECRET_KEY = "captain_cross_v100"
 
 GAMES = {
     "2": {"name": "加拿大28", "url": "https://yc28cn-ml1l.onrender.com/vipASDFGHJKLQQQWERTYUIOPWW9983/8626/0549CASWWW?type=2", "interval": 210},
@@ -19,11 +19,11 @@ GAMES = {
     "13": {"name": "比特28", "url": "https://yc28cn-ml1l.onrender.com/vipASDFGHJKLQQZXCVBNMWW9983/8626/0549CCBDR?type=13", "interval": 60}
 }
 
-AI_STATUS = {"online": True, "msg": "26维矩阵全速运转中..."}
+AI_STATUS = {"online": True, "msg": "近5期交叉公式独立推演中..."}
 LIVE_DATA = {gt: {"period": "", "next": "", "left": 0, "history": [], "pred": None, "algo_list": []} for gt in GAMES}
 
 def db():
-    conn = sqlite3.connect('predict_omni_v98.db', timeout=30)
+    conn = sqlite3.connect('predict_cross_v100.db', timeout=30)
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -35,141 +35,94 @@ with db() as conn:
     )''')
     conn.commit()
 
-# ================== 终极 A-Z 物理化学推演引擎 ==================
+# ================== 近5期专属交叉公式推演引擎 ==================
 def calculate_matrix(gt, history, next_p):
-    if len(history) < 10: return None
+    if len(history) < 5: return None
 
-    # 动态权重，打破固定死板
+    # 严格提取近 5 期开奖数据
+    h5 = history[:5]
+    nums_5 = [[int(x) for x in h['nums'].split(' + ')] for h in h5]
+    sums_5 = [h['total'] for h in h5]
+
+    # 随机数种子，确保每次计算有微小的数学精度差异
     random.seed(int(next_p))
-    
-    h10 = history[:10]
-    sums = [h['total'] for h in h10]
-    nums_10 = [[int(x) for x in h['nums'].split(' + ')] for h in h10]
-    
-    last_bs = h10[0]['big_small']
-    last_oe = h10[0]['odd_even']
-    
-    score_bs = 0.0 
-    score_oe = 0.0 
+    eps = round(random.uniform(0.01, 0.99), 2) # 误差控制 0.01 - 0.99
+
+    score_bs = 0.0
+    score_oe = 0.0
     details = []
 
-    avg_sum = sum(sums) / 10.0
-    recent_sum = sums[0]
-    
-    # --- A-C: 基础物理模型 ---
-    w_a = random.uniform(0.1, 0.9)
-    mom_a = (nums_10[0][0] - nums_10[1][0]) * 0.618 * w_a
-    score_bs += mom_a
-    details.append(f"[A-惯性动量] 权重:{w_a:.2f}，偏移:{mom_a:.2f}")
-    
-    w_b = random.uniform(0.1, 0.9)
-    damp_b = math.exp(-0.5) * (nums_10[0][1] - avg_sum/3) * w_b
-    score_oe += damp_b
-    details.append(f"[B-阻尼震荡] 权重:{w_b:.2f}，残差:{damp_b:.2f}")
-    
-    w_c = random.uniform(0.1, 0.9)
-    osc_c = math.sin(nums_10[0][2]) * 5 * w_c
-    score_bs += osc_c
-    details.append(f"[C-简谐波峰] 权重:{w_c:.2f}，偏移:{osc_c:.2f}")
-
-    # --- D-F: 化学动力学模型 ---
-    max_val = max(sums)
-    half_life = max_val * (0.5 ** (1/3))
-    if recent_sum > half_life: score_bs += 1.5
-    else: score_bs -= 1.5
-    details.append(f"[D-极值半衰] 阈值:{half_life:.2f}，本期{'大' if recent_sum > half_life else '小'}")
-    
-    odd_ratio = sum([1 for s in sums if s%2!=0])/10.0
-    rate = odd_ratio * math.pi
-    if rate > 1.5: score_oe -= 1.2
-    else: score_oe += 1.2
-    details.append(f"[E-反应速率] 奇偶常数:{rate:.2f}，偏{'双' if rate > 1.5 else '单'}")
-    
-    entropy = -sum([(s/100) * math.log2(s/100 + 0.01) for s in sums])
-    if entropy > 3.0: score_bs += 1.0
-    else: score_bs -= 1.0
-    details.append(f"[F-催化熵变] 混乱度:{entropy:.2f}，偏{'大' if entropy > 3.0 else '小'}")
-
-    # --- G-Z: 26字母全量高阶量化扩展 ---
-    terms = ["引力波", "薛定谔态", "摩尔浓度", "热力学焓", "麦克斯韦", "光合速率", "电磁感应", "量子纠缠", 
-             "相对论", "混沌态", "布朗运动", "光电效应", "法拉第", "安培力", "洛伦兹", "玻尔兹曼",
-             "普朗克", "德布罗意", "泡利不相容", "海森堡"]
-    
-    for i, char_code in enumerate(range(ord('G'), ord('Z') + 1)):
-        letter = chr(char_code)
-        idx = char_code - ord('A')
-        eps = random.uniform(0.01, 0.99)
-        val = (recent_sum * idx + sums[1]) / (idx + 1) + eps
+    # ================== 一、加拿大28 专属算法 (宏观周期交叉) ==================
+    if gt == "2":
+        # 公式1: 首尾交叉 A1*B2 + C3*0.618
+        cross1 = nums_5[0][0] * nums_5[1][1] + nums_5[2][2] * 0.618
+        # 公式2: 奇偶错位交叉 (A1+A3+A5) - (B2+B4)
+        cross2 = (nums_5[0][0] + nums_5[2][0] + nums_5[4][0]) - (nums_5[1][1] + nums_5[3][1])
+        # 公式3: 近5期和值均值偏差
+        cross3 = sum(sums_5) / 5.0 + eps
         
-        if round(val) % 2 == 0:
-            score_bs += eps * 0.4
-            score_oe -= eps * 0.2
-        else:
-            score_bs -= eps * 0.4
-            score_oe += eps * 0.2
-            
-        term = terms[i % len(terms)]
-        details.append(f"[{letter}-{term}] 基准:{val:.2f}，微扰:{eps:.2f}")
+        score_bs = cross1 + cross2 - cross3
+        score_oe = cross1 * 0.5 - cross2 + cross3
+        
+        details.append(f"[加拿大专属-首尾交叉] 计算值: {cross1:.3f}")
+        details.append(f"[加拿大专属-奇偶错位] 计算值: {cross2:.3f}")
+        details.append(f"[加拿大专属-均值偏差] 计算值: {cross3:.3f}")
 
-    # ================== 综合判定与一正一反干预 ==================
-    pred_bs = "大" if score_bs >= 0 else "小"
-    pred_oe = "单" if score_oe >= 0 else "双"
-    
-    logic_msg = ""
-    
-    # 【核心一正一反逻辑】
-    # 判断当前推算结果与上期关系
-    bs_follow = (pred_bs == last_bs) # True为跟，False为反
-    oe_follow = (pred_oe == last_oe) 
-    
-    if bs_follow and oe_follow:
-        # 如果全跟（完全同轨），根据势能强行反转较弱的一端
-        if abs(score_bs) < abs(score_oe):
-            pred_bs = "小" if pred_bs == "大" else "大"
-            logic_msg = f"【全跟预警】强制将大小端反转为【{pred_bs}】形成一正一反。"
-        else:
-            pred_oe = "双" if pred_oe == "单" else "单"
-            logic_msg = f"【全跟预警】强制将单双端反转为【{pred_oe}】形成一正一反。"
-    elif not bs_follow and not oe_follow:
-        # 如果全反，根据势能强行反转较弱的一端变成“跟”
-        if abs(score_bs) < abs(score_oe):
-            pred_bs = "小" if pred_bs == "大" else "大"
-            logic_msg = f"【全反预警】强制将大小端跟回为【{pred_bs}】形成一正一反。"
-        else:
-            pred_oe = "双" if pred_oe == "单" else "单"
-            logic_msg = f"【全反预警】强制将单双端跟回为【{pred_oe}】形成一正一反。"
+    # ================== 二、分分28 专属算法 (高频波动交叉) ==================
+    elif gt == "3":
+        # 公式1: 极值交叉 (Max - Min) * 1.414
+        max_v = max(max(n) for n in nums_5)
+        min_v = min(min(n) for n in nums_5)
+        cross1 = (max_v - min_v) * 1.414
+        # 公式2: 相邻差值累加
+        cross2 = sum([abs(sums_5[i] - sums_5[i+1]) for i in range(4)])
+        # 公式3: 动态权重交叉
+        cross3 = (nums_5[0][2] * 1.2) + (nums_5[1][2] * 0.8) + eps
+        
+        score_bs = cross1 - cross2 + cross3
+        score_oe = -cross1 + cross2 * 0.8 + cross3
+        
+        details.append(f"[分分专属-极值交叉] 计算值: {cross1:.3f}")
+        details.append(f"[分分专属-相邻差值] 计算值: {cross2:.3f}")
+        details.append(f"[分分专属-动态权重] 计算值: {cross3:.3f}")
+
+    # ================== 三、比特28 专属算法 (哈希散列交叉) ==================
     else:
-        logic_msg = "【完美一正一反】算法自然契合跟进与反转形态。"
+        # 公式1: A位斐波那契交叉
+        cross1 = nums_5[0][0] + nums_5[1][0] * 1.618 + nums_5[2][0] * 2.618
+        # 公式2: 尾数绝对值交叉
+        cross2 = abs(nums_5[0][2] - nums_5[2][2]) + abs(nums_5[1][2] - nums_5[3][2])
+        # 公式3: 隐藏势能
+        cross3 = (sums_5[0] * sums_5[1]) / 10.0 + eps
+        
+        score_bs = cross1 + cross2 + cross3
+        score_oe = cross1 * 0.3 + cross2 * 1.5 + cross3
+        
+        details.append(f"[比特专属-斐波那契交叉] 计算值: {cross1:.3f}")
+        details.append(f"[比特专属-尾数绝对值] 计算值: {cross2:.3f}")
+        details.append(f"[比特专属-隐藏势能] 计算值: {cross3:.3f}")
 
-    # 最终的“跟/反”状态说明
-    final_bs_follow = (pred_bs == last_bs)
-    final_oe_follow = (pred_oe == last_oe)
-    
-    bs_desc = "跟" if final_bs_follow else "反"
-    oe_desc = "跟" if final_oe_follow else "反"
-    
-    top_display = f"{pred_bs} ➕ {pred_oe}"
-    kill_display = f"{'小' if pred_bs=='大' else '大'} ➕ {'双' if pred_oe=='单' else '单'}"
+    # ================== 综合判定 ==================
+    # 将得分加上 0.01 ~ 0.99 的精度误差
+    final_bs = "大" if (score_bs + eps) >= 0 else "小"
+    final_oe = "单" if (score_oe + eps) >= 0 else "双"
 
-    # 组装分析面板
-    analysis = f"【舰长·26维全息动态矩阵】\n"
-    analysis += f"目标期号：{next_p}（上期开出：{last_bs}{last_oe}）\n"
+    top_display = f"{final_bs} ➕ {final_oe}"
+    kill_display = f"{'小' if final_bs=='大' else '大'} ➕ {'双' if final_oe=='单' else '单'}"
+
+    analysis = f"【{GAMES[gt]['name']}·专属交叉公式推演】\n"
+    analysis += f"目标期号：{next_p}，严格基于近 5 期开奖数据\n"
     for d in details:
         analysis += f"- {d}\n"
     
-    analysis += f"\n【综合势能比对】\n"
-    analysis += f"- 大小总势：{score_bs:.2f}\n"
-    analysis += f"- 单双总势：{score_oe:.2f}\n\n"
-    
-    analysis += f"【一正一反校验】\n"
-    analysis += f"- {logic_msg}\n"
-    analysis += f"- 大小端：{bs_desc}（推{pred_bs}）\n"
-    analysis += f"- 单双端：{oe_desc}（推{pred_oe}）\n\n"
-    
+    analysis += f"\n【综合计算与误差控制】\n"
+    analysis += f"- 大小端总势能：{score_bs:.3f}\n"
+    analysis += f"- 单双端总势能：{score_oe:.3f}\n"
+    analysis += f"- 引入高精度微扰 (0.01~0.99)：{eps}\n\n"
     analysis += f"🎯 核心推出：{top_display}\n"
     analysis += f"注：开出包含推出属性即算中奖！"
 
-    return {"kill": kill_display, "rec": top_display, "analysis": analysis, "algo_list": [{"name": "26维动态矩阵", "vote": top_display}]}
+    return {"kill": kill_display, "rec": top_display, "analysis": analysis, "algo_list": [{"name": "专属交叉公式", "vote": top_display}]}
 
 # ================== 极速抓取主循环 ==================
 def fetch_loop():
@@ -182,10 +135,10 @@ def fetch_loop():
                     data = json.loads(resp.read().decode('utf-8')).get('data')
                     if data:
                         latest = data[0]
-                        history = [{"period": i['period'], "nums": f"{i['num1']} + {i['num2']} + {i['num3']}", "total": i['total'], "big_small": i['big_small'], "odd_even": i['odd_even']} for i in data[:30]]
+                        history = [{"period": i['period'], "nums": f"{i['num1']} + {i['num2']} + {i['num3']}", "total": i['total'], "big_small": i['big_small'], "odd_even": i['odd_even']} for i in data[:10]]
                         
                         if LIVE_DATA[gt]['period'] != latest['period']:
-                            AI_STATUS["msg"] = "执行26维全息演算中..."
+                            AI_STATUS["msg"] = f"{cfg['name']} 交叉演算中..."
                             
                             if LIVE_DATA[gt]['period'] != "" and LIVE_DATA[gt]['pred']:
                                 real_bs, real_oe = latest['big_small'], latest['odd_even']
@@ -216,7 +169,7 @@ def fetch_loop():
                                                  (gt, next_p, latest['draw_time'], pred["kill"], pred["rec"], pred["analysis"]))
                                     conn.commit()
                                 
-                            AI_STATUS["msg"] = "全息推演完成，等待开奖..."
+                            AI_STATUS["msg"] = "交叉公式推演完成"
                                 
                         LIVE_DATA[gt]['left'] = max(0, int(LIVE_DATA[gt]['target_time'] - datetime.utcnow().timestamp()))
             except Exception: pass
@@ -323,7 +276,7 @@ def index():
     </div>
 
     <div class="card">
-        <div class="title">近 30 期 独立盘面</div>
+        <div class="title">近 10 期 独立盘面</div>
         <div class="history" id="history"></div>
     </div>
     
@@ -341,7 +294,7 @@ def index():
     
 <script>
     let curG = '2', timer = null;
-    const KEY = "captain_omnipotent_v98";
+    const KEY = "captain_cross_v100";
     
     function switchG(g, el) {
         curG = g;
@@ -373,7 +326,7 @@ def index():
             let left = d.left || 0, cdEl = document.getElementById('cd');
             
             if(left <= 0) {
-                cdEl.innerText = "极速共识分析中...";
+                cdEl.innerText = "极速交叉演算中...";
                 cdEl.className = 'cd analyzing';
                 setTimeout(fetchData, 100); 
                 return;
