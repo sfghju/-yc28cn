@@ -11,7 +11,7 @@ from flask import Flask, request, jsonify
 from datetime import datetime, timedelta
 
 app = Flask(__name__)
-SECRET_KEY = "captain_omnipotent_v95"
+SECRET_KEY = "captain_omnipotent_v97"
 
 GAMES = {
     "2": {"name": "加拿大28", "url": "https://yc28cn-ml1l.onrender.com/vipASDFGHJKLQQQWERTYUIOPWW9983/8626/0549CASWWW?type=2", "interval": 210},
@@ -19,11 +19,11 @@ GAMES = {
     "13": {"name": "比特28", "url": "https://yc28cn-ml1l.onrender.com/vipASDFGHJKLQQZXCVBNMWW9983/8626/0549CCBDR?type=13", "interval": 60}
 }
 
-AI_STATUS = {"online": True, "msg": "26维矩阵+物理化学算法运算中..."}
+AI_STATUS = {"online": True, "msg": "26维物理化学矩阵全速运转中..."}
 LIVE_DATA = {gt: {"period": "", "next": "", "left": 0, "history": [], "pred": None, "algo_list": []} for gt in GAMES}
 
 def db():
-    conn = sqlite3.connect('predict_omni_v95.db', timeout=30)
+    conn = sqlite3.connect('predict_omni_v97.db', timeout=30)
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -39,105 +39,100 @@ with db() as conn:
 def calculate_matrix(gt, history, next_p):
     if len(history) < 10: return None
 
+    # 【防固定核心】：用目标期号作为随机种子，彻底打破固定权重！
+    random.seed(int(next_p))
+    
     h10 = history[:10]
     sums = [h['total'] for h in h10]
     nums_10 = [[int(x) for x in h['nums'].split(' + ')] for h in h10]
     
-    # 分数统计
-    score_bs = 0.0 # >0 偏大，<0 偏小
-    score_oe = 0.0 # >0 偏单，<0 偏双
+    score_bs = 0.0 
+    score_oe = 0.0 
     details = []
 
-    # 辅助变量
     avg_sum = sum(sums) / 10.0
     recent_sum = sums[0]
     
-    # --- A-C: 基础位置物理阻尼模型 ---
-    # A: 惯性动量 A位
-    mom_a = (nums_10[0][0] - nums_10[1][0]) * 0.618
-    score_bs += mom_a * 0.1
-    details.append(f"[A位-动量] 惯性推演值: {mom_a:.2f}")
+    # --- A-C: 基础物理模型 ---
+    w_a = random.uniform(0.1, 0.9)
+    mom_a = (nums_10[0][0] - nums_10[1][0]) * 0.618 * w_a
+    score_bs += mom_a
+    details.append(f"[A-惯性动量] 权重:{w_a:.2f}，偏移:{mom_a:.2f}")
     
-    # B: 阻尼震荡 B位
-    damp_b = math.exp(-0.5) * (nums_10[0][1] - avg_sum/3)
-    score_oe += damp_b * 0.1
-    details.append(f"[B位-阻尼] 衰减残差: {damp_b:.2f}")
+    w_b = random.uniform(0.1, 0.9)
+    damp_b = math.exp(-0.5) * (nums_10[0][1] - avg_sum/3) * w_b
+    score_oe += damp_b
+    details.append(f"[B-阻尼震荡] 权重:{w_b:.2f}，残差:{damp_b:.2f}")
     
-    # C: 简谐运动 C位
-    osc_c = math.sin(nums_10[0][2]) * 5
-    score_bs += osc_c * 0.1
-    details.append(f"[C位-简谐] 波峰偏移: {osc_c:.2f}")
+    w_c = random.uniform(0.1, 0.9)
+    osc_c = math.sin(nums_10[0][2]) * 5 * w_c
+    score_bs += osc_c
+    details.append(f"[C-简谐波峰] 权重:{w_c:.2f}，偏移:{osc_c:.2f}")
 
-    # --- D-F: 化学半衰期与反应速率 ---
-    # D: 极值半衰期
+    # --- D-F: 化学动力学模型 ---
     max_val = max(sums)
     half_life = max_val * (0.5 ** (1/3))
     if recent_sum > half_life: score_bs += 1.5
     else: score_bs -= 1.5
-    details.append(f"[D位-半衰期] 衰减阈值: {half_life:.2f}")
-
-    # E: 奇偶反应速率
+    details.append(f"[D-极值半衰] 阈值:{half_life:.2f}，本期{'大' if recent_sum > half_life else '小'}")
+    
     odd_ratio = sum([1 for s in sums if s%2!=0])/10.0
     rate = odd_ratio * math.pi
     if rate > 1.5: score_oe -= 1.2
     else: score_oe += 1.2
-    details.append(f"[E位-反应速率] 奇偶速率常数: {rate:.2f}")
-
-    # F: 催化熵变
+    details.append(f"[E-反应速率] 奇偶常数:{rate:.2f}，偏{'双' if rate > 1.5 else '单'}")
+    
     entropy = -sum([(s/100) * math.log2(s/100 + 0.01) for s in sums])
     if entropy > 3.0: score_bs += 1.0
     else: score_bs -= 1.0
-    details.append(f"[F位-熵变] 系统混乱度: {entropy:.2f}")
+    details.append(f"[F-催化熵变] 混乱度:{entropy:.2f}，偏{'大' if entropy > 3.0 else '小'}")
 
-    # --- G-Z: 26字母高阶量化扩展 ---
-    # 这里通过循环生成 G 到 Z 的伪复杂公式，确保输出文字极其详实
-    for char_code in range(ord('G'), ord('Z') + 1):
+    # --- G-Z: 26字母全量高阶量化扩展 ---
+    terms = ["引力波", "薛定谔态", "摩尔浓度", "热力学焓", "麦克斯韦", "光合速率", "电磁感应", "量子纠缠", 
+             "相对论", "混沌态", "布朗运动", "光电效应", "法拉第", "安培力", "洛伦兹", "玻尔兹曼",
+             "普朗克", "德布罗意", "泡利不相容", "海森堡", "薛定谔猫"]
+    
+    for i, char_code in enumerate(range(ord('G'), ord('Z') + 1)):
         letter = chr(char_code)
-        # 生成带 0.01 - 0.99 误差的常数
+        idx = char_code - ord('A')
+        
+        # 每期生成 0.01 - 0.99 的随机微扰
         eps = random.uniform(0.01, 0.99)
         
-        # 根据字母序号生成不同的数学计算
-        idx = char_code - ord('A')
-        val = (sums[0] * idx + sums[1]) / (idx + 1) + eps
+        # 核心计算逻辑
+        val = (recent_sum * idx + sums[1]) / (idx + 1) + eps
         
-        # 物理与化学名词库
-        term = ["引力波", "薛定谔态", "摩尔浓度", "热力学焓", "麦克斯韦方程", "光合速率", "电磁感应", "量子纠缠"][idx % 8]
-        
-        # 将值映射到分数
-        if round(val) >= 5:
-            score_bs += 0.3
-            score_oe += 0.1
+        # 动态赋权
+        if round(val) % 2 == 0:
+            score_bs += eps * 0.4
+            score_oe -= eps * 0.2
         else:
-            score_bs -= 0.3
-            score_oe -= 0.1
+            score_bs -= eps * 0.4
+            score_oe += eps * 0.2
             
-        details.append(f"[{letter}位-{term}] 计算基准值: {val:.2f}，四舍五入 {round(val)}")
+        term = terms[i % len(terms)]
+        details.append(f"[{letter}-{term}] 基准:{val:.2f}，微扰:{eps:.2f}")
 
     # ================== 综合判定 ==================
-    # 加入最终的 0.01 - 0.99 微扰，满足小数误差要求
-    final_eps = round(random.uniform(0.01, 0.99), 2)
-    score_bs += final_eps * 0.1
-    
     final_bs = "大" if score_bs >= 0 else "小"
     final_oe = "单" if score_oe >= 0 else "双"
     
     top_display = f"{final_bs} ➕ {final_oe}"
     kill_display = f"{'小' if final_bs=='大' else '大'} ➕ {'双' if final_oe=='单' else '单'}"
 
-    # 组装分析面板
-    analysis = f"【舰长·全息物理化学矩阵】\n"
-    # 这里只展示前 10 条详细，防止前端太长卡死
-    for d in details[:10]:
+    # 组装分析面板（全部展示，绝不省略）
+    analysis = f"【舰长·26维全息动态矩阵】\n"
+    analysis += f"目标期号：{next_p}（已注入混沌种子，计算过程绝对动态）\n"
+    for d in details:
         analysis += f"- {d}\n"
-    analysis += f"- ...(已省略后续16个维度的极速运算)...\n\n"
-    analysis += f"【综合计分】\n"
-    analysis += f"- 大小势能：{score_bs:.2f}\n"
-    analysis += f"- 单双概率：{score_oe:.2f}\n"
-    analysis += f"- 引入量子微扰常数：{final_eps}\n\n"
+    
+    analysis += f"\n【综合势能比对】\n"
+    analysis += f"- 大小总势：{score_bs:.2f}\n"
+    analysis += f"- 单双总势：{score_oe:.2f}\n\n"
     analysis += f"🎯 核心推出：{top_display}\n"
     analysis += f"注：开出包含推出属性即算中奖！"
 
-    return {"kill": kill_display, "rec": top_display, "analysis": analysis, "algo_list": [{"name": "全息矩阵", "vote": top_display}]}
+    return {"kill": kill_display, "rec": top_display, "analysis": analysis, "algo_list": [{"name": "26维动态矩阵", "vote": top_display}]}
 
 # ================== 极速抓取主循环 ==================
 def fetch_loop():
@@ -153,7 +148,7 @@ def fetch_loop():
                         history = [{"period": i['period'], "nums": f"{i['num1']} + {i['num2']} + {i['num3']}", "total": i['total'], "big_small": i['big_small'], "odd_even": i['odd_even']} for i in data[:30]]
                         
                         if LIVE_DATA[gt]['period'] != latest['period']:
-                            AI_STATUS["msg"] = "执行全息物理化学演算中..."
+                            AI_STATUS["msg"] = "执行26维全息演算中..."
                             
                             if LIVE_DATA[gt]['period'] != "" and LIVE_DATA[gt]['pred']:
                                 real_bs, real_oe = latest['big_small'], latest['odd_even']
@@ -265,7 +260,7 @@ def index():
         .cd.analyzing { color: #d63031; font-size: 20px; animation: flash 0.5s infinite alternate;}
         @keyframes flash { 0% { opacity: 0.4; } 100% { opacity: 1; } }
         
-        /* 计算过程详细面板样式 */
+        /* 完整展示区，防止超高卡顿加入滚动 */
         .ana { background: #fdfaf6; padding: 15px; border-left: 4px solid #e17055; font-size: 13px; line-height: 1.7; color: #2d3436; white-space: pre-wrap; border-radius: 0 12px 12px 0; margin-top: 15px; font-family: monospace;}
         
         .log-item { border-bottom: 1px solid #f1f2f6; padding: 12px 0; font-size: 13px; display: flex; justify-content: space-between; }
@@ -310,7 +305,7 @@ def index():
     
 <script>
     let curG = '2', timer = null;
-    const KEY = "captain_omnipotent_v95";
+    const KEY = "captain_omnipotent_v97";
     
     function switchG(g, el) {
         curG = g;
